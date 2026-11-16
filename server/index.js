@@ -590,7 +590,7 @@ async function handleApi(req, res, url) {
       const username = adminSession.userId === '__chase_admin__' ? CHASE_ADMIN_USERNAME : String(adminSession.userId || '').replace(/^admin:/, '');
       const storedAdmin = adminSession.userId === '__chase_admin__' ? null : findAdminByUsername(username);
       return sendJson(res, 200, {
-        admin: { username, label: storedAdmin?.fullName || 'Super administrator', role: adminSession.role, isSuperAdmin },
+        admin: { username, label: storedAdmin?.fullName || 'Super administrator', role: adminSession.role, isSuperAdmin, permissions: { createUsers: true, generateActivity: true, sendMessages: true, ...(storedAdmin?.permissions || {}) } },
         token: adminSession.token,
       });
     }

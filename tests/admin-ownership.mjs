@@ -47,6 +47,7 @@ await call('/api/admin/replies',{token:a,method:'PUT',body:{replies}});
 assert.equal((await call('/api/admin/replies',{token:a})).replies[0].label,'Greeting');
 assert.equal((await call('/api/admin/replies',{token:b})).replies.length,0);
 await call(`/api/admin/admins/${adminA.id}`,{token:root,method:'PUT',body:{permissions:{createUsers:false,generateActivity:false,sendMessages:false}}});
+assert.deepEqual((await call('/api/admin/me',{token:a})).admin.permissions, {createUsers:false,generateActivity:false,sendMessages:false});
 await call(`/api/admin/users/${userA.id}/messages`,{token:a,status:403,body:{subject:'test',body:'no'}});
 await call(`/api/admin/users/${userA.id}/generate-transactions`,{token:a,status:403,body:activity});
 await call('/api/admin/users',{token:a,status:403,body:{username:'nobody',fullName:'No Body',email:'no@example.test',password:'customerPassword123!'}});

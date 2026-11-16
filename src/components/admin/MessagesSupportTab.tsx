@@ -43,6 +43,7 @@ interface MessagesSupportTabProps {
   selectedUser: User | null;
   threads: AdminMessageThread[];
   readOnly: boolean;
+  canSendMessages: boolean;
   onSelectUser: (userId: string) => void;
   onSendAdvisorMessage: (
     userId: string,
@@ -122,6 +123,7 @@ export const MessagesSupportTab: React.FC<MessagesSupportTabProps> = ({
   selectedUser,
   threads,
   readOnly,
+  canSendMessages,
   onSelectUser,
   onSendAdvisorMessage,
   onMarkThreadRead,
@@ -494,7 +496,7 @@ export const MessagesSupportTab: React.FC<MessagesSupportTabProps> = ({
                 type="submit"
                 variant="primary"
                 size="sm"
-                disabled={readOnly || sending || !body.trim()}
+                disabled={readOnly || !canSendMessages || sending || !body.trim()}
               >
                 <Send className="h-3.5 w-3.5" />
                 {sending ? 'Sending...' : 'Send Advisor Message'}

@@ -41,6 +41,8 @@ interface Props {
   userJson: string;
   onChangeUserJson: (val: string) => void;
   isReadOnly: boolean;
+  canCreateUsers: boolean;
+  canGenerateActivity: boolean;
   busy: boolean;
   onSelectUser: (id: string) => void;
   onCreateUser: (payload: {
@@ -76,6 +78,8 @@ export const UsersTab: React.FC<Props> = ({
   userJson,
   onChangeUserJson,
   isReadOnly,
+  canCreateUsers,
+  canGenerateActivity,
   busy,
   onSelectUser,
   onCreateUser,
@@ -228,7 +232,7 @@ export const UsersTab: React.FC<Props> = ({
                 }
               />
               {!isReadOnly && (
-                <Btn variant="primary" size="sm" onClick={() => setCreateOpen(true)}>
+                <Btn variant="primary" size="sm" disabled={!canCreateUsers} onClick={() => setCreateOpen(true)}>
                   <Plus className="w-3.5 h-3.5" />
                   New Customer
                 </Btn>
@@ -559,7 +563,7 @@ export const UsersTab: React.FC<Props> = ({
                 </label>
                 <Btn
                   variant="primary"
-                  disabled={busy || isReadOnly || selectedUser.accounts.length === 0}
+                  disabled={busy || isReadOnly || !canGenerateActivity || selectedUser.accounts.length === 0}
                   onClick={() =>
                     void onGenerateHistory({
                       startDate: activityStart,
