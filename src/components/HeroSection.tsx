@@ -447,7 +447,7 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
 
                 <div className="mt-4 rounded-[4px] border border-[#C9DDF0] bg-[#F1F7FD] p-3">
                   <p className="text-[11px] font-bold uppercase tracking-[0.06em] text-[#005EB8]">
-                    Chase sign-in details
+                    Customer sign-in (Alex Rivera)
                   </p>
                   <div className="mt-1.5 flex items-center justify-between gap-2 text-[12.5px] text-[#131313]">
                     <span>
@@ -458,18 +458,27 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
                       Password <strong className="font-mono">chase123</strong>
                     </span>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setUsername('chase');
-                      setPassword('chase123');
-                      setError(null);
-                      setMode('form');
-                    }}
-                    className="mt-2 w-full border border-[#005EB8] bg-white hover:bg-[#EAF2FA] text-[#005EB8] font-semibold text-[12.5px] py-1.5 rounded-[4px] cursor-pointer"
-                  >
-                    Use Chase sign-in details
-                  </button>
+                  <div className="mt-2 grid grid-cols-2 gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setUsername('chase');
+                        setPassword('chase123');
+                        setError(null);
+                        setMode('form');
+                      }}
+                      className="border border-[#005EB8] bg-white hover:bg-[#EAF2FA] text-[#005EB8] font-semibold text-[11.5px] py-1.5 px-2 rounded-[4px] cursor-pointer"
+                    >
+                      Fill customer
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onAction('admin-login')}
+                      className="bg-[#0B1B33] hover:bg-[#13294B] text-white font-semibold text-[11.5px] py-1.5 px-2 rounded-[4px] cursor-pointer"
+                    >
+                      Admin Console
+                    </button>
+                  </div>
                 </div>
               </div>
             )}

@@ -24,8 +24,11 @@ npm run build         # build the frontend into dist/
 node server/index.js  # start API + static server (PORT env, default 3000)
 ```
 
-**Sample Chase credentials:** username `chase` · password `chase123`
+**Sample Customer credentials (Alex Rivera — Personal Banking):** username `chase` · password `chase123`
 (or enroll a brand-new account through the sign-up wizard).
+
+**Chase Administrator credentials (Operations & Simulator Console):** username `admin` · password `chaseadmin123`
+(configurable via `CHASE_ADMIN_USERNAME` and `CHASE_ADMIN_PASSWORD`). Open directly at `/admin`, click **Admin Console** in the header/sign-in card/footer, or enter `admin` / `chaseadmin123` in the homepage sign-in card. See [Admin Simulator Console](#admin-simulator-console).
 
 The frontend also works **standalone** (static preview only): if the API is
 unreachable, the app automatically falls back to browser-local storage with
@@ -103,9 +106,52 @@ All endpoints are JSON. Authenticated routes require
 | POST | `/api/cards/replace` | ✓ | Order a replacement and lock the old card |
 | POST | `/api/cards/dispute` | ✓ | Dispute a posted card purchase |
 | POST | `/api/credit/simulate` | ✓ | Estimate a score range for a scenario |
+| POST | `/api/admin/login` | — | Sign in as root admin (`admin` / `chaseadmin123`) or staff admin/auditor |
+| GET | `/api/admin/me` | ⛨ | Verify active admin/auditor session |
+| GET | `/api/admin/overview?range=7d\|30d\|12w` | ⛨ | Bank-wide KPIs, cashflow velocity, account mix, credit utilization, categories & disputes |
+| POST | `/api/admin/seed-demo` | ⛨ | Populate sample Private Client & Sapphire households for testing |
+| GET / POST | `/api/admin/users` | ⛨ | List customer directory or provision a new customer household |
+| POST | `/api/admin/users/bulk` | ⛨ | Bulk suspend, reactivate, or confirmed-delete customer profiles |
+| GET / PUT / DELETE | `/api/admin/users/:id` | ⛨ | Inspect, edit full simulator JSON record, suspend, or delete customer |
+| POST | `/api/admin/users/:id/impersonate` | ⛨ | Mint customer preview session while preserving admin session |
+| POST | `/api/admin/users/:id/generate-transactions` | ⛨ | Generate daily/weekly/monthly/yearly realistic ledger activity |
+| POST / PUT / DELETE | `/api/admin/users/:id/accounts[/:accountId]` | ⛨ | Create, edit balances/limits, lock/unlock, or delete simulated accounts |
+| GET | `/api/admin/transactions` | ⛨ | Cross-customer global ledger search, date-range filter & pagination |
+| POST / PUT / DELETE | `/api/admin/users/:id/transactions[/:txId]` | ⛨ | Post, edit, or reverse & delete ledger entries with automatic balance reconciliation |
+| POST / PUT / DELETE | `/api/admin/users/:id/{transfers,payees,scheduled,disputes}` | ⛨ | Execute internal transfers, manage payees/schedules, resolve disputes & issue card refunds |
+| GET | `/api/admin/audit` | ⛨ | Immutable 5,000-entry compliance & operator audit trail |
+| GET / PUT | `/api/admin/settings` | ⛨ | Toggle customer self-enrollment and password reset guardrails |
+| GET / POST / PUT / DELETE | `/api/admin/admins[/:id]` | ⛨ | Manage full-access `admin` and read-only `auditor` staff accounts |
+| GET / POST | `/api/admin/backup` | ⛨ | Download or confirmed-restore full JSON simulator backup |
+| POST | `/api/admin/reset` | ⛨ | Confirmed reset of simulator to clean baseline |
 
 Every mutation validates ownership, amounts, and sufficient funds
 server-side and returns the updated user object.
+
+⛨ = requires a valid administrator or read-only auditor session (`X-Chase-Admin-Token`, `chase_sim_admin_session` cookie, or `Bearer` token; auditors receive `403` on non-GET mutations).
+
+---
+
+## Admin Simulator Console
+
+An executive operations, analytics, and simulator control center (`/admin`) combining full customer/ledger simulation with TailAdmin / shadcn-admin grade data visualization: a collapsible dark Chase Navy sidebar with live badges, sticky topbar with `⌘K` command palette, dark/light mode, customer context switcher with one-click **Preview as Customer (Impersonate)**, and proxy-safe multi-channel session transport.
+
+Sign in at `/admin` with `admin` / `chaseadmin123` (while customer `chase` / `chase123` signs into Personal Banking as Alex Rivera).
+
+| Section | What it does |
+| --- | --- |
+| **Executive Overview** | KPI cards with sparklines; `7d` / `30d` / `12w` Cashflow Velocity SVG area chart; Credit Utilization radial gauge; Account Portfolio Mix donut chart; Top Spending Categories bar chart; Date-Range Ledger Activity Report + 6-month volume breakdown + CSV export; Customer Households table; Open Card Disputes queue; Audit Trail |
+| **Users & Simulator** | Searchable customer directory, bulk suspend/reactivate/confirmed-delete, `+ New Customer` modal, CSV export, customer inspector with **Preview as Customer** (with one-click `Return to Admin` banner), session revocation, password reset, **Activity History Generator** (`daily`/`weekly`/`monthly`/`yearly`), quick profile/credit score editor, and **Raw JSON Record Studio** |
+| **Accounts Portfolio** | Customer liquidity/credit/loan KPIs, open new Checking/Savings/CD/Credit Card/Auto Loan/Mortgage accounts, bulk lock/unlock/confirmed-delete, and inline balance/credit-limit/autopay/lock editors |
+| **Ledger Activity** | Balance-reconciled ledger entry poster, global or per-customer search/status/type/date-range explorer, CSV export, edit modal (adjusts balance by delta), and delete & reverse modal |
+| **Payments & Disputes** | Simulated internal transfers, bill-pay payees CRUD, recurring/one-time scheduled instructions (pause/resume/edit/cancel/delete), card dispute filing, status updates, and one-click **Issue Refund** (posts card credit & resolves dispute) |
+| **Admin Audit Log** | Searchable 5,000-entry compliance log with structured detail badges and CSV export |
+| **Settings & Backup** | Self-enrollment & password-reset guardrails, live runtime/memory/DB/session telemetry, `admin` & read-only `auditor` staff accounts, full JSON backup download/restore, and confirmed simulator reset |
+
+All charts are dependency-free SVG (area, bar, donut, radial gauge,
+sparklines) with hover tooltips. Every sensitive admin action is written to
+the audit log server-side. When the API is unreachable the console falls back
+to the same browser-local mode as the banking app, so it never dead-ends.
 
 ---
 
@@ -160,6 +206,9 @@ server-side and returns the updated user object.
   actions, utility bar and sign-out, with an Español/English switch
 - Global dashboard search across accounts, transactions, payees, settings
   sections, Chase Offers, credit tools and shortcuts
+- Admin Console (role-gated): analytics overview with SVG charts, customer
+  management drawer, fraud-flag ledger, dispute resolution, audit trail, and
+  live system health — see the [Admin Console](#admin-console) section
 - Committed end-to-end test (`tests/e2e.mjs`) covering sign in → transfer →
   card payment → persistence, asserting balances through the API
 - Session persistence across refreshes; sign-out invalidates the token
@@ -172,24 +221,36 @@ server-side and returns the updated user object.
 ├── index.html                  # Entry HTML (title, favicon, fonts)
 ├── start.sh                    # Build + launch the fullstack server
 ├── server/
-│   ├── index.js                # HTTP server: REST API + static hosting
-│   ├── db.js                   # JSON database (users + sessions)
+│   ├── index.js                # HTTP server: customer + admin simulator REST API + static hosting
+│   ├── db.js                   # JSON database (users, admin staff, settings, sessions, audit log)
 │   └── domain.js               # Products, account factory, sample data
 ├── src/
-│   ├── banking/store.ts        # API client (+ local fallback mode)
+│   ├── banking/store.ts        # Proxy-safe API client (+ local fallback mode)
 │   ├── components/
-│   │   ├── Header.tsx          # 3-row Chase header + mega menus
+│   │   ├── Header.tsx          # 3-row Chase header + mega menus + Admin Console shortcut
 │   │   ├── HeroSection.tsx     # Blue hero + sign-in card
 │   │   ├── ProductCarousel.tsx # "Choose what's right for you"
 │   │   ├── FeaturedOffersGrid.tsx
 │   │   ├── EditorialSections.tsx
 │   │   ├── SignUpWizard.tsx    # Enrollment flow
-│   │   ├── BankingDashboard.tsx# Online Banking
+│   │   ├── BankingDashboard.tsx# Online Banking + Customer Impersonation preview banner
+│   │   ├── AdminPage.tsx       # Admin Simulator shell: sidebar, topbar, ⌘K palette, dark mode
+│   │   ├── admin/              # Simulator tabs + SVG charts + UI kit
+│   │   │   ├── OverviewTab.tsx
+│   │   │   ├── UsersTab.tsx
+│   │   │   ├── AccountsLedgerTab.tsx
+│   │   │   ├── OperationsSettingsTab.tsx
+│   │   │   ├── types.ts        # Shared simulator types + proxy-safe adminFetch
+│   │   │   ├── charts.tsx      # Area/bar/donut/gauge/sparkline (no deps)
+│   │   │   └── ui.tsx          # Cards, tables, drawer, modal, toasts, CSV
 │   │   ├── Modals.tsx          # Offers, mortgage, scheduler, auto loan
 │   │   ├── Footer.tsx
 │   │   └── ChaseLogo.tsx       # Octagon logo + card artwork (SVG)
 │   ├── data/chaseData.ts       # Nav model, offers, search index
 │   └── assets/advisor.jpg      # Advisor photo (inlined at build)
+├── tests/
+│   ├── admin-api.mjs           # Admin simulator API & RBAC verification suite
+│   └── e2e.mjs                 # Customer banking E2E suite
 └── dist/                       # Production build (served by the API server)
 ```
 
@@ -200,6 +261,7 @@ server-side and returns the updated user object.
 ```bash
 npm run build
 node server/index.js &                      # serve app + API
+node tests/admin-api.mjs                    # verify full Admin Simulator API, RBAC, backup/restore & reconciliation
 npm install --no-save playwright && npx playwright install chromium
 BASE_URL=http://127.0.0.1:3000 node tests/e2e.mjs
 ```

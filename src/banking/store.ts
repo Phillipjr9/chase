@@ -103,7 +103,7 @@ export interface ScheduledPayment {
   amount: number;
   date: string;
   frequency: ScheduledFrequency;
-  status: 'scheduled' | 'paid' | 'cancelled';
+  status: 'scheduled' | 'paused' | 'paid' | 'cancelled';
   createdAt: string;
 }
 
@@ -219,6 +219,38 @@ export interface TravelBooking {
   status: string;
 }
 
+export type SecureMessageCategory = 'general' | 'wire' | 'dispute' | 'security' | 'account';
+
+export interface SecureMessage {
+  id: string;
+  subject: string;
+  category: SecureMessageCategory;
+  sender: 'customer' | 'advisor';
+  senderName: string;
+  body: string;
+  createdAt: string;
+  readByCustomer: boolean;
+  readByAdmin: boolean;
+}
+
+export interface AccountNotice {
+  id: string;
+  tone: 'info' | 'warning' | 'urgent' | 'success';
+  title: string;
+  message: string;
+  dismissible: boolean;
+  createdAt: string;
+}
+
+export interface CustomChaseOffer {
+  id: string;
+  merchant: string;
+  cashback: string;
+  detail: string;
+  expires: string;
+  activated?: boolean;
+}
+
 export interface User {
   id: string;
   username: string;
@@ -238,6 +270,12 @@ export interface User {
   credit?: CreditProfile;
   disputes?: CardDispute[];
   home?: HomeProperty | null;
+  budgets?: Record<string, number>;
+  messages?: SecureMessage[];
+  accountNotice?: AccountNotice | null;
+  customOffers?: CustomChaseOffer[];
+  status?: 'active' | 'suspended';
+  adminCreated?: boolean;
   createdAt: string;
 }
 
@@ -458,12 +496,12 @@ export function defaultCredit(): CreditProfile {
     enrolledAt: daysAgoIso(140),
     history,
     factors: [
-      { id: 'payment-history', label: 'Payment history', status: 'good', weight: 'High impact', detail: '100% on-time payments reported across your accounts.' },
-      { id: 'credit-utilization', label: 'Credit utilization', status: 'good', weight: 'High impact', detail: 'Using 8% of your available revolving credit.' },
-      { id: 'balances', label: 'Balances', status: 'fair', weight: 'Medium impact', detail: 'Card balances rose $120 since last week.' },
-      { id: 'credit-history', label: 'Credit history', status: 'good', weight: 'Medium impact', detail: 'Oldest account is 4 years 3 months old.' },
-      { id: 'credit-checks', label: 'Credit checks', status: 'good', weight: 'Low impact', detail: '1 inquiry in the past 12 months; 0 in the last 6 months.' },
-      { id: 'available-credit', label: 'Available credit', status: 'good', weight: 'Low impact', detail: '$10,759 available across 2 cards.' },
+      { id: 'payment-history', label: 'Payment history', status: 'good', weight: 'Extremely influential', detail: 'No late payments appear in this sample credit file.' },
+      { id: 'credit-utilization', label: 'Credit utilization', status: 'good', weight: 'Highly influential', detail: 'Reported revolving utilization is about 8%.' },
+      { id: 'balances', label: 'Balances', status: 'fair', weight: 'Moderately influential', detail: 'Reported card balances increased $120 since the prior update.' },
+      { id: 'credit-history', label: 'Credit history', status: 'good', weight: 'Highly influential', detail: 'Your oldest reported account is about 6 years old.' },
+      { id: 'credit-checks', label: 'Recent credit behavior', status: 'good', weight: 'Less influential', detail: '1 hard inquiry in the past 12 months; none in the past 6 months.' },
+      { id: 'available-credit', label: 'Available credit', status: 'good', weight: 'Less influential', detail: '$17,917 available across 2 open cards in this sample file.' },
     ],
     changes: [
       { id: 'chg-latest', date: daysAgoIso(6), delta: -6, reason: 'Card balance increased by $120 this week.' },
@@ -519,18 +557,42 @@ export function defaultPreferences(): UserPreferences {
   };
 }
 
+export function defaultBudgets(): Record<string, number> {
+  return {
+    Groceries: 400,
+    Dining: 250,
+    Travel: 600,
+    Shopping: 350,
+    Bills: 300,
+    Transportation: 200,
+    Subscriptions: 60,
+  };
+}
+
 /* ------------------------------ API client -------------------------------- */
 
 const TOKEN_KEY = 'chase_clone_token_v1';
 const USERS_KEY = 'chase_clone_users_v2';
 const SESSION_KEY = 'chase_clone_session_v2';
+export const ADMIN_TOKEN_KEY = 'chase_sim_admin_token';
 
-let token: string | null = null;
-try {
-  token = localStorage.getItem(TOKEN_KEY);
-} catch {
-  /* storage unavailable */
+function readCustomerToken(): string | null {
+  try {
+    const v = localStorage.getItem(TOKEN_KEY);
+    if (v) return v;
+  } catch {
+    /* localStorage unavailable */
+  }
+  try {
+    const v = sessionStorage.getItem(TOKEN_KEY);
+    if (v) return v;
+  } catch {
+    /* sessionStorage unavailable */
+  }
+  return null;
 }
+
+let token: string | null = readCustomerToken();
 
 function setToken(t: string | null) {
   token = t;
@@ -540,6 +602,53 @@ function setToken(t: string | null) {
   } catch {
     /* storage unavailable */
   }
+  try {
+    if (t) sessionStorage.setItem(TOKEN_KEY, t);
+    else sessionStorage.removeItem(TOKEN_KEY);
+  } catch {
+    /* storage unavailable */
+  }
+}
+
+export function readAdminToken(): string {
+  try {
+    const s = sessionStorage.getItem(ADMIN_TOKEN_KEY);
+    if (s) return s;
+  } catch {
+    /* unavailable */
+  }
+  try {
+    const l = localStorage.getItem(ADMIN_TOKEN_KEY);
+    if (l) return l;
+  } catch {
+    /* unavailable */
+  }
+  return '';
+}
+
+export function writeAdminToken(t: string | null): void {
+  try {
+    if (t) sessionStorage.setItem(ADMIN_TOKEN_KEY, t);
+    else sessionStorage.removeItem(ADMIN_TOKEN_KEY);
+  } catch {
+    /* unavailable */
+  }
+  try {
+    if (t) localStorage.setItem(ADMIN_TOKEN_KEY, t);
+    else localStorage.removeItem(ADMIN_TOKEN_KEY);
+  } catch {
+    /* unavailable */
+  }
+}
+
+function clearUserSessionState(preserveAdmin = false) {
+  setToken(null);
+  setLocalSession(null);
+  if (!preserveAdmin) writeAdminToken(null);
+}
+
+export function adoptSessionToken(sessionToken: string): void {
+  setToken(sessionToken);
 }
 
 let apiMode: boolean | null = null;
@@ -560,12 +669,40 @@ interface ApiError extends Error {
   status?: number;
 }
 
+const PUBLIC_API_PREFIXES = [
+  '/api/health',
+  '/api/rates',
+  '/api/locations',
+  '/api/offers',
+  '/api/seed',
+  '/api/auth/login',
+  '/api/auth/register',
+  '/api/auth/check-username',
+  '/api/auth/reset-password',
+];
+
+function withCustomerTokenParam(path: string, tok: string | null): string {
+  if (!tok || !path.startsWith('/api/') || path.startsWith('/api/admin/')) return path;
+  if (PUBLIC_API_PREFIXES.some((p) => path.startsWith(p))) return path;
+  const sep = path.includes('?') ? '&' : '?';
+  return `${path}${sep}_st=${encodeURIComponent(tok)}`;
+}
+
 async function apiFetch(path: string, options: RequestInit = {}): Promise<any> {
-  const res = await fetch(path, {
+  const activeToken = token || readCustomerToken();
+  if (activeToken && !token) token = activeToken;
+  const url = withCustomerTokenParam(path, activeToken);
+  const res = await fetch(url, {
     ...options,
+    credentials: options.credentials || 'same-origin',
     headers: {
       'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(activeToken
+        ? {
+            Authorization: `Bearer ${activeToken}`,
+            'X-Chase-Token': activeToken,
+          }
+        : {}),
       ...((options.headers as Record<string, string> | undefined) || {}),
     },
   });
@@ -573,14 +710,27 @@ async function apiFetch(path: string, options: RequestInit = {}): Promise<any> {
   if (!res.ok) {
     if (
       res.status === 401 &&
-      token &&
+      activeToken &&
       !path.startsWith('/api/auth/login') &&
       !path.startsWith('/api/auth/reset-password') &&
       !path.startsWith('/api/auth/me')
     ) {
-      setToken(null);
-      setLocalSession(null);
-      window.dispatchEvent(new CustomEvent('chase:session-expired'));
+      try {
+        const sessionCheck = await fetch(withCustomerTokenParam('/api/auth/me', activeToken), {
+          credentials: 'same-origin',
+          headers: {
+            Authorization: `Bearer ${activeToken}`,
+            'X-Chase-Token': activeToken,
+          },
+        });
+        if (sessionCheck.status === 401 || sessionCheck.status === 403) {
+          setToken(null);
+          setLocalSession(null);
+          window.dispatchEvent(new CustomEvent('chase:session-expired'));
+        }
+      } catch {
+        // A temporary network failure is not proof that the session expired.
+      }
     }
     const err = new Error(data.error || `Request failed (${res.status})`) as ApiError;
     err.status = res.status;
@@ -794,6 +944,7 @@ function buildChaseUserLocal(): User {
     investments: defaultInvestments(),
     security: defaultSecurity(),
     preferences: defaultPreferences(),
+    budgets: defaultBudgets(),
     credit: defaultCredit(),
     home: defaultHome(),
     scheduledPayments: [
@@ -835,6 +986,7 @@ function hydrateDefaults(user: User | null | undefined): User {
     investments: user.investments || defaultInvestments(),
     security: user.security || defaultSecurity(),
     preferences: user.preferences || defaultPreferences(),
+    budgets: user.budgets || defaultBudgets(),
     credit: user.credit || defaultCredit(),
     travelNotices: user.travelNotices || [],
     travelBookings: user.travelBookings || [],
@@ -859,9 +1011,9 @@ export async function seedSampleUserIfNeeded(): Promise<void> {
 
 export async function fetchMe(): Promise<User | null> {
   if (await detectApi()) {
-    if (!token) return null;
     try {
       const data = await apiFetch('/api/auth/me', { method: 'GET' });
+      if (data.token) setToken(data.token);
       return hydrateDefaults(data.user as User);
     } catch {
       setToken(null);
@@ -875,18 +1027,23 @@ export async function fetchMe(): Promise<User | null> {
 export async function authenticate(
   username: string,
   password: string
-): Promise<{ user: User } | { error: string }> {
+): Promise<{ user: User } | { admin: { username: string; label: string; role?: 'admin' | 'auditor' }; token: string } | { error: string }> {
   if (await detectApi()) {
     try {
       const data = await apiFetch('/api/auth/login', {
         method: 'POST',
         body: JSON.stringify({ username, password }),
       });
+      if (data.admin) {
+        setToken(null);
+        writeAdminToken(data.token);
+        return { admin: data.admin, token: data.token };
+      }
       setToken(data.token);
       return { user: hydrateDefaults(data.user as User) };
     } catch (e) {
       const err = e as ApiError;
-      if (err.status === 401) return { error: err.message };
+      if (err.status && err.status >= 400 && err.status < 500) return { error: err.message };
       throw err;
     }
   }
@@ -903,13 +1060,17 @@ export async function authenticate(
   return { user: hydrateDefaults(user) };
 }
 
-export async function logout(): Promise<void> {
+export async function logout(preserveAdmin = false): Promise<void> {
   if (await detectApi()) {
-    await apiFetch('/api/auth/logout', { method: 'POST' }).catch(() => undefined);
-    setToken(null);
+    try {
+      await apiFetch('/api/auth/logout', { method: 'POST' });
+    } catch {
+      // Clear local customer state even if backend token was already expired.
+    }
+    clearUserSessionState(preserveAdmin);
     return;
   }
-  setLocalSession(null);
+  clearUserSessionState(preserveAdmin);
 }
 
 export async function resetPassword(
@@ -1478,6 +1639,9 @@ export async function redeemPoints(payload: {
     });
     return hydrateDefaults(data.user as User);
   }
+  if (!Number.isInteger(payload.points) || payload.points < 1000 || payload.points > 1000000 || !['travel', 'transfer', 'cashback'].includes(payload.kind)) {
+    throw new Error('Enter a valid redemption of at least 1,000 Ultimate Rewards® points.');
+  }
   const updated: User = JSON.parse(JSON.stringify(requireLocalUser()));
   const card = updated.accounts.find((a) => a.id === payload.cardId && a.type === 'credit-card');
   if (!card || (card.rewardsPoints || 0) < payload.points) {
@@ -1487,7 +1651,7 @@ export async function redeemPoints(payload: {
   if (!updated.travelBookings) updated.travelBookings = [];
   if (payload.kind === 'cashback') {
     const credit = round2(payload.points / 100);
-    card.balance = round2(Math.max(0, card.balance - credit));
+    card.balance = round2(card.balance - credit);
     card.transactions.unshift({
       id: uid(),
       date: new Date().toISOString(),
@@ -1559,6 +1723,24 @@ export async function simulateCredit(scenario: string): Promise<{
   };
   persistUser(updated);
   return { ...result, estimatedScore: result.high, user: updated };
+}
+
+export async function saveBudgets(budgets: Record<string, number>): Promise<User> {
+  const cleaned = Object.fromEntries(Object.entries(budgets).map(([category, amount]) => {
+    const value = Number(amount);
+    if (!category.trim() || !Number.isFinite(value) || value < 0 || value > 1000000) {
+      throw new Error('Enter valid monthly budget amounts.');
+    }
+    return [category, round2(value)];
+  }));
+  if (await detectApi()) {
+    const data = await apiFetch('/api/budgets', { method: 'POST', body: JSON.stringify({ budgets: cleaned }) });
+    return hydrateDefaults(data.user as User);
+  }
+  const updated: User = JSON.parse(JSON.stringify(requireLocalUser()));
+  updated.budgets = cleaned;
+  persistUser(updated);
+  return updated;
 }
 
 export async function setCreditGoal(goal: number): Promise<User> {
@@ -1776,6 +1958,34 @@ export async function schedulePayment(input: ScheduleInput): Promise<User> {
   return updated;
 }
 
+export async function manageScheduledPayment(
+  id: string,
+  patch: { action: 'pause' | 'resume' | 'edit'; amount?: number; date?: string }
+): Promise<User> {
+  if (await detectApi()) {
+    const data = await apiFetch('/api/scheduled/manage', {
+      method: 'POST',
+      body: JSON.stringify({ id, ...patch }),
+    });
+    return hydrateDefaults(data.user as User);
+  }
+  const updated: User = JSON.parse(JSON.stringify(requireLocalUser()));
+  const item = (updated.scheduledPayments || []).find((s) => s.id === id);
+  if (!item) throw new Error('Scheduled payment not found.');
+  if (patch.action === 'pause') item.status = 'paused';
+  if (patch.action === 'resume') item.status = 'scheduled';
+  if (patch.action === 'edit') {
+    if (!Number.isFinite(patch.amount) || !patch.amount || patch.amount < 0.01) throw new Error('Enter a valid amount.');
+    if (!patch.date || !/^\d{4}-\d{2}-\d{2}$/.test(patch.date) || new Date(`${patch.date}T23:59:59`) < new Date()) {
+      throw new Error('Choose a future delivery date.');
+    }
+    item.amount = round2(patch.amount);
+    item.date = patch.date;
+  }
+  persistUser(updated);
+  return updated;
+}
+
 export async function cancelScheduledPayment(id: string): Promise<User> {
   if (await detectApi()) {
     const data = await apiFetch('/api/scheduled/cancel', {
@@ -1796,10 +2006,10 @@ export async function cancelScheduledPayment(id: string): Promise<User> {
 export async function signOutAllDevices(): Promise<void> {
   if (await detectApi()) {
     await apiFetch('/api/auth/sign-out-all', { method: 'POST' }).catch(() => undefined);
-    setToken(null);
+    clearUserSessionState();
     return;
   }
-  setLocalSession(null);
+  clearUserSessionState();
 }
 
 export async function changePasswordApi(
@@ -1823,4 +2033,75 @@ export async function changePasswordApi(
   const updated: User = JSON.parse(JSON.stringify(user));
   updated.password = newPassword;
   persistUser(updated);
+}
+
+export async function sendSecureMessage(
+  subject: string,
+  category: SecureMessageCategory,
+  body: string
+): Promise<User> {
+  if (await detectApi()) {
+    const data = await apiFetch('/api/messages', {
+      method: 'POST',
+      body: JSON.stringify({ subject, category, body }),
+    });
+    return hydrateDefaults(data.user as User);
+  }
+  const updated: User = JSON.parse(JSON.stringify(requireLocalUser()));
+  if (!Array.isArray(updated.messages)) updated.messages = [];
+  updated.messages.unshift({
+    id: `msg-${Date.now()}`,
+    subject,
+    category,
+    sender: 'customer',
+    senderName: updated.fullName,
+    body,
+    createdAt: new Date().toISOString(),
+    readByCustomer: true,
+    readByAdmin: false,
+  });
+  persistUser(updated);
+  return updated;
+}
+
+export async function markSecureMessagesRead(): Promise<User> {
+  if (await detectApi()) {
+    const data = await apiFetch('/api/messages/read', { method: 'POST' });
+    return hydrateDefaults(data.user as User);
+  }
+  const updated: User = JSON.parse(JSON.stringify(requireLocalUser()));
+  if (Array.isArray(updated.messages)) {
+    updated.messages = updated.messages.map((m) => ({ ...m, readByCustomer: true }));
+    persistUser(updated);
+  }
+  return updated;
+}
+
+export async function dismissAccountNotice(): Promise<User> {
+  if (await detectApi()) {
+    const data = await apiFetch('/api/notice/dismiss', { method: 'POST' });
+    return hydrateDefaults(data.user as User);
+  }
+  const updated: User = JSON.parse(JSON.stringify(requireLocalUser()));
+  updated.accountNotice = null;
+  persistUser(updated);
+  return updated;
+}
+
+export async function toggleCustomOffer(offerId: string): Promise<User> {
+  if (await detectApi()) {
+    const data = await apiFetch('/api/offers/toggle', {
+      method: 'POST',
+      body: JSON.stringify({ offerId }),
+    });
+    return hydrateDefaults(data.user as User);
+  }
+  const updated: User = JSON.parse(JSON.stringify(requireLocalUser()));
+  if (Array.isArray(updated.customOffers)) {
+    updated.customOffers = updated.customOffers.map((o) =>
+      o.id === offerId ? { ...o, activated: !o.activated } : o
+    );
+    persistUser(updated);
+  }
+  return updated;
 }

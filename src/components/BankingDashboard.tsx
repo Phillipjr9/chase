@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   Search,
   Bell,
@@ -19,10 +19,13 @@ import {
   Camera,
   Menu,
   X,
+  Mail,
+  Printer,
 } from 'lucide-react';
 import { ChaseLogo } from './ChaseLogo';
 import { Footer } from './Footer';
 import { AutoLoanModal, MortgageCalculatorModal, ScheduleMeetingModal } from './Modals';
+import { StatementModal } from './StatementModal';
 import {
   ChaseIcon,
   ChaseCardImage,
@@ -42,6 +45,7 @@ import {
   AdvisorsView,
   InkView,
   OffersView,
+  SecureMessagesView,
 } from './ChaseFeatures';
 import { OFFERS } from '../data/chaseFeatures';
 import {
@@ -50,6 +54,7 @@ import {
   ProductId,
   fmtMoney,
   updateCardControls as apiUpdateCardControls,
+  dismissAccountNotice,
   fmtDueDate,
   nextDueDate,
 } from '../banking/store';
@@ -78,6 +83,8 @@ interface Props {
   initialView?: DashboardView;
   spanishMode?: boolean;
   onToggleSpanish?: () => void;
+  isImpersonating?: boolean;
+  onExitImpersonation?: () => void;
 }
 
 export type DashboardView =
@@ -95,6 +102,7 @@ export type DashboardView =
   | 'advisors'
   | 'ink'
   | 'security'
+  | 'messages'
   | 'profile';
 
 type View = DashboardView;
@@ -191,6 +199,8 @@ export const BankingDashboard: React.FC<Props> = ({
   initialView = 'accounts',
   spanishMode = false,
   onToggleSpanish,
+  isImpersonating = false,
+  onExitImpersonation,
 }) => {
   const t = (en: string, es: string) => (spanishMode ? es : en);
   const [view, setView] = useState<View>(initialView);
@@ -259,6 +269,13 @@ export const BankingDashboard: React.FC<Props> = ({
   const cards = visibleAccounts.filter((a) => a.type === 'credit-card');
   const loans = visibleAccounts.filter((a) => a.type === 'auto-loan' || a.type === 'mortgage');
   const selected = user.accounts.find((a) => a.id === selectedId) || null;
+
+  // Dashboard sections are client-side views, so the browser does not perform
+  // its normal page-navigation scroll reset. Reset before paint on each route,
+  // including switching directly between account detail pages.
+  useLayoutEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+  }, [view, selectedId]);
 
   const inv = user.investments || { accountMask: '7192', cash: 2450, holdings: [] };
   const totalInvestments =
@@ -384,6 +401,22 @@ export const BankingDashboard: React.FC<Props> = ({
 
   /* --------------------------- Account Controls -------------------------- */
   const [controlMsg, setControlMsg] = useState<Notice>(null);
+  const [statementModal, setStatementModal] = useState<{
+    accountId?: string;
+    tab?: 'statement' | 'tax-1099' | 'tax-1098';
+  } | null>(null);
+  const unreadAdvisorMessages = (user.messages || []).filter(
+    (m) => m.sender === 'advisor' && !m.readByCustomer
+  ).length;
+
+  const handleDismissNotice = async () => {
+    try {
+      const next = await dismissAccountNotice();
+      onUpdateUser(next);
+    } catch {
+      /* ignore */
+    }
+  };
   const toggleAccountControl = async (acct: Account, patch: { locked?: boolean; autopay?: boolean }) => {
     try {
       const u = await apiUpdateCardControls(acct.id, patch);
@@ -405,21 +438,27 @@ export const BankingDashboard: React.FC<Props> = ({
   };
 
   /* ------------------------------ Statements ----------------------------- */
-  const downloadStatement = (account: Account) => {
+  const downloadStatement = (account: Account, monthOffset = 0) => {
+    const period = new Date();
+    period.setDate(1);
+    period.setMonth(period.getMonth() - monthOffset);
+    const start = new Date(period.getFullYear(), period.getMonth(), 1);
+    const end = new Date(period.getFullYear(), period.getMonth() + 1, 1);
+    const csvCell = (value: string | number) => `"${String(value).replace(/"/g, '""')}"`;
     const rows = [
       ['Date', 'Description', 'Category', 'Amount'],
-      ...account.transactions.map((t) => [
-        fmtDate(t.date),
-        `"${t.description.replace(/"/g, '""')}"`,
-        t.category,
-        t.amount.toFixed(2),
-      ]),
+      ...account.transactions
+        .filter((t) => {
+          const date = new Date(t.date);
+          return date >= start && date < end;
+        })
+        .map((t) => [fmtDate(t.date), t.description, t.category, t.amount.toFixed(2)]),
     ];
-    const blob = new Blob([rows.map((r) => r.join(',')).join('\n')], { type: 'text/csv;charset=utf-8' });
+    const blob = new Blob(['\uFEFF', rows.map((r) => r.map(csvCell).join(',')).join('\r\n')], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${account.name.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}-statement.csv`;
+    a.download = `${account.name.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}-${period.toISOString().slice(0, 7)}-statement.csv`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -566,12 +605,29 @@ export const BankingDashboard: React.FC<Props> = ({
   /* =============================== MARKUP =============================== */
   return (
     <div className="min-h-screen flex flex-col bg-white text-[#131313]">
+      {isImpersonating && (
+        <div role="status" className="bg-[#EAF2FA] border-b border-[#CFE0F0]">
+          <div className="max-w-[1260px] mx-auto px-4 sm:px-8 min-h-[38px] flex flex-wrap items-center justify-between gap-2 text-[12px]" style={{ color: BTN_BLUE }}>
+            <span><ShieldCheck className="inline w-3.5 h-3.5 mr-1" /> Admin preview · viewing simulated account for {user.fullName}</span>
+            <button type="button" onClick={onExitImpersonation} className="font-semibold underline cursor-pointer">Return to admin</button>
+          </div>
+        </div>
+      )}
       {/* Utility strip */}
       <div className="bg-[#F4F5F6] border-b border-[#E4E6E8]">
         <div className="max-w-[1260px] mx-auto px-4 sm:px-8 h-[30px] flex items-center justify-end gap-3 text-[11.5px] text-[#5C5C5C]">
           <button type="button" onClick={onBackHome} className="hover:underline cursor-pointer">{t('Chase.com', 'Chase.com')}</button>
           <span className="text-[#C9CDD1]">|</span>
           <button type="button" onClick={() => go('locations')} className="hover:underline cursor-pointer">{t('ATMs & branches', 'Cajeros y sucursales')}</button>
+          <span className="text-[#C9CDD1]">|</span>
+          <button type="button" onClick={() => go('messages')} className="hover:underline cursor-pointer inline-flex items-center gap-1">
+            {t('Secure messages', 'Mensajes seguros')}
+            {unreadAdvisorMessages > 0 && (
+              <span className="px-1.5 py-px rounded-full bg-[#D92D20] text-white text-[10px] font-bold">
+                {unreadAdvisorMessages}
+              </span>
+            )}
+          </button>
           <span className="text-[#C9CDD1]">|</span>
           <button type="button" onClick={() => go('security')} className="hover:underline cursor-pointer">{t('Security center', 'Centro de seguridad')}</button>
           <span className="text-[#C9CDD1]">|</span>
@@ -611,6 +667,20 @@ export const BankingDashboard: React.FC<Props> = ({
                 className="p-2 hover:bg-white/10 rounded cursor-pointer"
               >
                 <Search className="w-[17px] h-[17px]" />
+              </button>
+              <button
+                type="button"
+                onClick={() => go('messages')}
+                aria-label={unreadAdvisorMessages ? `Secure messages, ${unreadAdvisorMessages} unread` : 'Secure messages'}
+                className="relative p-2 hover:bg-white/10 rounded cursor-pointer"
+                title="Secure Message Center"
+              >
+                <Mail className="w-[17px] h-[17px]" />
+                {unreadAdvisorMessages > 0 && (
+                  <span className="absolute top-1 right-1 min-w-[15px] h-[15px] px-0.5 rounded-full bg-[#D92D20] text-white text-[9px] font-bold flex items-center justify-center">
+                    {unreadAdvisorMessages}
+                  </span>
+                )}
               </button>
               <div className="relative">
                 <button
@@ -809,6 +879,49 @@ export const BankingDashboard: React.FC<Props> = ({
         {!dashboardReady && <DashboardSkeleton />}
         {dashboardReady && (
         <>
+        {user.accountNotice && (
+          <div
+            role="status"
+            className={`border-b ${
+              user.accountNotice.tone === 'urgent'
+                ? 'bg-[#FEF3F2] border-[#FECDCA] text-[#912018]'
+                : user.accountNotice.tone === 'warning'
+                ? 'bg-[#FFFAEB] border-[#FEDF89] text-[#93370D]'
+                : user.accountNotice.tone === 'success'
+                ? 'bg-[#EAF7EE] border-[#B5E2C4] text-[#14532D]'
+                : 'bg-[#F0F7FD] border-[#B9DCFA] text-[#0B5FA5]'
+            }`}
+          >
+            <div className="max-w-[1260px] mx-auto px-4 sm:px-8 py-3 flex flex-wrap items-center justify-between gap-3 text-[13px]">
+              <div className="flex items-start gap-2.5">
+                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                <div>
+                  <span className="font-bold mr-2">{user.accountNotice.title}:</span>
+                  <span>{user.accountNotice.message}</span>
+                </div>
+              </div>
+              <div className="flex items-center gap-3 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => go('messages')}
+                  className="text-[12px] font-bold underline cursor-pointer"
+                >
+                  Reply via Secure Messages
+                </button>
+                {user.accountNotice.dismissible !== false && (
+                  <button
+                    type="button"
+                    onClick={handleDismissNotice}
+                    aria-label="Dismiss account notice"
+                    className="p-1 rounded hover:bg-black/5 cursor-pointer"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
         {/* ============================== ACCOUNTS ============================== */}
         {view === 'accounts' && (
           <div className="max-w-[1260px] mx-auto px-4 sm:px-8 py-6">
@@ -1424,7 +1537,7 @@ export const BankingDashboard: React.FC<Props> = ({
         {/* ============================= ALL CHASE VIEWS ============================= */}
         {view === 'investments' && <InvestmentsView user={user} onUpdateUser={onUpdateUser} />}
         {view === 'travel' && <TravelView user={user} onUpdateUser={onUpdateUser} />}
-        {view === 'spending' && <SpendingView user={user} />}
+        {view === 'spending' && <SpendingView user={user} onUpdateUser={onUpdateUser} />}
         {view === 'security' && <SecurityCenterView user={user} onUpdateUser={onUpdateUser} />}
         {view === 'locations' && <LocationsView onSchedule={() => go('profile')} />}
         {view === 'myhome' && (
@@ -1437,44 +1550,78 @@ export const BankingDashboard: React.FC<Props> = ({
         )}
         {view === 'advisors' && <AdvisorsView user={user} onSchedule={() => go('profile')} />}
         {view === 'ink' && <InkView onApplyProduct={(pid) => onOpenAccount(pid)} />}
-        {view === 'offers' && <OffersView />}
+        {view === 'offers' && <OffersView user={user} onUpdateUser={onUpdateUser} />}
+        {view === 'messages' && <SecureMessagesView user={user} onUpdateUser={onUpdateUser} />}
 
         {/* ============================== STATEMENTS ============================== */}
         {view === 'statements' && (
           <div className="max-w-[1000px] mx-auto px-4 sm:px-8 py-6">
-            <h1 className="text-[26px] font-light" style={{ color: INK }}>Statements &amp; Documents</h1>
-            <p className="mt-0.5 text-[13px]" style={{ color: MUTED }}>Download monthly statements and tax documents.</p>
+            <div className="flex flex-wrap items-end justify-between gap-3">
+              <div>
+                <h1 className="text-[26px] font-light" style={{ color: INK }}>Statements &amp; Documents</h1>
+                <p className="mt-0.5 text-[13px]" style={{ color: MUTED }}>
+                  View printable Chase-branded monthly statements, export CSV ledgers, and access annual IRS tax forms.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <OutlineBtn size="sm" onClick={() => setStatementModal({ tab: 'tax-1099' })}>
+                  <FileText className="w-3.5 h-3.5" /> Form 1099-INT
+                </OutlineBtn>
+                <OutlineBtn size="sm" onClick={() => setStatementModal({ tab: 'tax-1098' })}>
+                  <FileText className="w-3.5 h-3.5" /> Form 1098
+                </OutlineBtn>
+              </div>
+            </div>
             <div className="mt-5 space-y-4">
               {user.accounts.map((a) => (
                 <div key={a.id} className="border rounded-[6px] overflow-hidden bg-white" style={{ borderColor: LINE }}>
-                  <div className="flex items-center gap-3 px-4 py-3 bg-[#F7F8F9] border-b" style={{ borderColor: LINE }}>
-                    {a.type === 'credit-card' || a.type === 'checking' ? (
-                      <CardArt account={a} className="w-[46px] h-[29px]" />
-                    ) : (
-                      <span className="w-8 h-8 rounded-full bg-[#EEF3F8] flex items-center justify-center shrink-0">
-                        {accountIcon(a.type)}
-                      </span>
-                    )}
-                    <div>
-                      <p className="text-[13.5px] font-semibold" style={{ color: INK }}>{a.name}</p>
-                      <p className="text-[11.5px]" style={{ color: '#8A929A' }}>Account ending in {a.mask}</p>
+                  <div className="flex items-center justify-between gap-3 px-4 py-3 bg-[#F7F8F9] border-b" style={{ borderColor: LINE }}>
+                    <div className="flex items-center gap-3">
+                      {a.type === 'credit-card' || a.type === 'checking' ? (
+                        <CardArt account={a} className="w-[46px] h-[29px]" />
+                      ) : (
+                        <span className="w-8 h-8 rounded-full bg-[#EEF3F8] flex items-center justify-center shrink-0">
+                          {accountIcon(a.type)}
+                        </span>
+                      )}
+                      <div>
+                        <p className="text-[13.5px] font-semibold" style={{ color: INK }}>{a.name}</p>
+                        <p className="text-[11.5px]" style={{ color: '#8A929A' }}>Account ending in {a.mask}</p>
+                      </div>
                     </div>
+                    <button
+                      type="button"
+                      onClick={() => setStatementModal({ accountId: a.id, tab: 'statement' })}
+                      className="inline-flex items-center gap-1.5 rounded-[4px] bg-[#1A4488] px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-[#143669] cursor-pointer"
+                    >
+                      <Printer className="w-3.5 h-3.5" /> View Printable Statement
+                    </button>
                   </div>
                   {[0, 1, 2].map((off) => {
                     const d = new Date();
                     d.setMonth(d.getMonth() - off);
                     return (
-                      <div key={off} className="flex items-center gap-3 px-4 py-3 border-b last:border-b-0" style={{ borderColor: '#EFF0F1' }}>
+                      <div key={off} className="flex flex-wrap items-center gap-3 px-4 py-3 border-b last:border-b-0" style={{ borderColor: '#EFF0F1' }}>
                         <FileText className="w-4 h-4 shrink-0" style={{ color: MUTED }} />
                         <div className="flex-1 min-w-0">
                           <p className="text-[13px]" style={{ color: INK }}>
                             {d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })} statement
                           </p>
-                          <p className="text-[11px]" style={{ color: '#8A929A' }}>PDF · CSV available</p>
+                          <p className="text-[11px]" style={{ color: '#8A929A' }}>Official Chase monthly statement &amp; CSV activity</p>
                         </div>
-                        <button type="button" onClick={() => downloadStatement(a)} className="inline-flex items-center gap-1 text-[12.5px] font-semibold hover:underline cursor-pointer" style={{ color: BTN_BLUE }}>
-                          <Download className="w-3.5 h-3.5" /> Download
-                        </button>
+                        <div className="flex items-center gap-3">
+                          <button
+                            type="button"
+                            onClick={() => setStatementModal({ accountId: a.id, tab: 'statement' })}
+                            className="inline-flex items-center gap-1 text-[12.5px] font-semibold hover:underline cursor-pointer"
+                            style={{ color: BTN_BLUE }}
+                          >
+                            <Printer className="w-3.5 h-3.5" /> Print / PDF
+                          </button>
+                          <button type="button" onClick={() => downloadStatement(a, off)} className="inline-flex items-center gap-1 text-[12.5px] font-semibold hover:underline cursor-pointer" style={{ color: BTN_BLUE }}>
+                            <Download className="w-3.5 h-3.5" /> CSV
+                          </button>
+                        </div>
                       </div>
                     );
                   })}
@@ -1520,6 +1667,14 @@ export const BankingDashboard: React.FC<Props> = ({
         onUpdateUser={onUpdateUser}
         onEnroll={() => onOpenAccount()}
       />
+      {statementModal && (
+        <StatementModal
+          user={user}
+          initialAccountId={statementModal.accountId}
+          initialTab={statementModal.tab}
+          onClose={() => setStatementModal(null)}
+        />
+      )}
     </div>
   );
 };

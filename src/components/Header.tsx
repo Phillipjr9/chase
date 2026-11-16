@@ -205,6 +205,15 @@ export const Header: React.FC<HeaderProps> = ({
 
             <button
               type="button"
+              onClick={() => handleLinkAction('admin-login')}
+              className="inline-flex items-center gap-1 font-semibold text-[#005EB8] hover:underline cursor-pointer"
+            >
+              <ShieldCheck className="w-3.5 h-3.5" />
+              <span>Admin</span>
+            </button>
+
+            <button
+              type="button"
               onClick={onToggleSpanish}
               className={`hover:text-[#005EB8] hover:underline cursor-pointer ${spanishMode ? 'font-semibold text-[#005EB8]' : ''}`}
             >

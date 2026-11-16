@@ -1,0 +1,13 @@
+# Runtime JSON database (auto-created; sample user reseeded via POST /api/seed)
+server/data/
+
+# Dependencies — platform-specific optional binaries
+node_modules/
+
+# Scratch scripts and preview logs
+.work/
+
+# OS / editor noise
+.DS_Store
+*.tmp
+npm-debug.log*
