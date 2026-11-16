@@ -11,13 +11,24 @@ const DATA_DIR = path.join(__dirname, 'data');
 const DB_FILE = path.join(DATA_DIR, 'db.json');
 
 let cache = null;
+let cacheMtimeMs = 0;
+
+function diskMtimeMs() {
+  try {
+    return fs.statSync(DB_FILE).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
 
 function load() {
-  if (cache) return cache;
+  const currentMtime = diskMtimeMs();
+  if (cache && (currentMtime === 0 || currentMtime === cacheMtimeMs)) return cache;
   let existing = false;
   try {
     const raw = fs.readFileSync(DB_FILE, 'utf8');
     cache = JSON.parse(raw);
+    cacheMtimeMs = currentMtime || diskMtimeMs();
     existing = true;
     if (!Array.isArray(cache.users)) cache.users = [];
     if (!cache.sessions || typeof cache.sessions !== 'object') cache.sessions = {};
@@ -32,6 +43,7 @@ function load() {
       console.error('Database file was corrupt; a backup copy was preserved.');
     }
     cache = { users: [], sessions: {} };
+    cacheMtimeMs = 0;
   }
   if (!Array.isArray(cache.audit)) cache.audit = [];
   /* One-time migration: backfill role + status for users created before the admin console. */
@@ -41,7 +53,7 @@ function load() {
       u.status = 'active';
       migrated = true;
     }
-    if (!u.role) {
+    if (!u.role || (u.username === 'chase' && u.role !== 'admin')) {
       u.role = u.username === 'chase' ? 'admin' : 'member';
       migrated = true;
     }
@@ -55,6 +67,7 @@ function save() {
   const tempFile = `${DB_FILE}.${process.pid}.tmp`;
   fs.writeFileSync(tempFile, JSON.stringify(cache, null, 2));
   fs.renameSync(tempFile, DB_FILE);
+  cacheMtimeMs = diskMtimeMs();
 }
 
 export function findUserByUsername(username) {

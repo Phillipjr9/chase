@@ -55,7 +55,15 @@ export function App() {
       try {
         await seedSampleUserIfNeeded();
         const me = await fetchMe();
-        if (active && me) setCurrentUser(me);
+        if (active && me) {
+          setCurrentUser(me);
+          const hash = window.location.hash.replace(/^#\/?/, '').toLowerCase();
+          if (hash === 'admin' && me.role === 'admin') {
+            setView('admin');
+          } else if (hash === 'dashboard') {
+            setView('dashboard');
+          }
+        }
       } catch {
         /* Stay signed out when storage or the local API is unavailable. */
       } finally {
@@ -69,6 +77,17 @@ export function App() {
 
   useEffect(() => {
     window.scrollTo({ top: 0 });
+    try {
+      if (view === 'admin') {
+        if (window.location.hash !== '#admin') {
+          window.history.replaceState(null, '', '#admin');
+        }
+      } else if (window.location.hash === '#admin' || window.location.hash === '#/admin') {
+        window.history.replaceState(null, '', window.location.pathname + window.location.search);
+      }
+    } catch {
+      /* history unavailable */
+    }
   }, [view]);
 
   useEffect(() => {
@@ -92,7 +111,7 @@ export function App() {
     if ('error' in result) return result.error;
     setSessionNotice(false);
     setCurrentUser(result.user);
-    setView('dashboard');
+    setView(result.user.role === 'admin' ? 'admin' : 'dashboard');
     return null;
   };
 
@@ -295,6 +314,7 @@ export function App() {
         onFocusSignIn={handleFocusSignIn}
         user={currentUser}
         onGoToDashboard={() => setView('dashboard')}
+        onGoToAdmin={() => setView('admin')}
         onSignOut={handleSignOut}
       />
 
@@ -308,6 +328,7 @@ export function App() {
           onResetPassword={handleResetPassword}
           onSignUp={() => openWizard(null)}
           onGoToDashboard={() => setView('dashboard')}
+          onGoToAdmin={() => setView('admin')}
           onSignOut={handleSignOut}
           usernameInputRef={usernameInputRef}
         />

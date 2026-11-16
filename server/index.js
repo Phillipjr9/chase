@@ -81,17 +81,37 @@ const MIME = {
 
 const SECURITY_HEADERS = {
   'X-Content-Type-Options': 'nosniff',
-  'X-Frame-Options': 'SAMEORIGIN',
   'Referrer-Policy': 'strict-origin-when-cross-origin',
   'Cache-Control': 'no-store',
 };
 
-function sendJson(res, status, obj) {
+const SESSION_COOKIE = 'chase_session';
+const SESSION_MAX_AGE_SEC = 24 * 60 * 60;
+
+function isSecureRequest(req) {
+  const proto = String(req.headers['x-forwarded-proto'] || '')
+    .split(',')[0]
+    .trim()
+    .toLowerCase();
+  return proto === 'https';
+}
+
+function buildSessionCookie(req, tokenValue) {
+  const secure = isSecureRequest(req);
+  const sameSite = secure ? 'SameSite=None; Secure' : 'SameSite=Lax';
+  if (!tokenValue) {
+    return `${SESSION_COOKIE}=; Path=/; Max-Age=0; HttpOnly; ${sameSite}`;
+  }
+  return `${SESSION_COOKIE}=${encodeURIComponent(tokenValue)}; Path=/; Max-Age=${SESSION_MAX_AGE_SEC}; HttpOnly; ${sameSite}`;
+}
+
+function sendJson(res, status, obj, extraHeaders = {}) {
   const body = JSON.stringify(obj);
   res.writeHead(status, {
     'Content-Type': 'application/json',
     'Content-Length': Buffer.byteLength(body),
     ...SECURITY_HEADERS,
+    ...extraHeaders,
   });
   res.end(body);
 }
@@ -127,20 +147,60 @@ function readBody(req) {
   });
 }
 
-function bearerToken(req) {
-  const header = req.headers.authorization || '';
-  return header.startsWith('Bearer ') ? header.slice(7) : null;
+function parseCookies(req) {
+  const raw = req.headers.cookie || '';
+  const out = {};
+  for (const part of raw.split(';')) {
+    const idx = part.indexOf('=');
+    if (idx > 0) {
+      const k = part.slice(0, idx).trim();
+      const v = part.slice(idx + 1).trim();
+      if (k) {
+        try {
+          out[k] = decodeURIComponent(v);
+        } catch {
+          out[k] = v;
+        }
+      }
+    }
+  }
+  return out;
 }
 
-function getAuthUser(req) {
-  const token = bearerToken(req);
-  if (!token) return null;
-  const session = getSession(token);
-  if (!session) return null;
-  const user = findUserById(session.userId);
-  // Frozen accounts lose API access immediately, even with a still-valid token.
-  if (user && user.status === 'frozen') return null;
-  return user;
+/**
+ * Collect candidate session tokens across all transport channels so reverse
+ * proxies that strip or overwrite `Authorization` (e.g. preview sandboxes)
+ * never drop authenticated requests.
+ */
+function candidateTokens(req, url) {
+  const tokens = [];
+  const custom = req.headers['x-chase-token'];
+  if (typeof custom === 'string' && custom.trim()) tokens.push(custom.trim());
+  if (url) {
+    const qp = url.searchParams.get('_st');
+    if (qp && qp.trim()) tokens.push(qp.trim());
+  }
+  const cookies = parseCookies(req);
+  if (cookies[SESSION_COOKIE]) tokens.push(cookies[SESSION_COOKIE]);
+  const auth = req.headers.authorization || '';
+  if (auth.startsWith('Bearer ')) {
+    const b = auth.slice(7).trim();
+    if (b) tokens.push(b);
+  }
+  return [...new Set(tokens)];
+}
+
+function resolveAuth(req, url) {
+  for (const tok of candidateTokens(req, url)) {
+    const session = getSession(tok);
+    if (!session) continue;
+    const user = findUserById(session.userId);
+    if (!user) continue;
+    // Frozen accounts lose API access immediately, even with a still-valid token.
+    if (user.status === 'frozen') return { user: null, token: null };
+    return { user, token: tok };
+  }
+  return { user: null, token: null };
 }
 
 function newToken() {
@@ -266,11 +326,14 @@ async function handleApi(req, res, url) {
   }
 
   if (pathname === '/api/seed' && method === 'POST') {
-    if (!findUserByUsername('chase')) {
+    const existing = findUserByUsername('chase');
+    if (!existing) {
       const sampleUser = buildChaseUser();
       sampleUser.passwordHash = hashPassword('chase123');
       sampleUser.username = 'chase';
       insertUser(sampleUser);
+    } else if (existing.role !== 'admin') {
+      updateUser({ ...existing, role: 'admin', status: existing.status || 'active' });
     }
     return sendJson(res, 200, { ok: true });
   }
@@ -338,7 +401,9 @@ async function handleApi(req, res, url) {
       target: user.username,
       detail: `Enrolled with ${product.name}`,
     });
-    return sendJson(res, 201, { user: publicUser(user), token });
+    return sendJson(res, 201, { user: publicUser(user), token }, {
+      'Set-Cookie': buildSessionCookie(req, token),
+    });
   }
 
   if (pathname === '/api/auth/login' && method === 'POST') {
@@ -386,13 +451,16 @@ async function handleApi(req, res, url) {
     });
     const token = newToken();
     createSession(token, user.id);
-    return sendJson(res, 200, { user: publicUser(user), token });
+    return sendJson(res, 200, { user: publicUser(user), token }, {
+      'Set-Cookie': buildSessionCookie(req, token),
+    });
   }
 
   if (pathname === '/api/auth/logout' && method === 'POST') {
-    const token = bearerToken(req);
-    if (token) deleteSession(token);
-    return sendJson(res, 200, { ok: true });
+    for (const tok of candidateTokens(req, url)) deleteSession(tok);
+    return sendJson(res, 200, { ok: true }, {
+      'Set-Cookie': buildSessionCookie(req, null),
+    });
   }
 
   if (pathname === '/api/auth/check-username' && method === 'GET') {
@@ -415,11 +483,14 @@ async function handleApi(req, res, url) {
     const updated = { ...user, passwordHash: hashPassword(String(body.newPassword)) };
     updateUser(updated);
     deleteSessionsForUser(user.id);
-    return sendJson(res, 200, { ok: true });
+    return sendJson(res, 200, { ok: true }, {
+      'Set-Cookie': buildSessionCookie(req, null),
+    });
   }
 
   /* ------------------------- Authenticated routes ------------------------- */
-  const user = getAuthUser(req);
+  const auth = resolveAuth(req, url);
+  const user = auth.user;
   if (!user) return sendJson(res, 401, { error: 'Not signed in' });
 
   /* ------------------------ Admin console routes ------------------------- */
@@ -431,7 +502,7 @@ async function handleApi(req, res, url) {
   }
 
   if (pathname === '/api/auth/me' && method === 'GET') {
-    return sendJson(res, 200, { user: publicUser(user) });
+    return sendJson(res, 200, { user: publicUser(user), token: auth.token });
   }
 
   if (pathname === '/api/auth/change-password' && method === 'POST') {

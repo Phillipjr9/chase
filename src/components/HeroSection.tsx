@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { AlertCircle, CheckCircle2, ArrowLeft, LogOut } from 'lucide-react';
+import { AlertCircle, CheckCircle2, ArrowLeft, LogOut, ShieldCheck } from 'lucide-react';
 import { HERO_CAMPAIGNS, SegmentKey } from '../data/chaseData';
 import { User } from '../banking/store';
 import { Spinner } from './Loading';
@@ -13,6 +13,7 @@ interface HeroSectionProps {
   onResetPassword: (username: string, email: string, newPassword: string) => Promise<string | null>;
   onSignUp: () => void;
   onGoToDashboard: () => void;
+  onGoToAdmin?: () => void;
   onSignOut: () => void;
   usernameInputRef: React.RefObject<HTMLInputElement | null>;
 }
@@ -26,6 +27,7 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
   onResetPassword,
   onSignUp,
   onGoToDashboard,
+  onGoToAdmin,
   onSignOut,
   usernameInputRef,
 }) => {
@@ -163,6 +165,12 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
             {user ? (
               /* Signed-in state */
               <div>
+                {user.role === 'admin' && (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-[#EEF4FF] text-[#005EB8] text-[11px] font-bold uppercase tracking-wider px-2.5 py-0.5 mb-2">
+                    <ShieldCheck className="w-3.5 h-3.5" />
+                    Administrator
+                  </span>
+                )}
                 <h2 className="text-[20px] font-light text-[#131313]">
                   Welcome back, {user.fullName.split(' ')[0]}
                 </h2>
@@ -170,10 +178,24 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
                   You&apos;re signed in to Chase Online as <strong className="text-[#131313]">{user.username}</strong>.
                 </p>
                 <div className="mt-5 space-y-2.5">
+                  {user.role === 'admin' && onGoToAdmin && (
+                    <button
+                      type="button"
+                      onClick={onGoToAdmin}
+                      className="w-full inline-flex items-center justify-center gap-2 bg-[#0B1B33] hover:bg-[#13294B] text-white font-semibold text-[14px] py-2.5 rounded-[4px] cursor-pointer"
+                    >
+                      <ShieldCheck className="w-4 h-4" />
+                      <span>Open Admin Console</span>
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={onGoToDashboard}
-                    className="w-full bg-[#0060F0] hover:bg-[#004EC4] text-white font-semibold text-[14px] py-2.5 rounded-[4px] cursor-pointer"
+                    className={`w-full font-semibold text-[14px] py-2.5 rounded-[4px] cursor-pointer ${
+                      user.role === 'admin' && onGoToAdmin
+                        ? 'border border-[#0060F0] bg-white hover:bg-[#F1F7FD] text-[#0060F0]'
+                        : 'bg-[#0060F0] hover:bg-[#004EC4] text-white'
+                    }`}
                   >
                     Go to your accounts
                   </button>
@@ -446,9 +468,14 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
                 </div>
 
                 <div className="mt-4 rounded-[4px] border border-[#C9DDF0] bg-[#F1F7FD] p-3">
-                  <p className="text-[11px] font-bold uppercase tracking-[0.06em] text-[#005EB8]">
-                    Chase sign-in details
-                  </p>
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-[11px] font-bold uppercase tracking-[0.06em] text-[#005EB8]">
+                      Admin sign-in (Alex Rivera)
+                    </p>
+                    <span className="inline-flex items-center gap-1 text-[10.5px] font-semibold text-[#0B1B33]">
+                      <ShieldCheck className="w-3 h-3 text-[#005EB8]" /> Admin Console
+                    </span>
+                  </div>
                   <div className="mt-1.5 flex items-center justify-between gap-2 text-[12.5px] text-[#131313]">
                     <span>
                       Username <strong className="font-mono">chase</strong>

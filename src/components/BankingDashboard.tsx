@@ -810,7 +810,20 @@ export const BankingDashboard: React.FC<Props> = ({
                 );
               })}
             </ul>
-            <div className="px-4 py-3 flex gap-4 text-[13px] text-white/75">
+            <div className="px-4 py-3 flex flex-wrap gap-4 text-[13px] text-white/75">
+              {user.role === 'admin' && onOpenAdmin && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    onOpenAdmin();
+                  }}
+                  className="inline-flex items-center gap-1 text-white font-semibold underline cursor-pointer"
+                >
+                  <ShieldCheck className="w-3.5 h-3.5" />
+                  <span>Admin Console</span>
+                </button>
+              )}
               <button type="button" onClick={onBackHome} className="underline cursor-pointer">Chase.com</button>
               <button type="button" onClick={onSignOut} className="underline cursor-pointer">Sign out</button>
             </div>

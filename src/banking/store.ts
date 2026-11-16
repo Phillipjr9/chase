@@ -530,12 +530,23 @@ const TOKEN_KEY = 'chase_clone_token_v1';
 const USERS_KEY = 'chase_clone_users_v2';
 const SESSION_KEY = 'chase_clone_session_v2';
 
-let token: string | null = null;
-try {
-  token = localStorage.getItem(TOKEN_KEY);
-} catch {
-  /* storage unavailable */
+function readStoredToken(): string | null {
+  try {
+    const v = localStorage.getItem(TOKEN_KEY);
+    if (v) return v;
+  } catch {
+    /* localStorage unavailable */
+  }
+  try {
+    const v = sessionStorage.getItem(TOKEN_KEY);
+    if (v) return v;
+  } catch {
+    /* sessionStorage unavailable */
+  }
+  return null;
 }
+
+let token: string | null = readStoredToken();
 
 function setToken(t: string | null) {
   token = t;
@@ -543,7 +554,13 @@ function setToken(t: string | null) {
     if (t) localStorage.setItem(TOKEN_KEY, t);
     else localStorage.removeItem(TOKEN_KEY);
   } catch {
-    /* storage unavailable */
+    /* localStorage unavailable */
+  }
+  try {
+    if (t) sessionStorage.setItem(TOKEN_KEY, t);
+    else sessionStorage.removeItem(TOKEN_KEY);
+  } catch {
+    /* sessionStorage unavailable */
   }
 }
 
@@ -565,12 +582,40 @@ interface ApiError extends Error {
   status?: number;
 }
 
+const PUBLIC_API_PREFIXES = [
+  '/api/health',
+  '/api/rates',
+  '/api/locations',
+  '/api/offers',
+  '/api/seed',
+  '/api/auth/login',
+  '/api/auth/register',
+  '/api/auth/check-username',
+  '/api/auth/reset-password',
+];
+
+function withSessionParam(path: string, tok: string | null): string {
+  if (!tok || !path.startsWith('/api/')) return path;
+  if (PUBLIC_API_PREFIXES.some((prefix) => path.startsWith(prefix))) return path;
+  const sep = path.includes('?') ? '&' : '?';
+  return `${path}${sep}_st=${encodeURIComponent(tok)}`;
+}
+
 async function apiFetch(path: string, options: RequestInit = {}): Promise<any> {
-  const res = await fetch(path, {
+  const activeToken = token || readStoredToken();
+  if (activeToken && !token) token = activeToken;
+  const url = withSessionParam(path, activeToken);
+  const res = await fetch(url, {
+    credentials: 'same-origin',
     ...options,
     headers: {
       'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(activeToken
+        ? {
+            Authorization: `Bearer ${activeToken}`,
+            'X-Chase-Token': activeToken,
+          }
+        : {}),
       ...((options.headers as Record<string, string> | undefined) || {}),
     },
   });
@@ -578,7 +623,7 @@ async function apiFetch(path: string, options: RequestInit = {}): Promise<any> {
   if (!res.ok) {
     if (
       res.status === 401 &&
-      token &&
+      activeToken &&
       !path.startsWith('/api/auth/login') &&
       !path.startsWith('/api/auth/reset-password') &&
       !path.startsWith('/api/auth/me')
@@ -862,16 +907,27 @@ export async function seedSampleUserIfNeeded(): Promise<void> {
     return;
   }
   const users = loadUsers();
-  if (users.some((u) => u.username.toLowerCase() === 'chase')) return;
+  const existingIdx = users.findIndex((u) => u.username.toLowerCase() === 'chase');
+  if (existingIdx >= 0) {
+    if (users[existingIdx].role !== 'admin') {
+      users[existingIdx] = {
+        ...users[existingIdx],
+        role: 'admin',
+        status: users[existingIdx].status || 'active',
+      };
+      saveUsers(users);
+    }
+    return;
+  }
   users.push(buildChaseUserLocal());
   saveUsers(users);
 }
 
 export async function fetchMe(): Promise<User | null> {
   if (await detectApi()) {
-    if (!token) return null;
     try {
       const data = await apiFetch('/api/auth/me', { method: 'GET' });
+      if (data.token) setToken(data.token);
       return hydrateDefaults(data.user as User);
     } catch {
       setToken(null);
@@ -896,7 +952,7 @@ export async function authenticate(
       return { user: hydrateDefaults(data.user as User) };
     } catch (e) {
       const err = e as ApiError;
-      if (err.status === 401) return { error: err.message };
+      if (err.status && err.status >= 400 && err.status < 500) return { error: err.message };
       throw err;
     }
   }
@@ -908,6 +964,9 @@ export async function authenticate(
   }
   if (user.password !== password) {
     return { error: 'The username or password you entered is incorrect. Please try again.' };
+  }
+  if (user.status === 'frozen') {
+    return { error: 'This account has been frozen by an administrator. Please contact support.' };
   }
   setLocalSession(user.id);
   return { user: hydrateDefaults(user) };
