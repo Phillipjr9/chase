@@ -1,0 +1,134 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --chase-blue: #005EB8;
+    --chase-action-blue: #0060F0;
+    --chase-action-blue-hover: #004EC4;
+    --chase-green: #138842;
+    --chase-green-hover: #0F6E35;
+    --chase-ink: #131313;
+    --chase-body: #353535;
+    --chase-muted: #565A5D;
+    --chase-border: #E9E9E9;
+    --chase-surface: #F1F1F0;
+  }
+
+  html {
+    font-family: 'Open Sans', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+    color: #131313;
+  }
+
+  body {
+    margin: 0;
+    background-color: #ffffff;
+    font-size: 14px;
+    line-height: 1.5;
+    overflow-x: hidden;
+  }
+
+  button,
+  a,
+  input,
+  select {
+    font-family: inherit;
+  }
+
+  button:focus-visible,
+  a:focus-visible,
+  input:focus-visible,
+  select:focus-visible {
+    outline: 2px solid #0060F0;
+    outline-offset: 2px;
+  }
+}
+
+/* Mobile: stop iOS zooming into fields and keep text sizing consistent */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+@media (max-width: 767px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+}
+
+/* Chase sign-in inputs: bottom-border only */
+.chase-input {
+  width: 100%;
+  height: 38px;
+  padding: 0 8px;
+  font-size: 14px;
+  color: #131313;
+  background: #fff;
+  border: none;
+  border-bottom: 2px solid #B9C4D0;
+  border-radius: 0;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+.chase-input:hover {
+  border-bottom-color: #7B8794;
+}
+.chase-input:focus {
+  border-bottom-color: #0060F0;
+}
+
+/* Range slider for mortgage estimator */
+input[type='range'].chase-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 999px;
+  background: #D8DEE4;
+  outline: none;
+}
+input[type='range'].chase-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #0060F0;
+  border: 2px solid #ffffff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+  cursor: pointer;
+}
+input[type='range'].chase-slider::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #0060F0;
+  border: 2px solid #ffffff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+  cursor: pointer;
+}
+
+/* Chase-style loading motion */
+@keyframes chase-shimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+.chase-shimmer {
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 255, 255, 0.65) 50%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  animation: chase-shimmer 1.35s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-spin {
+    animation-duration: 1.8s !important;
+  }
+  .chase-shimmer {
+    animation: none;
+    background: transparent;
+  }
+}

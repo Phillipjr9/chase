@@ -1,0 +1,41 @@
+import { chromium } from 'playwright';
+import assert from 'node:assert/strict';
+const browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] });
+const out = [];
+const ok = (c, m) => { assert.ok(c, m); out.push('PASS ' + m); };
+try {
+  const ph = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  const p = await ph.newPage();
+  const errs = []; p.on('pageerror', (e) => errs.push(e.message));
+  await p.goto('http://127.0.0.1:4177', { waitUntil: 'networkidle' });
+  await p.getByRole('button', { name: 'Fill demo credentials', exact: true }).click();
+  await p.locator('form').filter({ has: p.locator('#chase-username') }).getByRole('button', { name: 'Sign in', exact: true }).click();
+  await p.getByRole('heading', { name: 'Accounts', exact: true }).waitFor({ timeout: 10000 });
+  ok(await p.locator('header nav[aria-label="Online banking sections"]').first().isHidden(), 'Phone: horizontal tab row is hidden');
+  const btn = p.getByRole('button', { name: 'Open menu' });
+  ok(await btn.isVisible(), 'Phone: menu button is visible');
+  await btn.click();
+  const drawer = p.locator('#dashboard-menu');
+  ok(await drawer.isVisible(), 'Phone: drawer opens');
+  ok((await drawer.innerText()).includes('Statements'), 'Phone: drawer lists sections');
+  ok(!(await drawer.innerText()).includes('Pay & Transfer'), 'Phone: drawer has no Pay & Transfer');
+  await drawer.getByRole('button', { name: 'Statements', exact: true }).click();
+  await p.getByRole('heading', { name: 'Statements & Documents', exact: true }).waitFor();
+  ok(await p.locator('#dashboard-menu').count() === 0, 'Phone: drawer closes after choosing a section');
+  const overflow = await p.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+  ok(overflow <= 1, 'Phone: statements page has no sideways scroll');
+  await p.screenshot({ path: '.work/mobile-menu-statements.png' });
+  ok(errs.length === 0, 'Phone: no runtime errors');
+  await ph.close();
+
+  const dk = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+  const d = await dk.newPage();
+  await d.goto('http://127.0.0.1:4177', { waitUntil: 'networkidle' });
+  await d.getByRole('button', { name: 'Fill demo credentials', exact: true }).click();
+  await d.locator('form').filter({ has: d.locator('#chase-username') }).getByRole('button', { name: 'Sign in', exact: true }).click();
+  await d.getByRole('heading', { name: 'Accounts', exact: true }).waitFor({ timeout: 10000 });
+  ok(await d.locator('header nav[aria-label="Online banking sections"]').first().isVisible(), 'Desktop: tab row visible');
+  ok(await d.getByRole('button', { name: 'Open menu' }).isHidden(), 'Desktop: menu button hidden');
+  await dk.close();
+  console.log(out.join('\n') + `\n\n${out.length} checks passed.`);
+} finally { await browser.close(); }
