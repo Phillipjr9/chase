@@ -74,3 +74,17 @@ await call('/api/admin/login',{status:401,body:{username:'operator-new',password
 const b3 = (await call('/api/admin/login',{body:{username:'operator-new',password:'newPassword123!'}})).token;
 assert.equal((await call('/api/admin/users',{token:b3})).users.length,2);
 console.log('Staff credentials, lock messages and session invalidation passed.');
+// Support contacts are set only by the super administrator and follow reassignment.
+await call(`/api/admin/admins/${adminB.id}`, {token:b3, method:'PUT', status:403, body:{supportContact:{email:'bad@example.test',phone:'555-0100'}}});
+await call(`/api/admin/admins/${adminB.id}`, {token:root, method:'PUT', status:400, body:{supportContact:{email:'invalid',phone:'555-0100'}}});
+await call(`/api/admin/admins/${adminB.id}`, {token:root, method:'PUT', body:{supportContact:{email:'support@example.test',phone:'+1 (555) 010-0200'}}});
+const inbox = await call('/api/messages', {token:customer});
+assert.deepEqual(inbox.supportContact,{email:'support@example.test',phone:'+1 (555) 010-0200'});
+assert(inbox.messages.some(m => m.body === 'Hello admin'));
+await call(`/api/admin/users/${userA.id}/messages`,{token:b3,status:201,body:{subject:'Reply',body:'Reply from advisor'}});
+assert((await call('/api/messages',{token:customer})).messages.some(m=>m.body==='Reply from advisor'));
+await call('/api/messages',{token:customer,status:201,body:{subject:'Follow-up',body:'Another question'}});
+assert((await call('/api/admin/messages',{token:b3})).threads.find(t=>t.userId===userA.id).messages.some(m=>m.body==='Another question'));
+await call('/api/admin/messages',{token:a,status:200});
+assert(!(await call('/api/admin/messages',{token:a})).threads.some(t=>t.userId===userA.id));
+console.log('Support contact and two-way messaging isolation passed.');

@@ -225,6 +225,25 @@ export const AdminPage: React.FC<{
     return () => window.clearInterval(timer);
   }, [authenticated, token, loadData]);
 
+  // Refresh only the support inbox frequently; the larger dashboard refresh remains separate.
+  useEffect(() => {
+    if (!authenticated || !token) return;
+    let active = true;
+    let pending = false;
+    const refresh = async () => {
+      if (pending || document.hidden) return;
+      pending = true;
+      try {
+        const result = await api<{ threads: AdminMessageThread[] }>('/api/admin/messages', {}, token);
+        if (active) setMessageThreads(result.threads);
+      } catch { /* Retry on the next interval. */ }
+      finally { pending = false; }
+    };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 5000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [authenticated, token, api]);
+
   // Verify session on mount / token change
   useEffect(() => {
     let active = true;
@@ -1141,7 +1160,7 @@ export const AdminPage: React.FC<{
 
   const handleUpdateAdmin = async (
     admin: AdminAccountRow,
-    patch: { username?: string; fullName?: string; lockMessage?: string; role?: 'admin' | 'auditor'; status?: 'active' | 'disabled'; password?: string; permissions?: { createUsers: boolean; generateActivity: boolean; sendMessages: boolean } }
+    patch: { supportContact?: { email: string; phone: string }; username?: string; fullName?: string; lockMessage?: string; role?: 'admin' | 'auditor'; status?: 'active' | 'disabled'; password?: string; permissions?: { createUsers: boolean; generateActivity: boolean; sendMessages: boolean } }
   ): Promise<boolean> => {
     setBusy(true);
     try {

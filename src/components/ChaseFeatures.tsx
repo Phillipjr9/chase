@@ -49,6 +49,8 @@ import {
   defaultBudgets,
   saveBudgets,
   sendSecureMessage,
+  fetchSupportInbox,
+  SecureMessage,
   markSecureMessagesRead,
   toggleCustomOffer,
   SecureMessageCategory,
@@ -1413,15 +1415,34 @@ export const SecureMessagesView: React.FC<{ user: User; onUpdateUser: (user: Use
   const [sending, setSending] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
 
-  const messages = user.messages || [];
+  const [messages, setMessages] = useState<SecureMessage[]>(user.messages || []);
+  const [supportContact, setSupportContact] = useState<{ email: string; phone: string } | null>(null);
+  const [refreshError, setRefreshError] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    let pending = false;
+    const refresh = async () => {
+      if (pending || document.hidden) return;
+      pending = true;
+      try {
+        const inbox = await fetchSupportInbox();
+        if (active) { setMessages(inbox.messages); setSupportContact(inbox.supportContact); setRefreshError(false); }
+      } catch { if (active) setRefreshError(true); }
+      finally { pending = false; }
+    };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 5000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [user.id]);
 
   useEffect(() => {
     if (messages.some((m) => m.sender === 'advisor' && !m.readByCustomer)) {
       markSecureMessagesRead()
-        .then((u) => onUpdateUser(u))
+        .then((u) => { setMessages(u.messages || []); onUpdateUser(u); })
         .catch(() => undefined);
     }
-  }, [messages.length]);
+  }, [messages]);
 
   const submitMessage = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1435,9 +1456,10 @@ export const SecureMessagesView: React.FC<{ user: User; onUpdateUser: (user: Use
         body.trim()
       );
       onUpdateUser(updated);
+      setMessages(updated.messages || []);
       setSubject('');
       setBody('');
-      setNotice('Your secure message was delivered to the Chase Client Operations Desk.');
+      setNotice('Your message was sent to your administrator’s inbox.');
     } catch (err) {
       setNotice(err instanceof Error ? err.message : 'Unable to send secure message.');
     } finally {
@@ -1451,7 +1473,7 @@ export const SecureMessagesView: React.FC<{ user: User; onUpdateUser: (user: Use
         <div>
           <H1>Secure Message Center</H1>
           <p className="mt-1 text-[13px]" style={{ color: MUT }}>
-            Encrypted correspondence with Chase Client Services, Wire Operations, and Card Dispute Specialists.
+            Test environment support messages. No real banking or payment services are provided.
           </p>
         </div>
         <span className="inline-flex items-center gap-1.5 text-[12px] font-semibold px-3 py-1 rounded-full bg-[#EAF3FB] text-[#0B5FA5]">
@@ -1466,8 +1488,10 @@ export const SecureMessagesView: React.FC<{ user: User; onUpdateUser: (user: Use
               Send a new inquiry
             </h2>
             <p className="mt-1 text-[12px]" style={{ color: MUT }}>
-              Messages appear immediately in the Chase Admin Console for advisor response.
+              Messages typically appear in the administrator inbox within a few seconds while it is open.
             </p>
+            {supportContact && (supportContact.email || supportContact.phone) && <div className="mt-3 text-sm"><strong>Support contact:</strong>{supportContact.email && <p>Email: <a className="underline" href={`mailto:${supportContact.email}`}>{supportContact.email}</a></p>}{supportContact.phone && <p>Phone: <a className="underline" href={`tel:${supportContact.phone.replace(/[^+0-9]/g, '')}`}>{supportContact.phone}</a></p>}</div>}
+            {refreshError && <p role="status" className="mt-3 text-sm text-red-700">Unable to refresh messages. Retrying.</p>}
             <form onSubmit={submitMessage} className="mt-4 space-y-3.5">
               <div>
                 <label className="block text-[12px] font-semibold mb-1" style={{ color: INK }}>

@@ -210,7 +210,7 @@ export const MessagesSupportTab: React.FC<MessagesSupportTabProps> = ({
     }
   };
 
-  const messages = selectedUser?.messages || activeThread?.messages || [];
+  const messages = activeThread?.messages || selectedUser?.messages || [];
 
   return (
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">

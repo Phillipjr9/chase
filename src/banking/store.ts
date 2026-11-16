@@ -829,6 +829,11 @@ function hydrateDefaults(user: User | null | undefined): User {
 
 /* --------------------------- Exported async API --------------------------- */
 
+export async function fetchSupportInbox(): Promise<{ messages: SecureMessage[]; supportContact: { email: string; phone: string } | null }> {
+  if (!(await detectApi())) throw new Error('Support inbox requires the server connection.');
+  return apiFetch('/api/messages', { method: 'GET' });
+}
+
 export async function seedSampleUserIfNeeded(): Promise<void> {
   // Demo identities are not provisioned automatically.
 }

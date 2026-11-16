@@ -61,6 +61,7 @@ export interface AdminAccountRow {
   createdAt?: string;
   protected?: boolean;
   lockMessage?: string;
+  supportContact?: { email: string; phone: string };
   permissions?: { createUsers: boolean; generateActivity: boolean; sendMessages: boolean };
   customerCount?: number;
   unreadCount?: number;
