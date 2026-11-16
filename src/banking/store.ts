@@ -839,16 +839,20 @@ export async function seedSampleUserIfNeeded(): Promise<void> {
 }
 
 export async function fetchMe(): Promise<User | null> {
+  const tokenBefore = token || readCustomerToken();
   if (await detectApi()) {
+    if ((token || readCustomerToken()) !== tokenBefore) return null;
     try {
       const data = await apiFetch('/api/auth/me', { method: 'GET' });
+      if ((token || readCustomerToken()) !== tokenBefore) return null;
       if (data.token) setToken(data.token);
       return hydrateDefaults(data.user as User);
     } catch {
-      setToken(null);
+      if ((token || readCustomerToken()) === tokenBefore) setToken(null);
       return null;
     }
   }
+  if ((token || readCustomerToken()) !== tokenBefore) return null;
   const u = getLocalSessionUser();
   return u ? hydrateDefaults(u) : null;
 }

@@ -75,17 +75,22 @@ const LINE = '#E4E6E8';
 
 export const AdminPage: React.FC<{
   initialToken?: string;
+  initialAdmin?: { username: string; label: string; role?: 'admin' | 'auditor' } | null;
+  onTokenChange?: (token: string) => void;
   onExit: () => void;
   onImpersonate: (user: User, token: string) => void;
-}> = ({ initialToken = '', onExit, onImpersonate }) => {
+}> = ({ initialToken = '', initialAdmin = null, onTokenChange, onExit, onImpersonate }) => {
   const [token, setToken] = useState<string>(() => initialToken || readAdminToken());
-  const [checkingAuth, setCheckingAuth] = useState<boolean>(true);
-  const [authenticated, setAuthenticated] = useState<boolean>(false);
+  const [authenticated, setAuthenticated] = useState<boolean>(() =>
+    Boolean((initialToken || readAdminToken()) && initialAdmin)
+  );
 
   // Admin identity & staff
-  const [adminName, setAdminName] = useState('Chase administrator');
-  const [currentAdminRole, setCurrentAdminRole] = useState<'admin' | 'auditor'>('admin');
-  const [currentAdminUsername, setCurrentAdminUsername] = useState('');
+  const [adminName, setAdminName] = useState(initialAdmin?.label || 'Chase administrator');
+  const [currentAdminRole, setCurrentAdminRole] = useState<'admin' | 'auditor'>(
+    initialAdmin?.role || 'admin'
+  );
+  const [currentAdminUsername, setCurrentAdminUsername] = useState(initialAdmin?.username || '');
   const [isSuperAdmin, setIsSuperAdmin] = useState(false);
   const [permissions, setPermissions] = useState({ createUsers: false, generateActivity: false, sendMessages: false });
   const [adminAccounts, setAdminAccounts] = useState<AdminAccountRow[]>([]);
@@ -213,12 +218,126 @@ export const AdminPage: React.FC<{
     [api, range, token]
   );
 
+  const mountedRef = useRef(true);
+  const authSeqRef = useRef(0);
+  const lastInitialTokenRef = useRef(initialToken);
+  const tokenRef = useRef(token);
+  tokenRef.current = token;
+  const rangeRef = useRef(range);
+  rangeRef.current = range;
+  const onTokenChangeRef = useRef(onTokenChange);
+  onTokenChangeRef.current = onTokenChange;
+
+  const hydrateSession = useCallback(
+    async (candidateToken: string) => {
+      const seq = ++authSeqRef.current;
+      try {
+        const me = await adminFetch<{
+          admin: {
+            username: string;
+            label: string;
+            role: 'admin' | 'auditor';
+            isSuperAdmin?: boolean;
+            permissions: { createUsers: boolean; generateActivity: boolean; sendMessages: boolean };
+          };
+          token?: string;
+        }>('/api/admin/me', {}, candidateToken);
+        if (!mountedRef.current || authSeqRef.current !== seq) return;
+
+        const resolvedTok = me.token || candidateToken;
+        if (resolvedTok) {
+          tokenRef.current = resolvedTok;
+          setToken(resolvedTok);
+          writeAdminToken(resolvedTok);
+          onTokenChangeRef.current?.(resolvedTok);
+        }
+        setIsSuperAdmin(me.admin.isSuperAdmin === true);
+        setPermissions(me.admin.permissions);
+        setAdminName(me.admin.label);
+        setCurrentAdminRole(me.admin.role || 'admin');
+        setCurrentAdminUsername(me.admin.username);
+        setAuthenticated(true);
+
+        const [settingsRes, adminsRes, overviewRes, userRes, auditRes, txRes, msgRes] = await Promise.all([
+          adminFetch<{ settings: SimulatorSettings }>('/api/admin/settings', {}, resolvedTok),
+          adminFetch<{ admins: AdminAccountRow[] }>('/api/admin/admins', {}, resolvedTok),
+          adminFetch<{ metrics: AdminMetrics; recentAudit: AuditEntry[]; analytics?: OverviewAnalytics }>(
+            `/api/admin/overview?range=${rangeRef.current}`,
+            {},
+            resolvedTok
+          ),
+          adminFetch<{ users: AdminUserRow[] }>('/api/admin/users', {}, resolvedTok),
+          adminFetch<{ audit: AuditEntry[] }>('/api/admin/audit?limit=5000', {}, resolvedTok),
+          adminFetch<{ transactions: GlobalTransaction[] }>(
+            '/api/admin/transactions?limit=5000',
+            {},
+            resolvedTok
+          ),
+          adminFetch<{ threads: AdminMessageThread[] }>('/api/admin/messages', {}, resolvedTok).catch(
+            () => ({ threads: [] })
+          ),
+        ]);
+        if (!mountedRef.current || authSeqRef.current !== seq) return;
+
+        setSimulatorSettings(settingsRes.settings);
+        setAdminAccounts(adminsRes.admins);
+        setMetrics(overviewRes.metrics);
+        if (overviewRes.analytics) setAnalytics(overviewRes.analytics);
+        setUsers(userRes.users);
+        setAudit(auditRes.audit);
+        setGlobalTransactions(txRes.transactions);
+        setMessageThreads(msgRes.threads || []);
+
+        if (userRes.users.length > 0) {
+          const preferred =
+            userRes.users.find((u) => u.username === 'chase') || userRes.users[0];
+          const selectedRes = await adminFetch<{ user: User }>(
+            `/api/admin/users/${encodeURIComponent(preferred.id)}`,
+            {},
+            resolvedTok
+          ).catch(() => null);
+          if (!mountedRef.current || authSeqRef.current !== seq || !selectedRes) return;
+          setSelectedUser(selectedRes.user);
+          setUserJson(JSON.stringify(selectedRes.user, null, 2));
+          setQuickAcctId(selectedRes.user.accounts?.[0]?.id || '');
+        }
+      } catch (err) {
+        if (!mountedRef.current || authSeqRef.current !== seq) return;
+        if (err instanceof AdminApiError && err.status === 401) {
+          tokenRef.current = '';
+          writeAdminToken(null);
+          onTokenChangeRef.current?.('');
+          setToken('');
+          setAuthenticated(false);
+        } else {
+          notify('error', err instanceof Error ? err.message : 'Could not verify admin session.');
+        }
+      }
+    },
+    [notify]
+  );
+
+  // Restore any existing admin session once in the background without blocking the page
   useEffect(() => {
-    if (initialToken && initialToken !== token) {
+    mountedRef.current = true;
+    void hydrateSession(initialToken || readAdminToken());
+    return () => {
+      mountedRef.current = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Only adopt initialToken if the parent explicitly provides a new non-empty token
+  useEffect(() => {
+    if (initialToken === lastInitialTokenRef.current) return;
+    lastInitialTokenRef.current = initialToken;
+    if (initialToken && initialToken !== tokenRef.current) {
+      tokenRef.current = initialToken;
       setToken(initialToken);
       writeAdminToken(initialToken);
+      void hydrateSession(initialToken);
     }
-  }, [initialToken, token]);
+  }, [initialToken, hydrateSession]);
 
   useEffect(() => {
     if (!authenticated || !token) return;
@@ -246,62 +365,6 @@ export const AdminPage: React.FC<{
     return () => { active = false; window.clearInterval(timer); };
   }, [authenticated, token, api]);
 
-  // Verify session on mount / token change
-  useEffect(() => {
-    let active = true;
-    (async () => {
-      setCheckingAuth(true);
-      try {
-        const me = await api<{
-          admin: { username: string; label: string; role: 'admin' | 'auditor'; isSuperAdmin?: boolean; permissions: { createUsers: boolean; generateActivity: boolean; sendMessages: boolean } };
-          token?: string;
-        }>('/api/admin/me', {}, token);
-        if (!active) return;
-        const resolvedTok = me.token || token;
-        if (resolvedTok && resolvedTok !== token) {
-          setToken(resolvedTok);
-          writeAdminToken(resolvedTok);
-        }
-        setIsSuperAdmin(me.admin.isSuperAdmin === true);
-        setPermissions(me.admin.permissions);
-        setAdminName(me.admin.label);
-        setCurrentAdminRole(me.admin.role || 'admin');
-        setCurrentAdminUsername(me.admin.username);
-        setAuthenticated(true);
-
-        const [settingsRes, adminsRes, loadedUsers] = await Promise.all([
-          api<{ settings: SimulatorSettings }>('/api/admin/settings', {}, resolvedTok),
-          api<{ admins: AdminAccountRow[] }>('/api/admin/admins', {}, resolvedTok),
-          loadData(resolvedTok, range),
-        ]);
-        if (!active) return;
-        setSimulatorSettings(settingsRes.settings);
-        setAdminAccounts(adminsRes.admins);
-
-        if (loadedUsers.length > 0) {
-          const preferred =
-            loadedUsers.find((u) => u.username === 'chase') || loadedUsers[0];
-          await loadSelectedUser(preferred.id, resolvedTok).catch(() => undefined);
-        }
-      } catch (err) {
-        if (!active) return;
-        if (err instanceof AdminApiError && err.status === 401) {
-          writeAdminToken(null);
-          setToken('');
-          setAuthenticated(false);
-        } else {
-          notify('error', err instanceof Error ? err.message : 'Could not verify admin session.');
-        }
-      } finally {
-        if (active) setCheckingAuth(false);
-      }
-    })();
-    return () => {
-      active = false;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token]);
-
   const handleRangeChange = async (nextRange: CashflowRange) => {
     setRange(nextRange);
     try {
@@ -321,6 +384,7 @@ export const AdminPage: React.FC<{
     creds: { username: string; password: string } = { username: loginUser, password: loginPass }
   ) => {
     e?.preventDefault();
+    const seq = ++authSeqRef.current;
     setBusy(true);
     setLoginError('');
     try {
@@ -332,26 +396,34 @@ export const AdminPage: React.FC<{
         { method: 'POST', body: JSON.stringify(creds) },
         ''
       );
+      if (!mountedRef.current || authSeqRef.current !== seq) return;
+      tokenRef.current = res.token;
       writeAdminToken(res.token);
+      onTokenChangeRef.current?.(res.token);
       setAdminName(res.admin.label);
       setCurrentAdminRole(res.admin.role || 'admin');
       setCurrentAdminUsername(res.admin.username);
       setToken(res.token);
       setAuthenticated(true);
+      void hydrateSession(res.token);
     } catch (err) {
+      if (!mountedRef.current || authSeqRef.current !== seq) return;
       setLoginError(err instanceof Error ? err.message : 'Administrator sign-in failed.');
     } finally {
-      setBusy(false);
+      if (mountedRef.current) setBusy(false);
     }
   };
 
   const signOut = async () => {
+    authSeqRef.current += 1;
     try {
       await api('/api/admin/logout', { method: 'POST' });
     } catch {
       /* ignore */
     }
+    tokenRef.current = '';
     writeAdminToken(null);
+    onTokenChangeRef.current?.('');
     setToken('');
     setAuthenticated(false);
     onExit();
@@ -1226,7 +1298,10 @@ export const AdminPage: React.FC<{
         method: 'PUT',
         body: JSON.stringify({ currentPassword, newPassword, confirm: true }),
       });
+      authSeqRef.current += 1;
+      tokenRef.current = '';
       writeAdminToken(null);
+      onTokenChangeRef.current?.('');
       setToken('');
       setAuthenticated(false);
       setLoginError('Password updated. Please sign in with your new administrator password.');
@@ -1455,15 +1530,6 @@ export const AdminPage: React.FC<{
   };
 
   /* ------------------------- Unauthenticated Gate ------------------------- */
-
-  if (checkingAuth && !authenticated) {
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center gap-3 text-white" style={{ backgroundColor: NAVY }}>
-        <Spinner size="md" tone="white" />
-        <p className="text-[13.5px] text-white/80">Verifying Chase Online Administrator session…</p>
-      </div>
-    );
-  }
 
   if (!authenticated) {
     return (
