@@ -1264,7 +1264,7 @@ export const LedgerTab: React.FC<LedgerProps> = ({
               onClick={() =>
                 downloadCsv(
                   'chase-simulator-ledger.csv',
-                  ['Date', 'Username', 'Customer', 'Account', 'Type', 'Description', 'Category', 'Status', 'Amount'],
+                  ['Date', 'Username', 'Customer', 'Account', 'Type', 'Description', 'Category', 'Status', 'Amount', 'Generated'],
                   filtered.map((t) => [
                     t.date,
                     t.username,
@@ -1275,6 +1275,7 @@ export const LedgerTab: React.FC<LedgerProps> = ({
                     t.category,
                     t.status,
                     t.amount,
+                    t.simulated ? 'Yes' : 'No',
                   ])
                 )
               }
@@ -1399,7 +1400,7 @@ export const LedgerTab: React.FC<LedgerProps> = ({
                     <p className="text-[11px] text-gray-400">{t.accountType}</p>
                   </Td>
                   <Td className="max-w-[260px] truncate font-medium text-gray-800 dark:text-gray-100">
-                    {t.description}
+                    {t.description} {t.simulated && <Badge tone="violet">Generated</Badge>}
                   </Td>
                   <Td>
                     <Badge tone="neutral">{t.category}</Badge>

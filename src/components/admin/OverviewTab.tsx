@@ -9,7 +9,6 @@ import {
   Calendar,
   CircleDollarSign,
   Eye,
-  Sparkles,
   Users,
   WalletCards,
 } from 'lucide-react';
@@ -63,7 +62,6 @@ interface Props {
   onNavigate: (tab: AdminTab) => void;
   onSelectUser: (id: string, targetTab?: AdminTab) => void;
   onImpersonateById: (id: string, fullName: string) => void;
-  onSeedDemoRoster: () => void;
 }
 
 export const OverviewTab: React.FC<Props> = ({
@@ -75,11 +73,9 @@ export const OverviewTab: React.FC<Props> = ({
   globalTransactions,
   audit,
   isReadOnly,
-  busy,
   onNavigate,
   onSelectUser,
   onImpersonateById,
-  onSeedDemoRoster,
 }) => {
   const [reportFrom, setReportFrom] = useState(() => inputDate(180));
   const [reportThrough, setReportThrough] = useState(() => inputDate(0));
@@ -226,29 +222,6 @@ export const OverviewTab: React.FC<Props> = ({
 
   return (
     <div className="space-y-6">
-      {/* Quick roster banner when few customers exist */}
-      {users.length <= 2 && !isReadOnly && (
-        <div className="rounded-2xl border border-blue-200 dark:border-blue-500/30 bg-gradient-to-r from-blue-50 via-indigo-50/60 to-white dark:from-blue-500/10 dark:via-indigo-500/5 dark:to-transparent px-5 py-4 flex flex-wrap items-center justify-between gap-4">
-          <div className="flex items-start gap-3">
-            <span className="w-9 h-9 rounded-xl bg-[#0060F0] text-white flex items-center justify-center shrink-0">
-              <Sparkles className="w-4 h-4" />
-            </span>
-            <div>
-              <p className="text-[13.5px] font-semibold text-gray-900 dark:text-white">
-                Enrich simulator dataset with sample Private Client &amp; Sapphire households
-              </p>
-              <p className="text-[12px] text-gray-600 dark:text-gray-400 mt-0.5">
-                Adds 4 realistic customer profiles (active, suspended, open disputes, multi-account balances) while keeping existing users untouched.
-              </p>
-            </div>
-          </div>
-          <Btn variant="primary" size="sm" disabled={busy} onClick={onSeedDemoRoster}>
-            <Sparkles className="w-3.5 h-3.5" />
-            Populate sample roster
-          </Btn>
-        </div>
-      )}
-
       {/* Row 1: Executive KPIs */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         {kpis.map((kpi) => (

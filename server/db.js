@@ -23,9 +23,8 @@ export function isSupabaseEnabled() {
 let cache = null;
 let cacheMtimeMs = -1;
 let remoteHydratedAt = 0;
-let pendingRemoteSave = null;
-let dirtySeq = 0;
-let flushedSeq = 0;
+let remoteVersion = null;
+let remoteDirty = false;
 
 function sanitizeLoadedDb(parsed) {
   const next = parsed && typeof parsed === 'object' ? parsed : {};
@@ -108,96 +107,67 @@ function load() {
   return cache;
 }
 
-async function pushToSupabase(snapshot, seq) {
-  if (!isSupabaseEnabled()) return;
-  try {
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/chase_simulator_state?on_conflict=id`, {
-      method: 'POST',
-      headers: {
-        apikey: SUPABASE_KEY,
-        Authorization: `Bearer ${SUPABASE_KEY}`,
-        'Content-Type': 'application/json',
-        Prefer: 'resolution=merge-duplicates,return=minimal',
-      },
-      body: JSON.stringify({
-        id: SUPABASE_ROW_ID,
-        state: snapshot,
-        updated_at: new Date().toISOString(),
-      }),
-    });
-    if (res.ok && seq > flushedSeq) {
-      flushedSeq = seq;
-      remoteHydratedAt = Date.now();
-    }
-  } catch (err) {
-    console.error('Supabase state sync warning:', err?.message || err);
-  }
-}
-
 function save() {
-  try {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-    const tempFile = `${DB_FILE}.${process.pid}.tmp`;
-    fs.writeFileSync(tempFile, JSON.stringify(cache, null, 2));
-    fs.renameSync(tempFile, DB_FILE);
-    cacheMtimeMs = diskMtimeMs();
-  } catch {
-    /* Read-only serverless filesystem fallback */
-  }
-  if (isSupabaseEnabled() && cache) {
-    dirtySeq += 1;
-    const seq = dirtySeq;
-    const snapshot = JSON.parse(JSON.stringify(cache));
-    pendingRemoteSave = (pendingRemoteSave || Promise.resolve()).then(() => pushToSupabase(snapshot, seq));
-  }
-}
-
-export async function ensureDbReady() {
-  if (!isSupabaseEnabled()) {
-    load();
+  if (isSupabaseEnabled()) {
+    remoteDirty = true;
     return;
   }
-  if (dirtySeq > flushedSeq && pendingRemoteSave) {
-    await pendingRemoteSave;
-  }
-  if (cache && Date.now() - remoteHydratedAt < 2000) return;
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  const tempFile = `${DB_FILE}.${process.pid}.tmp`;
+  fs.writeFileSync(tempFile, JSON.stringify(cache, null, 2));
+  fs.renameSync(tempFile, DB_FILE);
+  cacheMtimeMs = diskMtimeMs();
+}
+
+const remoteHeaders = () => ({
+  apikey: SUPABASE_KEY,
+  Authorization: `Bearer ${SUPABASE_KEY}`,
+  'Content-Type': 'application/json',
+  Accept: 'application/json',
+});
+
+export async function ensureDbReady() {
+  if (!isSupabaseEnabled()) { load(); return; }
+  // Every request starts from a fresh remote snapshot, never a stale /tmp fallback.
+  remoteDirty = false;
+  let res;
   try {
-    const res = await fetch(
-      `${SUPABASE_URL}/rest/v1/chase_simulator_state?id=eq.${encodeURIComponent(SUPABASE_ROW_ID)}&select=state`,
-      {
-        headers: {
-          apikey: SUPABASE_KEY,
-          Authorization: `Bearer ${SUPABASE_KEY}`,
-          Accept: 'application/json',
-        },
-      }
-    );
-    if (res.ok) {
-      const rows = await res.json();
-      if (Array.isArray(rows) && rows[0]?.state) {
-        cache = sanitizeLoadedDb(rows[0].state);
-        remoteHydratedAt = Date.now();
-        try {
-          fs.mkdirSync(DATA_DIR, { recursive: true });
-          fs.writeFileSync(DB_FILE, JSON.stringify(cache, null, 2));
-          cacheMtimeMs = diskMtimeMs();
-        } catch {
-          /* ignore */
-        }
-        return;
-      }
-    }
-  } catch (err) {
-    console.error('Supabase load warning:', err?.message || err);
-  }
-  load();
+    res = await fetch(`${SUPABASE_URL}/rest/v1/chase_simulator_state?id=eq.${encodeURIComponent(SUPABASE_ROW_ID)}&select=state,updated_at`, { headers: remoteHeaders() });
+  } catch (cause) { throw Object.assign(new Error('Database unavailable'), { status: 503, cause }); }
+  if (!res.ok) throw Object.assign(new Error('Database unavailable'), { status: 503 });
+  const rows = await res.json();
+  if (!Array.isArray(rows) || rows.length > 1) throw Object.assign(new Error('Invalid database response'), { status: 503 });
+  cache = sanitizeLoadedDb(rows[0]?.state || {});
+  remoteVersion = rows[0]?.updated_at || null;
   remoteHydratedAt = Date.now();
 }
 
 export async function flushRemoteSave() {
-  if (pendingRemoteSave) {
-    await pendingRemoteSave;
+  if (!isSupabaseEnabled() || !remoteDirty) return;
+  // Compare-and-swap rejects concurrent writes from different serverless instances.
+  const updatedAt = new Date(Math.max(Date.now(), remoteVersion ? Date.parse(remoteVersion) + 1 : 0)).toISOString();
+  const endpoint = `${SUPABASE_URL}/rest/v1/chase_simulator_state`;
+  const query = remoteVersion ? `?id=eq.${encodeURIComponent(SUPABASE_ROW_ID)}&updated_at=eq.${encodeURIComponent(remoteVersion)}` : '';
+  let res;
+  try {
+    res = await fetch(endpoint + query, {
+      method: remoteVersion ? 'PATCH' : 'POST',
+      headers: { ...remoteHeaders(), Prefer: 'return=representation' },
+      body: JSON.stringify(remoteVersion ? { state: cache, updated_at: updatedAt } : { id: SUPABASE_ROW_ID, state: cache, updated_at: updatedAt }),
+    });
+  } catch (cause) { cache = null; remoteDirty = false; throw Object.assign(new Error('Database save failed'), { status: 503, cause }); }
+  if (!res.ok) {
+    cache = null; remoteDirty = false;
+    throw Object.assign(new Error(res.status === 409 ? 'Data changed concurrently; retry the request.' : 'Database save failed'), { status: res.status === 409 ? 409 : 503 });
   }
+  const rows = await res.json();
+  if (!Array.isArray(rows) || rows.length !== 1) {
+    cache = null; remoteDirty = false;
+    throw Object.assign(new Error('Data changed concurrently; retry the request.'), { status: 409 });
+  }
+  remoteVersion = rows[0].updated_at;
+  remoteDirty = false;
+  remoteHydratedAt = Date.now();
 }
 
 export function findUserByUsername(username) {

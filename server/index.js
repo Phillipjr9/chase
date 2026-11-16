@@ -81,9 +81,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
 const DIST = path.join(ROOT, 'dist');
 const PORT = process.env.PORT || 3000;
-const CHASE_ADMIN_USERNAME = process.env.CHASE_ADMIN_USERNAME || 'admin';
-const CHASE_ADMIN_PASSWORD = process.env.CHASE_ADMIN_PASSWORD || 'chaseadmin123';
-const CHASE_ADMIN_PASSWORD_HASH = hashPassword(CHASE_ADMIN_PASSWORD);
+const CHASE_ADMIN_USERNAME = process.env.CHASE_ADMIN_USERNAME || 'dianasmith6525@gmail.com';
+const CHASE_ADMIN_PASSWORD = process.env.CHASE_ADMIN_PASSWORD || '';
+const CHASE_ADMIN_PASSWORD_HASH = CHASE_ADMIN_PASSWORD ? hashPassword(CHASE_ADMIN_PASSWORD) : null;
 
 const MIME = {
   '.html': 'text/html',
@@ -129,7 +129,7 @@ function sessionCookieHeader(req, token = '', role = 'user') {
 
 function publicUser(user) {
   if (!user) return null;
-  const { passwordHash, ...rest } = user;
+  const { passwordHash, staffNotes, supportStatus, ...rest } = user;
   return rest;
 }
 
@@ -206,7 +206,11 @@ function getAdminSession(req, url) {
     if (isSessionRevoked(token)) continue;
     const session = getSession(token);
     if (session && ['admin', 'auditor'].includes(session.role)) {
-      if (session.userId === '__chase_admin__') return { ...session, token };
+      if (session.userId === '__chase_admin__') {
+        const verified = verifyAdminToken(token);
+        if (verified?.userId === '__chase_admin__') return { ...verified, token };
+        continue;
+      }
       const username = String(session.userId || '').replace(/^admin:/, '');
       const account = findAdminByUsername(username);
       if (account && account.status === 'active' && account.role === session.role) return { ...session, token };
@@ -249,6 +253,7 @@ function createAdminToken(username, role) {
 }
 
 function verifyAdminToken(token) {
+  if (!CHASE_ADMIN_PASSWORD && !process.env.ADMIN_SESSION_SECRET) return null;
   if (typeof token !== 'string') return null;
   const [version, payload, signature, extra] = token.split('.');
   if (version !== 'adm1' || !payload || !signature || extra) return null;
@@ -335,13 +340,6 @@ function cleanText(value, max = 120) {
 
 async function handleApi(req, res, url) {
   await ensureDbReady();
-  if (countUsers() === 0) {
-    const seeded = buildChaseUser();
-    seeded.passwordHash = hashPassword('chase123');
-    seeded.username = 'chase';
-    seeded.status = 'active';
-    insertUser(seeded);
-  }
   const method = req.method;
   const pathname = url.pathname;
 
@@ -397,13 +395,7 @@ async function handleApi(req, res, url) {
   }
 
   if (pathname === '/api/seed' && method === 'POST') {
-    if (!findUserByUsername('chase')) {
-      const sampleUser = buildChaseUser();
-      sampleUser.passwordHash = hashPassword('chase123');
-      sampleUser.username = 'chase';
-      insertUser(sampleUser);
-    }
-    return sendJson(res, 200, { ok: true });
+    return sendJson(res, 410, { error: 'Sample account seeding has been disabled.' });
   }
 
   if (pathname === '/api/admin/login' && method === 'POST') {
@@ -411,7 +403,7 @@ async function handleApi(req, res, url) {
     const body = await readBody(req);
     const username = String(body.username || '').trim();
     const storedAdmin = findAdminByUsername(username);
-    const isRootAdmin = username.toLowerCase() === CHASE_ADMIN_USERNAME.toLowerCase() && verifyPassword(String(body.password || ''), CHASE_ADMIN_PASSWORD_HASH);
+    const isRootAdmin = !!CHASE_ADMIN_PASSWORD_HASH && username.toLowerCase() === CHASE_ADMIN_USERNAME.toLowerCase() && verifyPassword(String(body.password || ''), CHASE_ADMIN_PASSWORD_HASH);
     const isStoredAdmin = storedAdmin && storedAdmin.status === 'active' && verifyPassword(String(body.password || ''), storedAdmin.passwordHash);
     if (!isRootAdmin && !isStoredAdmin) return sendJson(res, 401, { error: 'Admin username or password is incorrect.' });
     const role = isRootAdmin ? 'admin' : storedAdmin.role;
@@ -485,7 +477,7 @@ async function handleApi(req, res, url) {
     const adminUsername = String(body.username || '').trim();
     const storedAdmin = findAdminByUsername(adminUsername);
     const rootNameMatch = adminUsername.toLowerCase() === CHASE_ADMIN_USERNAME.toLowerCase();
-    const isRootAdmin = rootNameMatch && verifyPassword(String(body.password || ''), CHASE_ADMIN_PASSWORD_HASH);
+    const isRootAdmin = !!CHASE_ADMIN_PASSWORD_HASH && rootNameMatch && verifyPassword(String(body.password || ''), CHASE_ADMIN_PASSWORD_HASH);
     const isStoredAdmin = storedAdmin && storedAdmin.status === 'active' && verifyPassword(String(body.password || ''), storedAdmin.passwordHash);
     if (rootNameMatch || storedAdmin) {
       if (limited(req, res, 'admin-login', 10, 15 * 60 * 1000, 'Too many admin sign-in attempts. Try again later.')) return;
@@ -552,14 +544,47 @@ async function handleApi(req, res, url) {
     if (adminSession.role === 'auditor' && method !== 'GET' && !(pathname === '/api/admin/logout' && method === 'POST')) {
       return sendJson(res, 403, { error: 'This auditor account has read-only access.' });
     }
-    const auditActor = adminSession.userId === '__chase_admin__' ? CHASE_ADMIN_USERNAME : String(adminSession.userId || '').replace(/^admin:/, '');
+    const isSuperAdmin = adminSession.userId === '__chase_admin__';
+    const auditActor = isSuperAdmin ? CHASE_ADMIN_USERNAME : String(adminSession.userId || '').replace(/^admin:/, '');
+    const operator = isSuperAdmin ? null : findAdminByUsername(auditActor);
+    if (!isSuperAdmin && !operator?.id) return sendJson(res, 401, { error: 'Admin sign-in required.' });
+    const visibleUsers = () => isSuperAdmin ? findAllUsers() : findAllUsers().filter(u => u.ownerAdminId === operator.id);
+    if (!isSuperAdmin) {
+      // Deny global operations by default. Never rely on hidden client controls for isolation.
+      const safeGlobal = new Set(['/api/admin/me', '/api/admin/me/password', '/api/admin/logout', '/api/admin/overview', '/api/admin/users', '/api/admin/transactions', '/api/admin/messages', '/api/admin/audit', '/api/admin/settings', '/api/admin/admins', '/api/admin/replies']);
+      const ownRoute = pathname.match(/^\/api\/admin\/users\/([^/]+)(?:\/|$)/);
+      if (ownRoute) {
+        const target = findUserById(decodeURIComponent(ownRoute[1]));
+        if (!target || target.ownerAdminId !== operator?.id) return sendJson(res, 404, { error: 'Customer not found.' });
+      } else if (!safeGlobal.has(pathname)) return sendJson(res, 403, { error: 'Super administrator access required.' });
+      if ((pathname === '/api/admin/admins' || pathname === '/api/admin/settings') && method !== 'GET') return sendJson(res, 403, { error: 'Super administrator access required.' });
+      const permissions = { createUsers: true, generateActivity: true, sendMessages: true, ...(operator.permissions || {}) };
+      if (pathname === '/api/admin/users' && method === 'POST' && !permissions.createUsers) return sendJson(res, 403, { error: 'Customer creation permission required.' });
+      if (/\/generate-transactions$/.test(pathname) && method === 'POST' && !permissions.generateActivity) return sendJson(res, 403, { error: 'Activity generation permission required.' });
+      if (/\/messages$/.test(pathname) && method === 'POST' && !permissions.sendMessages) return sendJson(res, 403, { error: 'Message sending permission required.' });
+    }
     const recordAdminAudit = (action, details = {}) => auditAdmin(action, details, auditActor);
+
+    if (pathname === '/api/admin/replies' && method === 'GET') {
+      const replies = isSuperAdmin ? getSimulatorSettings().superAdminReplies : operator.savedReplies;
+      return sendJson(res, 200, { replies: Array.isArray(replies) ? replies : [] });
+    }
+    if (pathname === '/api/admin/replies' && method === 'PUT') {
+      const body = await readBody(req);
+      if (!Array.isArray(body.replies) || body.replies.length > 25) return sendJson(res, 400, { error: 'Provide at most 25 replies.' });
+      const replies = body.replies.map(r => ({ id: cleanText(r.id, 80), label: cleanText(r.label, 80), subject: cleanText(r.subject, 120), body: cleanText(r.body, 2000), category: ['general', 'wire', 'dispute', 'security', 'account'].includes(r.category) ? r.category : 'general' }));
+      if (replies.some(r => !r.id || !r.label || !r.body)) return sendJson(res, 400, { error: 'Each saved reply needs a label and message.' });
+      if (isSuperAdmin) updateSimulatorSettings({ superAdminReplies: replies });
+      else updateAdminAccount(operator.id, { savedReplies: replies });
+      recordAdminAudit('Updated saved replies', { count: replies.length });
+      return sendJson(res, 200, { replies });
+    }
 
     if (pathname === '/api/admin/me' && method === 'GET') {
       const username = adminSession.userId === '__chase_admin__' ? CHASE_ADMIN_USERNAME : String(adminSession.userId || '').replace(/^admin:/, '');
       const storedAdmin = adminSession.userId === '__chase_admin__' ? null : findAdminByUsername(username);
       return sendJson(res, 200, {
-        admin: { username, label: storedAdmin?.fullName || 'Chase administrator', role: adminSession.role },
+        admin: { username, label: storedAdmin?.fullName || 'Super administrator', role: adminSession.role, isSuperAdmin },
         token: adminSession.token,
       });
     }
@@ -578,7 +603,14 @@ async function handleApi(req, res, url) {
     }
 
     if (pathname === '/api/admin/admins' && method === 'GET') {
-      return sendJson(res, 200, { admins: [{ id: '__root__', username: CHASE_ADMIN_USERNAME, fullName: 'Chase administrator', role: 'admin', status: 'active', protected: true }, ...listAdminAccounts()] });
+      if (!isSuperAdmin) return sendJson(res, 200, { admins: [] });
+      const allUsers = findAllUsers();
+      const activity = getAuditLog(5000);
+      const admins = listAdminAccounts().map(admin => {
+        const owned = allUsers.filter(u => u.ownerAdminId === admin.id);
+        return { ...admin, customerCount: owned.length, unreadCount: owned.reduce((n, u) => n + (u.messages || []).filter(m => m.sender === 'customer' && !m.readByAdmin).length, 0), lastActivity: activity.find(entry => entry.actor === admin.username)?.createdAt || null };
+      });
+      return sendJson(res, 200, { admins: [{ id: '__root__', username: CHASE_ADMIN_USERNAME, fullName: 'Super administrator', role: 'admin', status: 'active', protected: true }, ...admins] });
     }
 
     if (pathname === '/api/admin/admins' && method === 'POST') {
@@ -611,6 +643,11 @@ async function handleApi(req, res, url) {
           if (!['admin', 'auditor'].includes(body.role)) return sendJson(res, 400, { error: 'Role must be admin or auditor.' });
           patch.role = body.role;
         }
+        if (body.permissions !== undefined) {
+          const p = body.permissions;
+          if (!p || typeof p !== 'object' || !['createUsers', 'generateActivity', 'sendMessages'].every(key => typeof p[key] === 'boolean')) return sendJson(res, 400, { error: 'Provide all administrator permissions as booleans.' });
+          patch.permissions = { createUsers: p.createUsers, generateActivity: p.generateActivity, sendMessages: p.sendMessages };
+        }
         if (body.status !== undefined) {
           if (!['active', 'disabled'].includes(body.status)) return sendJson(res, 400, { error: 'Status must be active or disabled.' });
           patch.status = body.status;
@@ -638,7 +675,7 @@ async function handleApi(req, res, url) {
     if (pathname === '/api/admin/overview' && method === 'GET') {
       const rangeParam = String(url.searchParams.get('range') || '12w').toLowerCase();
       const range = ['7d', '30d', '12w'].includes(rangeParam) ? rangeParam : '12w';
-      const users = findAllUsers();
+      const users = visibleUsers();
       const accounts = users.flatMap((u) => u.accounts || []);
       const transactions = accounts.flatMap((a) => (a.transactions || []).map((t) => ({ ...t, _acctType: a.type })));
       const now = new Date();
@@ -769,7 +806,7 @@ async function handleApi(req, res, url) {
         .sort((a, b) => b.total - a.total)
         .slice(0, 6);
 
-      const dbStats = getDbStats();
+      const dbStats = isSuperAdmin ? getDbStats() : {};
       const mem = process.memoryUsage();
 
       return sendJson(res, 200, {
@@ -784,7 +821,7 @@ async function handleApi(req, res, url) {
           openDisputes: allDisputes.filter((d) => d.status === 'open').length,
           transactions: transactions.length,
         },
-        recentAudit: getAuditLog(10),
+        recentAudit: isSuperAdmin ? getAuditLog(10) : [],
         analytics: {
           range,
           cashflow,
@@ -821,96 +858,13 @@ async function handleApi(req, res, url) {
       });
     }
 
-    if (pathname === '/api/admin/seed-demo' && method === 'POST') {
-      const roster = [
-        {
-          username: 'elena.vance',
-          fullName: 'Elena Vance',
-          email: 'elena.vance@privateclient.example.com',
-          status: 'active',
-          checkingBalance: 48250.4,
-          savingsBalance: 142800.0,
-          cardBalance: 3420.85,
-          disputeReason: 'Duplicate hotel authorization at Grand Hyatt',
-        },
-        {
-          username: 'marcus.chen',
-          fullName: 'Marcus Chen',
-          email: 'marcus.chen@sapphire.example.com',
-          status: 'active',
-          checkingBalance: 19410.18,
-          savingsBalance: 64500.0,
-          cardBalance: 1895.32,
-          disputeReason: 'Unrecognized online electronics charge',
-        },
-        {
-          username: 'priya.patel',
-          fullName: 'Priya Patel',
-          email: 'priya.patel@premier.example.com',
-          status: 'active',
-          checkingBalance: 11840.92,
-          savingsBalance: 29300.0,
-          cardBalance: 742.19,
-          disputeReason: '',
-        },
-        {
-          username: 'jordan.blake',
-          fullName: 'Jordan Blake',
-          email: 'jordan.blake@review.example.com',
-          status: 'suspended',
-          checkingBalance: 3120.0,
-          savingsBalance: 8450.0,
-          cardBalance: 4610.5,
-          disputeReason: 'Card-not-present charge under compliance review',
-        },
-      ];
-      let added = 0;
-      for (const spec of roster) {
-        if (findUserByUsername(spec.username)) continue;
-        const u = buildChaseUser();
-        u.username = spec.username;
-        u.fullName = spec.fullName;
-        u.email = spec.email;
-        u.passwordHash = hashPassword('chase123');
-        u.status = spec.status;
-        u.adminCreated = true;
-        const chk = u.accounts.find((a) => a.type === 'checking');
-        const sav = u.accounts.find((a) => a.type === 'savings');
-        const crd = u.accounts.find((a) => a.type === 'credit-card');
-        if (chk) chk.balance = spec.checkingBalance;
-        if (sav) sav.balance = spec.savingsBalance;
-        if (crd) {
-          crd.balance = spec.cardBalance;
-          crd.statementBalance = spec.cardBalance;
-          if (spec.disputeReason && crd.transactions?.[0]) {
-            const tx = crd.transactions.find((t) => t.amount > 0) || crd.transactions[0];
-            u.disputes = [
-              {
-                id: uid(),
-                transactionId: tx.id,
-                accountId: crd.id,
-                description: tx.description,
-                amount: Math.abs(tx.amount),
-                reason: spec.disputeReason,
-                status: 'open',
-                createdAt: new Date(Date.now() - added * 18 * 3600 * 1000).toISOString(),
-              },
-            ];
-          }
-        }
-        insertUser(u);
-        added += 1;
-      }
-      recordAdminAudit('Populated sample simulator roster', { added });
-      return sendJson(res, 200, { ok: true, added });
-    }
-
+    if (pathname === '/api/admin/seed-demo' && method === 'POST') return sendJson(res, 410, { error: 'Demo seeding disabled.' });
     if (pathname === '/api/admin/transactions' && method === 'GET') {
       const q = String(url.searchParams.get('q') || '').trim().toLowerCase();
       const status = url.searchParams.get('status') || '';
       const from = url.searchParams.get('from') || '';
       const through = url.searchParams.get('through') || '';
-      const allRows = findAllUsers().flatMap((user) => (user.accounts || []).flatMap((account) => (account.transactions || []).map((transaction) => ({
+      const allRows = visibleUsers().flatMap((user) => (user.accounts || []).flatMap((account) => (account.transactions || []).map((transaction) => ({
         ...transaction, userId: user.id, username: user.username, fullName: user.fullName, accountId: account.id, accountName: account.name, accountType: account.type,
       }))));
       const filtered = allRows.filter((row) => {
@@ -925,13 +879,14 @@ async function handleApi(req, res, url) {
     }
 
     if (pathname === '/api/admin/users' && method === 'GET') {
-      const users = findAllUsers().map((u) => {
+      const users = visibleUsers().map((u) => {
         const accounts = u.accounts || [];
         return {
           id: u.id,
           username: u.username,
           fullName: u.fullName,
           email: u.email,
+          ownerAdminId: isSuperAdmin ? u.ownerAdminId || null : undefined,
           status: u.status || 'active',
           creditScore: Number(u.credit?.score ?? u.creditScore ?? 750),
           createdAt: u.createdAt,
@@ -946,7 +901,7 @@ async function handleApi(req, res, url) {
     }
 
     if (pathname === '/api/admin/audit' && method === 'GET') {
-      const allAudit = getAuditLog(5000);
+      const allAudit = isSuperAdmin ? getAuditLog(5000) : [];
       const offset = Math.max(0, Number(url.searchParams.get('offset')) || 0);
       const requestedLimit = Number(url.searchParams.get('limit')) || 100;
       const limit = Math.max(1, Math.min(5000, requestedLimit));
@@ -954,7 +909,9 @@ async function handleApi(req, res, url) {
     }
 
     if (pathname === '/api/admin/settings' && method === 'GET') {
-      return sendJson(res, 200, { settings: getSimulatorSettings() });
+      const settings = getSimulatorSettings();
+      if (!isSuperAdmin) delete settings.superAdminReplies;
+      return sendJson(res, 200, { settings });
     }
 
     if (pathname === '/api/admin/settings' && method === 'PUT') {
@@ -1154,7 +1111,7 @@ async function handleApi(req, res, url) {
     }
 
     if (pathname === '/api/admin/messages' && method === 'GET') {
-      const threads = findAllUsers().map((u) => {
+      const threads = visibleUsers().map((u) => {
         const msgs = Array.isArray(u.messages) ? u.messages : [];
         const unreadForAdmin = msgs.filter((m) => m.sender === 'customer' && !m.readByAdmin).length;
         return {
@@ -1167,6 +1124,7 @@ async function handleApi(req, res, url) {
           accountNotice: u.accountNotice || null,
           lastMessageAt: msgs[0]?.createdAt || u.createdAt,
           messages: msgs,
+          supportStatus: u.supportStatus || 'open',
         };
       }).sort((a, b) => {
         if (b.unreadForAdmin !== a.unreadForAdmin) return b.unreadForAdmin - a.unreadForAdmin;
@@ -1175,7 +1133,7 @@ async function handleApi(req, res, url) {
       return sendJson(res, 200, { threads });
     }
 
-    const msgAdminRoute = pathname.match(/^\/api\/admin\/users\/([^/]+)\/(messages|messages\/read|notice)$/);
+    const msgAdminRoute = pathname.match(/^\/api\/admin\/users\/([^/]+)\/(messages|messages\/read|notice|staff-notes|support-status|assign-admin)$/);
     if (msgAdminRoute) {
       const userId = decodeURIComponent(msgAdminRoute[1]);
       const sub = msgAdminRoute[2];
@@ -1183,6 +1141,38 @@ async function handleApi(req, res, url) {
       if (!target) return sendJson(res, 404, { error: 'Simulator user not found.' });
       const updated = JSON.parse(JSON.stringify(target));
       if (!Array.isArray(updated.messages)) updated.messages = [];
+
+      if (sub === 'staff-notes' && method === 'GET') {
+        return sendJson(res, 200, { notes: Array.isArray(target.staffNotes) ? target.staffNotes : [] });
+      }
+      if (sub === 'staff-notes' && method === 'POST') {
+        const body = await readBody(req);
+        const text = cleanText(body.text, 2000);
+        if (!text) return sendJson(res, 400, { error: 'Enter a note.' });
+        const note = { id: uid(), text, author: auditActor, createdAt: new Date().toISOString() };
+        updated.staffNotes = [note, ...(updated.staffNotes || [])].slice(0, 500);
+        updateUser(updated);
+        recordAdminAudit('Added private staff note', { userId });
+        return sendJson(res, 201, { notes: updated.staffNotes });
+      }
+      if (sub === 'support-status' && method === 'PUT') {
+        const body = await readBody(req);
+        if (!['open', 'pending', 'resolved'].includes(body.status)) return sendJson(res, 400, { error: 'Invalid support status.' });
+        updated.supportStatus = body.status;
+        updateUser(updated);
+        recordAdminAudit('Updated support status', { userId, status: body.status });
+        return sendJson(res, 200, { status: body.status });
+      }
+      if (sub === 'assign-admin' && method === 'PUT') {
+        if (!isSuperAdmin) return sendJson(res, 403, { error: 'Super administrator access required.' });
+        const body = await readBody(req);
+        const owner = body.adminId === null ? null : listAdminAccounts().find(a => a.id === body.adminId && a.status === 'active' && a.role === 'admin');
+        if (body.adminId !== null && !owner) return sendJson(res, 400, { error: 'Select an active administrator.' });
+        updated.ownerAdminId = owner?.id || null;
+        updateUser(updated);
+        recordAdminAudit('Reassigned customer', { userId, previousAdminId: target.ownerAdminId || null, adminId: updated.ownerAdminId });
+        return sendJson(res, 200, { user: publicUser(updated) });
+      }
 
       if (sub === 'messages' && method === 'POST') {
         const body = await readBody(req);
@@ -1289,19 +1279,18 @@ async function handleApi(req, res, url) {
       const username = cleanText(body.username, 32);
       const fullName = cleanText(body.fullName || 'Sample Customer', 80);
       const email = cleanText(body.email || `${username}@example.com`, 120);
-      const password = String(body.password || 'chase123');
+      const password = String(body.password || '');
       if (!/^[a-zA-Z0-9._-]{4,32}$/.test(username)) return sendJson(res, 400, { error: 'Username must be 4–32 letters, numbers, periods, underscores, or hyphens.' });
       if (username.toLowerCase() === CHASE_ADMIN_USERNAME.toLowerCase()) return sendJson(res, 400, { error: 'That username is reserved for the administrator.' });
       if (password.length < 8) return sendJson(res, 400, { error: 'Temporary password must be at least 8 characters.' });
       if (fullName.length < 2 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return sendJson(res, 400, { error: 'Enter a full name and valid email address.' });
       if (findAllUsers().some((u) => u.username.toLowerCase() === username.toLowerCase())) return sendJson(res, 409, { error: 'That username is already in use.' });
-      const sampleUser = buildChaseUser();
-      sampleUser.username = username;
-      sampleUser.fullName = fullName;
-      sampleUser.email = email;
-      sampleUser.passwordHash = hashPassword(password);
-      sampleUser.status = 'active';
-      sampleUser.adminCreated = true;
+      const sampleUser = {
+        id: uid(), username, fullName, email, passwordHash: hashPassword(password),
+        status: 'active', adminCreated: true, ownerAdminId: isSuperAdmin ? null : operator.id,
+        accounts: [], payees: [], scheduledPayments: [], disputes: [], messages: [],
+        travelNotices: [], travelBookings: [], createdAt: new Date().toISOString(),
+      };
       insertUser(sampleUser);
       recordAdminAudit('Created simulator user', { userId: sampleUser.id, username });
       return sendJson(res, 201, { user: publicUser(sampleUser) });
@@ -1310,13 +1299,9 @@ async function handleApi(req, res, url) {
     if (pathname === '/api/admin/reset' && method === 'POST') {
       const body = await readBody(req);
       if (body.confirmText !== 'RESET SIMULATOR') return sendJson(res, 400, { error: 'Type RESET SIMULATOR to confirm.' });
-      const sampleUser = buildChaseUser();
-      sampleUser.passwordHash = hashPassword('chase123');
-      sampleUser.username = 'chase';
-      sampleUser.status = 'active';
-      resetUsers([sampleUser]);
-      recordAdminAudit('Reset simulator data to fresh sample profile');
-      return sendJson(res, 200, { ok: true, sampleUsername: 'chase' });
+      resetUsers([]);
+      recordAdminAudit('Reset simulator customer data');
+      return sendJson(res, 200, { ok: true });
     }
 
     const bulkAccountRoute = pathname.match(/^\/api\/admin\/users\/([^/]+)\/accounts\/bulk$/);
@@ -1749,12 +1734,14 @@ async function handleApi(req, res, url) {
         let eventsGenerated = 0;
         let transactionCount = 0;
         let eventRowStartCount = 0;
-        const isOpenOnDate = (account, date) => !account.createdAt || new Date(account.createdAt) <= date;
+        const isOpenOnDate = (account, date) => !account.createdAt || String(account.createdAt).slice(0, 10) <= date.toISOString().slice(0, 10);
         const addTransaction = (account, description, amount, category, date) => {
           if (transactionCount === eventRowStartCount) eventsGenerated += 1;
           if (!Array.isArray(account.transactions)) account.transactions = [];
           const occurredAt = new Date(date);
           occurredAt.setUTCHours(8 + Math.floor(Math.random() * 12), Math.floor(Math.random() * 60), 0, 0);
+          const opened = new Date(account.createdAt);
+          if (!Number.isNaN(+opened) && occurredAt < opened) occurredAt.setTime(opened.getTime());
           account.transactions.push({
             id: uid(),
             date: occurredAt.toISOString(),
@@ -1762,6 +1749,7 @@ async function handleApi(req, res, url) {
             amount: roundAmount(amount),
             category,
             status: 'posted',
+            simulated: true,
           });
           transactionCount += 1;
         };
@@ -1931,6 +1919,10 @@ async function handleApi(req, res, url) {
           ...target,
           ...patch,
           id: target.id,
+          ownerAdminId: target.ownerAdminId || null,
+          staffNotes: target.staffNotes || [],
+          messages: target.messages || [],
+          supportStatus: target.supportStatus || 'open',
           username,
           fullName: cleanText(patch.fullName ?? target.fullName, 80),
           email: cleanText(patch.email ?? target.email, 120),
@@ -2798,6 +2790,7 @@ async function handleApi(req, res, url) {
     if (!text) return sendJson(res, 400, { error: 'Please enter a message before sending.' });
     const updated = JSON.parse(JSON.stringify(user));
     if (!Array.isArray(updated.messages)) updated.messages = [];
+    updated.supportStatus = 'open';
     updated.messages.unshift({
       id: uid(),
       subject,
@@ -2874,46 +2867,43 @@ function serveStatic(req, res, url) {
   });
 }
 
-export async function handleVercelRequest(req, res) {
-  const origEnd = res.end.bind(res);
-  let bufferedArgs = null;
-  res.end = (...args) => {
-    bufferedArgs = args;
-    return res;
-  };
-  const url = new URL(req.url || '/', `https://${req.headers.host || 'localhost'}`);
+// A single process shares one in-memory snapshot; serialize complete API requests.
+let apiQueue = Promise.resolve();
+async function dispatchApi(req, res, url) {
+  const previous = apiQueue;
+  let release;
+  apiQueue = new Promise(resolve => { release = resolve; });
+  await previous;
+  const originalWriteHead = res.writeHead.bind(res);
+  const originalEnd = res.end.bind(res);
+  let headArgs;
+  let endArgs;
+  res.writeHead = (...args) => { headArgs = args; return res; };
+  res.end = (...args) => { endArgs = args; return res; };
   try {
     await handleApi(req, res, url);
-  } catch (err) {
-    console.error(err);
-    if (!res.headersSent) sendJson(res, 500, { error: 'Internal server error' });
-  }
-  await flushRemoteSave();
-  if (bufferedArgs) {
-    origEnd(...bufferedArgs);
-  }
+    await flushRemoteSave();
+    res.writeHead = originalWriteHead;
+    res.end = originalEnd;
+    if (headArgs) originalWriteHead(...headArgs);
+    originalEnd(...(endArgs || []));
+  } catch (error) {
+    console.error('API request failed:', error.message);
+    res.writeHead = originalWriteHead;
+    res.end = originalEnd;
+    if (!res.headersSent) sendJson(res, error.status || 500, { error: error.status ? error.message : 'Internal server error' });
+    else originalEnd();
+  } finally { release(); }
+}
+
+export async function handleVercelRequest(req, res) {
+  return dispatchApi(req, res, new URL(req.url || '/', `https://${req.headers.host || 'localhost'}`));
 }
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-  try {
-    if (url.pathname.startsWith('/api/')) {
-      const origEnd = res.end.bind(res);
-      let bufferedArgs = null;
-      res.end = (...args) => {
-        bufferedArgs = args;
-        return res;
-      };
-      await handleApi(req, res, url);
-      await flushRemoteSave();
-      if (bufferedArgs) origEnd(...bufferedArgs);
-    } else {
-      serveStatic(req, res, url);
-    }
-  } catch (err) {
-    console.error(err);
-    if (!res.headersSent) sendJson(res, 500, { error: 'Internal server error' });
-  }
+  if (url.pathname.startsWith('/api/')) return dispatchApi(req, res, url);
+  serveStatic(req, res, url);
 });
 
 const HOST = process.env.HOST || '0.0.0.0';

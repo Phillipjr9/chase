@@ -18,7 +18,6 @@ import {
   Search,
   ShieldCheck,
   UserPlus,
-  UserRound,
   X,
 } from 'lucide-react';
 import {
@@ -33,6 +32,7 @@ import { Footer } from './Footer';
 import { Header } from './Header';
 import { Spinner } from './Loading';
 import { AccountPatchPayload, AccountsTab, LedgerTab } from './admin/AccountsLedgerTab';
+import { CustomerSupportTools } from './admin/CustomerSupportTools';
 import { AdminMessageThread, MessagesSupportTab } from './admin/MessagesSupportTab';
 import { AuditTab, OperationsTab, SettingsTab } from './admin/OperationsSettingsTab';
 import { OverviewTab } from './admin/OverviewTab';
@@ -85,7 +85,8 @@ export const AdminPage: React.FC<{
   // Admin identity & staff
   const [adminName, setAdminName] = useState('Chase administrator');
   const [currentAdminRole, setCurrentAdminRole] = useState<'admin' | 'auditor'>('admin');
-  const [currentAdminUsername, setCurrentAdminUsername] = useState('admin');
+  const [currentAdminUsername, setCurrentAdminUsername] = useState('');
+  const [isSuperAdmin, setIsSuperAdmin] = useState(false);
   const [adminAccounts, setAdminAccounts] = useState<AdminAccountRow[]>([]);
 
   // Public header state (for unauthenticated sign-in view)
@@ -93,8 +94,8 @@ export const AdminPage: React.FC<{
   const [spanishMode, setSpanishMode] = useState(false);
 
   // Sign-in form
-  const [loginUser, setLoginUser] = useState('admin');
-  const [loginPass, setLoginPass] = useState('chaseadmin123');
+  const [loginUser, setLoginUser] = useState('');
+  const [loginPass, setLoginPass] = useState('');
   const [showPass, setShowPass] = useState(false);
   const [loginError, setLoginError] = useState('');
 
@@ -218,6 +219,12 @@ export const AdminPage: React.FC<{
     }
   }, [initialToken, token]);
 
+  useEffect(() => {
+    if (!authenticated || !token) return;
+    const timer = window.setInterval(() => { void loadData().catch(() => undefined); }, 30000);
+    return () => window.clearInterval(timer);
+  }, [authenticated, token, loadData]);
+
   // Verify session on mount / token change
   useEffect(() => {
     let active = true;
@@ -225,7 +232,7 @@ export const AdminPage: React.FC<{
       setCheckingAuth(true);
       try {
         const me = await api<{
-          admin: { username: string; label: string; role: 'admin' | 'auditor' };
+          admin: { username: string; label: string; role: 'admin' | 'auditor'; isSuperAdmin?: boolean };
           token?: string;
         }>('/api/admin/me', {}, token);
         if (!active) return;
@@ -234,6 +241,7 @@ export const AdminPage: React.FC<{
           setToken(resolvedTok);
           writeAdminToken(resolvedTok);
         }
+        setIsSuperAdmin(me.admin.isSuperAdmin === true);
         setAdminName(me.admin.label);
         setCurrentAdminRole(me.admin.role || 'admin');
         setCurrentAdminUsername(me.admin.username);
@@ -369,27 +377,6 @@ export const AdminPage: React.FC<{
 
   /* --------------------------- Mutation Handlers -------------------------- */
 
-  const handleSeedDemoRoster = async () => {
-    setBusy(true);
-    try {
-      const res = await api<{ added: number }>('/api/admin/seed-demo', {
-        method: 'POST',
-        body: '{}',
-      });
-      const loaded = await loadData();
-      if (!selectedUser && loaded[0]) await loadSelectedUser(loaded[0].id);
-      notify(
-        'success',
-        res.added > 0
-          ? `Added ${res.added} sample customer households to the simulator.`
-          : 'Sample roster is already present.'
-      );
-    } catch (err) {
-      notify('error', err instanceof Error ? err.message : 'Could not seed sample roster.');
-    } finally {
-      setBusy(false);
-    }
-  };
 
   const handleCreateUser = async (payload: {
     username: string;
@@ -1154,7 +1141,7 @@ export const AdminPage: React.FC<{
 
   const handleUpdateAdmin = async (
     admin: AdminAccountRow,
-    patch: { role?: 'admin' | 'auditor'; status?: 'active' | 'disabled'; password?: string }
+    patch: { role?: 'admin' | 'auditor'; status?: 'active' | 'disabled'; password?: string; permissions?: { createUsers: boolean; generateActivity: boolean; sendMessages: boolean } }
   ): Promise<boolean> => {
     setBusy(true);
     try {
@@ -1266,7 +1253,7 @@ export const AdminPage: React.FC<{
       });
       const loaded = await loadData();
       if (loaded[0]) await loadSelectedUser(loaded[0].id);
-      notify('success', 'Simulator reset to fresh Alex Rivera (chase) baseline.');
+      notify('success', 'Simulator customer data was reset.');
       return true;
     } catch (err) {
       notify('error', err instanceof Error ? err.message : 'Simulator reset failed.');
@@ -1315,12 +1302,15 @@ export const AdminPage: React.FC<{
       badge: unreadMessagesCount > 0 ? unreadMessagesCount : undefined,
     },
     { id: 'audit', label: 'Audit log', esLabel: 'Auditoría' },
-    { id: 'settings', label: 'Settings & backup', esLabel: 'Configuración y respaldo' },
+    ...(isSuperAdmin ? [{ id: 'settings' as const, label: 'Settings & backup', esLabel: 'Configuración y respaldo' }] : []),
   ];
 
   // Live Alerts (identical pattern to BankingDashboard.tsx)
   const adminAlerts = useMemo(() => {
     const list: { id: string; title: string; detail: string; action: () => void }[] = [];
+    for (const thread of messageThreads.filter(t => t.unreadForAdmin > 0).slice(0, 5)) {
+      list.push({ id: `message-${thread.userId}`, title: `${thread.unreadForAdmin} unread message(s) · ${thread.fullName}`, detail: 'Open the customer support conversation.', action: () => { void selectUserAndMaybeGo(thread.userId, 'messages'); } });
+    }
     for (const d of (analytics?.disputes || []).filter((x) => x.status === 'open').slice(0, 4)) {
       list.push({
         id: `disp-${d.id}`,
@@ -1352,7 +1342,7 @@ export const AdminPage: React.FC<{
     }
     return list;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [analytics, users, globalTransactions]);
+  }, [analytics, users, globalTransactions, messageThreads]);
 
   const unreadAlerts = alertsRead ? 0 : adminAlerts.length;
 
@@ -1566,30 +1556,6 @@ export const AdminPage: React.FC<{
                   </button>
                 </form>
 
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => void signIn(undefined, { username: 'admin', password: 'chaseadmin123' })}
-                  className="mt-2.5 w-full h-10 rounded-[4px] border bg-white hover:bg-[#F2F6FB] font-semibold text-[13px] inline-flex items-center justify-center gap-2 cursor-pointer"
-                  style={{ borderColor: BTN_BLUE, color: BTN_BLUE }}
-                >
-                  <UserRound className="w-4 h-4" />
-                  One-click Chase Admin Sign In
-                </button>
-
-                <div
-                  className="mt-4 rounded-[4px] bg-[#F7FAFD] border px-3 py-2.5 text-[12px] leading-relaxed"
-                  style={{ borderColor: '#CFE0F0', color: MUTED }}
-                >
-                  <div>
-                    <strong style={{ color: INK }}>Admin login:</strong>{' '}
-                    <code className="font-mono text-[#1A4488]">admin / chaseadmin123</code>
-                  </div>
-                  <div className="mt-0.5">
-                    <strong style={{ color: INK }}>Customer login:</strong>{' '}
-                    <code className="font-mono">chase / chase123</code> (Alex Rivera on Chase.com)
-                  </div>
-                </div>
               </div>
             </div>
           </div>
@@ -2066,7 +2032,6 @@ export const AdminPage: React.FC<{
             onNavigate={setTab}
             onSelectUser={(id, nextTab) => void selectUserAndMaybeGo(id, nextTab)}
             onImpersonateById={(id, name) => void impersonateById(id, name)}
-            onSeedDemoRoster={() => void handleSeedDemoRoster()}
           />
         )}
 
@@ -2160,7 +2125,10 @@ export const AdminPage: React.FC<{
         )}
 
         {tab === 'messages' && (
+          <>
+          {selectedUser && <CustomerSupportTools key={selectedUser.id} userId={selectedUser.id} token={token} isSuperAdmin={isSuperAdmin} admins={adminAccounts} ownerId={users.find(u => u.id === selectedUser.id)?.ownerAdminId} status={messageThreads.find(t => t.userId === selectedUser.id)?.supportStatus} onRefresh={() => loadData()} readOnly={isReadOnly} />}
           <MessagesSupportTab
+            token={token}
             users={users}
             selectedUser={selectedUser}
             threads={messageThreads}
@@ -2170,6 +2138,7 @@ export const AdminPage: React.FC<{
             onMarkThreadRead={handleMarkThreadRead}
             onUpdateAccountNotice={handleUpdateAccountNotice}
           />
+          </>
         )}
 
         {tab === 'audit' && <AuditTab audit={audit} />}

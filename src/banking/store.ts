@@ -9,6 +9,7 @@ export interface Transaction {
   amount: number;
   category: string;
   status: 'posted' | 'pending';
+  simulated?: boolean;
   disputedAt?: string;
 }
 
@@ -440,17 +441,6 @@ function daysAgoIso(n: number): string {
   return d.toISOString();
 }
 
-function tx(description: string, amount: number, category: string, daysAgo: number): Transaction {
-  return {
-    id: uid(),
-    date: daysAgoIso(daysAgo),
-    description,
-    amount,
-    category,
-    status: 'posted',
-  };
-}
-
 export function defaultInvestments(): InvestmentPortfolio {
   return {
     accountMask: '7192',
@@ -818,165 +808,6 @@ function buildAccount(product: ProductInfo, openingDeposit: number): Account {
   return account;
 }
 
-function buildChaseUserLocal(): User {
-  const checking: Account = {
-    id: uid(),
-    type: 'checking',
-    name: 'Chase Total Checking®',
-    mask: '4821',
-    balance: 6482.19,
-    locked: false,
-    isPrimary: true,
-    createdAt: daysAgoIso(400),
-    transactions: [
-      tx('Payroll deposit — ACME CORP', 3850.0, 'Income', 2),
-      tx('Whole Foods Market', -86.42, 'Groceries', 3),
-      tx('Zelle payment to Maya Johnson', -150.0, 'Zelle', 5),
-      tx('Electric bill — Con Edison', -112.87, 'Bills', 7),
-      tx('Transfer to Chase Savings℠', -250.0, 'Transfer', 9),
-      tx('Netflix', -15.49, 'Subscriptions', 11),
-      tx('ATM withdrawal', -200.0, 'Cash', 13),
-      tx('Payroll deposit — ACME CORP', 3850.0, 'Income', 16),
-      tx('Shell Oil', -54.2, 'Transportation', 18),
-      tx('Transfer to Chase Savings℠', -250.0, 'Transfer', 23),
-    ],
-  };
-  const savings: Account = {
-    id: uid(),
-    type: 'savings',
-    name: 'Chase Savings℠',
-    mask: '9014',
-    balance: 18350.0,
-    createdAt: daysAgoIso(400),
-    transactions: [
-      tx('Transfer from Chase Total Checking®', 250.0, 'Transfer', 9),
-      tx('Interest payment', 12.4, 'Interest', 15),
-      tx('Transfer from Chase Total Checking®', 250.0, 'Transfer', 23),
-      tx('Transfer from Chase Total Checking®', 250.0, 'Transfer', 37),
-    ],
-  };
-  const card: Account = {
-    id: uid(),
-    type: 'credit-card',
-    name: 'Chase Sapphire Preferred®',
-    mask: '3308',
-    balance: 1240.55,
-    creditLimit: 12000,
-    statementBalance: 980.20,
-    rewardsPoints: 68420,
-    apr: 21.49,
-    locked: false,
-    autopay: false,
-    createdAt: daysAgoIso(300),
-    transactions: [
-      tx('United Airlines', 412.3, 'Travel', 4),
-      tx('Starbucks', 14.85, 'Dining', 5),
-      tx('Chipotle Mexican Grill', 28.65, 'Dining', 6),
-      tx('Payment received — thank you', -500.0, 'Payment', 8),
-      tx('Target', 89.99, 'Shopping', 10),
-      tx('Uber', 34.5, 'Transportation', 12),
-    ],
-  };
-  const freedomCard: Account = {
-    id: uid(),
-    type: 'credit-card',
-    name: 'Chase Freedom Unlimited®',
-    mask: '6194',
-    balance: 342.18,
-    creditLimit: 7500,
-    statementBalance: 342.18,
-    rewardsPoints: 18940,
-    apr: 19.99,
-    locked: false,
-    autopay: true,
-    createdAt: daysAgoIso(210),
-    transactions: [
-      tx('DoorDash', 46.20, 'Dining', 3),
-      tx('Spotify', 11.99, 'Subscriptions', 6),
-      tx('Nike.com', 142.00, 'Shopping', 9),
-      tx('Lyft', 24.50, 'Transportation', 14),
-    ],
-  };
-  const conEdisonId = uid();
-  const mortgage: Account = {
-    id: uid(),
-    type: 'mortgage',
-    name: 'Chase Home Lending Mortgage',
-    mask: '5527',
-    balance: 412400,
-    apr: 6.375,
-    monthlyPayment: 3187,
-    createdAt: daysAgoIso(900),
-    transactions: [
-      tx('Mortgage payment received', -3187, 'Loan payment', 30),
-      tx('Mortgage payment received', -3187, 'Loan payment', 61),
-      tx('Escrow analysis adjustment', 42.18, 'Escrow', 74),
-    ],
-  };
-  const autoLoan: Account = {
-    id: uid(),
-    type: 'auto-loan',
-    name: 'Chase Auto Loan',
-    mask: '8834',
-    balance: 21840.55,
-    apr: 6.9,
-    monthlyPayment: 486.22,
-    createdAt: daysAgoIso(520),
-    transactions: [
-      tx('Auto loan payment received', -486.22, 'Loan payment', 12),
-      tx('Auto loan payment received', -486.22, 'Loan payment', 43),
-    ],
-  };
-  return {
-    id: uid(),
-    username: 'chase',
-    password: 'chase123',
-    fullName: 'Alex Rivera',
-    email: 'alex.rivera@example.com',
-    phone: '(212) 555-0147',
-    address: '350 Fifth Avenue, New York, NY 10118',
-    accounts: [checking, savings, card, freedomCard, mortgage, autoLoan],
-    payees: [
-      { id: conEdisonId, name: 'Con Edison', accountNumber: '•••• 7741', category: 'Utilities' },
-      { id: uid(), name: 'T-Mobile', accountNumber: '•••• 2209', category: 'Utilities' },
-      { id: uid(), name: 'State Farm Insurance', accountNumber: '•••• 4410', category: 'Insurance' },
-    ],
-    investments: defaultInvestments(),
-    security: defaultSecurity(),
-    preferences: defaultPreferences(),
-    budgets: defaultBudgets(),
-    credit: defaultCredit(),
-    home: defaultHome(),
-    scheduledPayments: [
-      {
-        id: uid(),
-        kind: 'bill',
-        label: 'Con Edison',
-        fromAccountId: checking.id,
-        payeeId: conEdisonId,
-        amount: 112.87,
-        date: new Date(Date.now() + 6 * 86400000).toISOString().slice(0, 10),
-        frequency: 'monthly',
-        status: 'scheduled',
-        createdAt: daysAgoIso(40),
-      },
-    ],
-    travelNotices: [],
-    travelBookings: [
-      {
-        id: uid(),
-        title: 'New York (EWR) → Lisbon (LIS)',
-        provider: 'United Airlines',
-        brand: 'united',
-        dates: 'Oct 12 – Oct 19, 2026',
-        pointsUsed: 42000,
-        status: 'Confirmed',
-      },
-    ],
-    createdAt: daysAgoIso(400),
-  };
-}
-
 function hydrateDefaults(user: User | null | undefined): User {
   if (!user || typeof user !== 'object') {
     throw new Error('Your session data could not be loaded. Please sign in again.');
@@ -999,14 +830,7 @@ function hydrateDefaults(user: User | null | undefined): User {
 /* --------------------------- Exported async API --------------------------- */
 
 export async function seedSampleUserIfNeeded(): Promise<void> {
-  if (await detectApi()) {
-    await apiFetch('/api/seed', { method: 'POST' }).catch(() => undefined);
-    return;
-  }
-  const users = loadUsers();
-  if (users.some((u) => u.username.toLowerCase() === 'chase')) return;
-  users.push(buildChaseUserLocal());
-  saveUsers(users);
+  // Demo identities are not provisioned automatically.
 }
 
 export async function fetchMe(): Promise<User | null> {
