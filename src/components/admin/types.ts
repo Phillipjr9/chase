@@ -60,6 +60,7 @@ export interface AdminAccountRow {
   status: 'active' | 'disabled';
   createdAt?: string;
   protected?: boolean;
+  lockMessage?: string;
   permissions?: { createUsers: boolean; generateActivity: boolean; sendMessages: boolean };
   customerCount?: number;
   unreadCount?: number;

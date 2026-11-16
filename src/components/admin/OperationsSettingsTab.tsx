@@ -1400,7 +1400,7 @@ interface SettingsProps {
   }) => Promise<boolean>;
   onUpdateAdmin: (
     admin: AdminAccountRow,
-    patch: { role?: 'admin' | 'auditor'; status?: 'active' | 'disabled'; password?: string; permissions?: { createUsers: boolean; generateActivity: boolean; sendMessages: boolean } }
+    patch: { username?: string; fullName?: string; lockMessage?: string; role?: 'admin' | 'auditor'; status?: 'active' | 'disabled'; password?: string; permissions?: { createUsers: boolean; generateActivity: boolean; sendMessages: boolean } }
   ) => Promise<boolean>;
   onDeleteAdmin: (admin: AdminAccountRow) => Promise<void>;
   onChangeOwnPassword: (currentPassword: string, newPassword: string) => Promise<boolean>;
@@ -1438,6 +1438,11 @@ export const SettingsTab: React.FC<SettingsProps> = ({
 
   const [resetStaffTarget, setResetStaffTarget] = useState<AdminAccountRow | null>(null);
   const [resetStaffPwd, setResetStaffPwd] = useState('');
+  const [editStaff, setEditStaff] = useState<AdminAccountRow | null>(null);
+  const [editUsername, setEditUsername] = useState('');
+  const [editName, setEditName] = useState('');
+  const [lockStaff, setLockStaff] = useState<AdminAccountRow | null>(null);
+  const [lockMessage, setLockMessage] = useState('');
 
   const [backupFile, setBackupFile] = useState<File | null>(null);
   const [restoreOpen, setRestoreOpen] = useState(false);
@@ -1588,7 +1593,7 @@ export const SettingsTab: React.FC<SettingsProps> = ({
       <Card className="p-5">
         <CardHeader
           title="Administrator & Read-Only Auditor Staff Accounts"
-          subtitle="Admins have full write privileges; Auditors can inspect, search, and export CSVs without mutating data"
+          subtitle="Admins manage their assigned customers; auditors have read-only access to their assigned customers"
           action={
             !isRootProtected && (
               <Btn variant="secondary" size="xs" onClick={() => setOwnPwdOpen(true)}>
@@ -1721,7 +1726,7 @@ export const SettingsTab: React.FC<SettingsProps> = ({
                     <Td>
                       <Badge tone={adm.status === 'active' ? 'success' : 'error'}>
                         {adm.status}
-                      </Badge>
+                      </Badge>{adm.status === 'disabled' && adm.lockMessage && <p className="text-xs mt-1">{adm.lockMessage}</p>}
                     </Td>
                     <Td>{!adm.protected && (['createUsers', 'generateActivity', 'sendMessages'] as const).map(key => <label className="block text-xs whitespace-nowrap" key={key}><input type="checkbox" className="mr-1" disabled={busy || isReadOnly} checked={adm.permissions?.[key] ?? true} onChange={e => void onUpdateAdmin(adm, { permissions: { createUsers: adm.permissions?.createUsers ?? true, generateActivity: adm.permissions?.generateActivity ?? true, sendMessages: adm.permissions?.sendMessages ?? true, [key]: e.target.checked } })} />{key === 'createUsers' ? 'Create customers' : key === 'generateActivity' ? 'Generate activity' : 'Send messages'}</label>)}</Td>
                     <Td>{adm.protected ? "—" : `${adm.customerCount ?? 0} / ${adm.unreadCount ?? 0}`}</Td>
@@ -1734,18 +1739,19 @@ export const SettingsTab: React.FC<SettingsProps> = ({
                               variant="secondary"
                               size="xs"
                               disabled={busy || isSelf}
-                              onClick={() =>
-                                void onUpdateAdmin(adm, {
-                                  status: adm.status === 'active' ? 'disabled' : 'active',
-                                })
-                              }
+                              onClick={() => {
+                                if (adm.status === 'active') { setLockStaff(adm); setLockMessage(adm.lockMessage || 'This administrator account is disabled. Contact the super administrator.'); }
+                                else void onUpdateAdmin(adm, { status: 'active' });
+                              }}
                             >
                               {adm.status === 'active' ? 'Disable' : 'Enable'}
                             </Btn>
+                            {adm.status === 'disabled' && <Btn variant="secondary" size="xs" disabled={busy} onClick={() => { setLockStaff(adm); setLockMessage(adm.lockMessage || 'This administrator account is disabled. Contact the super administrator.'); }}>Edit lock message</Btn>}
+                            <Btn variant="secondary" size="xs" disabled={busy || isSelf} onClick={() => { setEditStaff(adm); setEditUsername(adm.username); setEditName(adm.fullName); }}>Edit credentials</Btn>
                             <Btn
                               variant="secondary"
                               size="xs"
-                              disabled={busy || isSelf || adm.status === 'disabled'}
+                              disabled={busy || isSelf}
                               onClick={() => {
                                 setResetStaffTarget(adm);
                                 setResetStaffPwd('');
@@ -1878,6 +1884,15 @@ export const SettingsTab: React.FC<SettingsProps> = ({
         </div>
       </Modal>
 
+      <Modal open={!!editStaff} onClose={() => setEditStaff(null)} title="Edit administrator credentials" footer={<><Btn variant="secondary" onClick={() => setEditStaff(null)}>Cancel</Btn><Btn variant="primary" disabled={busy} onClick={async () => { if (editStaff && await onUpdateAdmin(editStaff, { username: editUsername.trim(), fullName: editName.trim() })) setEditStaff(null); }}>Save</Btn></>}>
+        <p className="text-sm mb-3">Passwords cannot be viewed. Use Reset Password to set a new one.</p>
+        <label className="block mb-3">Username<TextInput value={editUsername} onChange={e => setEditUsername(e.target.value)} /></label>
+        <label className="block">Full name<TextInput value={editName} onChange={e => setEditName(e.target.value)} /></label>
+      </Modal>
+      <Modal open={!!lockStaff} onClose={() => setLockStaff(null)} title="Disable administrator" footer={<><Btn variant="secondary" onClick={() => setLockStaff(null)}>Cancel</Btn><Btn variant="danger" disabled={busy || !lockMessage.trim()} onClick={async () => { if (lockStaff && await onUpdateAdmin(lockStaff, { status: 'disabled', lockMessage: lockMessage.trim() })) setLockStaff(null); }}>Disable administrator</Btn></>}>
+        <p className="text-sm mb-3">This message is shown when the administrator enters the correct password. Existing sessions will be invalidated.</p>
+        <label className="block">Sign-in error message<TextInput maxLength={300} value={lockMessage} onChange={e => setLockMessage(e.target.value)} /></label>
+      </Modal>
       {/* Reset Staff Password Modal */}
       <Modal
         open={!!resetStaffTarget}
