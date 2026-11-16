@@ -1400,7 +1400,7 @@ interface SettingsProps {
   }) => Promise<boolean>;
   onUpdateAdmin: (
     admin: AdminAccountRow,
-    patch: { username?: string; fullName?: string; lockMessage?: string; role?: 'admin' | 'auditor'; status?: 'active' | 'disabled'; password?: string; permissions?: { createUsers: boolean; generateActivity: boolean; sendMessages: boolean } }
+    patch: { supportContact?: { email: string; phone: string }; username?: string; fullName?: string; lockMessage?: string; role?: 'admin' | 'auditor'; status?: 'active' | 'disabled'; password?: string; permissions?: { createUsers: boolean; generateActivity: boolean; sendMessages: boolean } }
   ) => Promise<boolean>;
   onDeleteAdmin: (admin: AdminAccountRow) => Promise<void>;
   onChangeOwnPassword: (currentPassword: string, newPassword: string) => Promise<boolean>;
@@ -1443,6 +1443,9 @@ export const SettingsTab: React.FC<SettingsProps> = ({
   const [editName, setEditName] = useState('');
   const [lockStaff, setLockStaff] = useState<AdminAccountRow | null>(null);
   const [lockMessage, setLockMessage] = useState('');
+  const [supportStaff, setSupportStaff] = useState<AdminAccountRow | null>(null);
+  const [supportEmail, setSupportEmail] = useState('');
+  const [supportPhone, setSupportPhone] = useState('');
 
   const [backupFile, setBackupFile] = useState<File | null>(null);
   const [restoreOpen, setRestoreOpen] = useState(false);
@@ -1747,6 +1750,7 @@ export const SettingsTab: React.FC<SettingsProps> = ({
                               {adm.status === 'active' ? 'Disable' : 'Enable'}
                             </Btn>
                             {adm.status === 'disabled' && <Btn variant="secondary" size="xs" disabled={busy} onClick={() => { setLockStaff(adm); setLockMessage(adm.lockMessage || 'This administrator account is disabled. Contact the super administrator.'); }}>Edit lock message</Btn>}
+                            <Btn variant="secondary" size="xs" disabled={busy} onClick={() => { setSupportStaff(adm); setSupportEmail(adm.supportContact?.email || ''); setSupportPhone(adm.supportContact?.phone || ''); }}>Support contact</Btn>
                             <Btn variant="secondary" size="xs" disabled={busy || isSelf} onClick={() => { setEditStaff(adm); setEditUsername(adm.username); setEditName(adm.fullName); }}>Edit credentials</Btn>
                             <Btn
                               variant="secondary"
@@ -1884,6 +1888,11 @@ export const SettingsTab: React.FC<SettingsProps> = ({
         </div>
       </Modal>
 
+      <Modal open={!!supportStaff} onClose={() => setSupportStaff(null)} title="Customer support contact" footer={<><Btn variant="secondary" onClick={() => setSupportStaff(null)}>Cancel</Btn><Btn variant="primary" disabled={busy} onClick={async () => { if (supportStaff && await onUpdateAdmin(supportStaff, { supportContact: { email: supportEmail.trim(), phone: supportPhone.trim() } })) setSupportStaff(null); }}>Save contact</Btn></>}>
+        <p className="text-sm mb-3">Displayed to this administrator’s assigned customers. This does not configure email or phone delivery.</p>
+        <label className="block mb-3">Support email<TextInput type="email" maxLength={254} value={supportEmail} onChange={e => setSupportEmail(e.target.value)} /></label>
+        <label className="block">Support phone<TextInput type="tel" maxLength={40} value={supportPhone} onChange={e => setSupportPhone(e.target.value)} /></label>
+      </Modal>
       <Modal open={!!editStaff} onClose={() => setEditStaff(null)} title="Edit administrator credentials" footer={<><Btn variant="secondary" onClick={() => setEditStaff(null)}>Cancel</Btn><Btn variant="primary" disabled={busy} onClick={async () => { if (editStaff && await onUpdateAdmin(editStaff, { username: editUsername.trim(), fullName: editName.trim() })) setEditStaff(null); }}>Save</Btn></>}>
         <p className="text-sm mb-3">Passwords cannot be viewed. Use Reset Password to set a new one.</p>
         <label className="block mb-3">Username<TextInput value={editUsername} onChange={e => setEditUsername(e.target.value)} /></label>

@@ -656,6 +656,14 @@ async function handleApi(req, res, url) {
           if (!fullName) return sendJson(res, 400, { error: 'Staff name is required.' });
           patch.fullName = fullName;
         }
+        if (body.supportContact !== undefined) {
+          const contact = body.supportContact;
+          if (!contact || typeof contact.email !== 'string' || typeof contact.phone !== 'string') return sendJson(res, 400, { error: 'Provide a support email and phone.' });
+          const email = contact.email.trim();
+          const phone = contact.phone.trim();
+          if (email.length > 254 || (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) || phone.length > 40 || (phone && !/^[+0-9(). -]{3,40}$/.test(phone))) return sendJson(res, 400, { error: 'Provide a valid support email and phone number.' });
+          patch.supportContact = { email, phone };
+        }
         if (body.lockMessage !== undefined) {
           if (typeof body.lockMessage !== 'string' || body.lockMessage.length > 300) return sendJson(res, 400, { error: 'Lock message must be at most 300 characters.' });
           patch.lockMessage = cleanText(body.lockMessage, 300);
@@ -2799,6 +2807,11 @@ async function handleApi(req, res, url) {
     updated.security = { ...(updated.security || defaultSecurity()), ...patch };
     updateUser(updated);
     return sendJson(res, 200, { user: publicUser(updated) });
+  }
+
+  if (pathname === '/api/messages' && method === 'GET') {
+    const owner = user.ownerAdminId ? listAdminAccounts().find(a => a.id === user.ownerAdminId) : null;
+    return sendJson(res, 200, { messages: user.messages || [], supportContact: owner?.supportContact || null });
   }
 
   if (pathname === '/api/messages' && method === 'POST') {
