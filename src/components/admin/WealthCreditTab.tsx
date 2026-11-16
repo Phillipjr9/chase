@@ -161,7 +161,7 @@ export const WealthCreditTab: React.FC<WealthCreditProps> = ({
   if (!selectedUser) {
     return (
       <Card className="p-8 text-center text-gray-500">
-        Select a simulator customer above to manage Investing, Ultimate Rewards®, Credit Journey®, MyHome®, and Security settings.
+        Select a test customer above to manage Investing, Ultimate Rewards®, Credit Journey®, MyHome®, and Security settings.
       </Card>
     );
   }

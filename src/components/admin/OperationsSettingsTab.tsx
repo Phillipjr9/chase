@@ -160,7 +160,7 @@ export const OperationsTab: React.FC<OperationsProps> = ({
   onProcessScheduled,
   onRunMonthEndClose,
 }) => {
-  // Zelle / Wire / QuickDeposit simulator rail state
+  // Zelle / Wire / QuickDeposit test environment rail state
   const [railMode, setRailMode] = useState<'zelle' | 'wire' | 'deposit'>('zelle');
   const [railDirection, setRailDirection] = useState<'in' | 'out'>('in');
   const [railAccountId, setRailAccountId] = useState('');
@@ -172,7 +172,7 @@ export const OperationsTab: React.FC<OperationsProps> = ({
   const [fromId, setFromId] = useState('');
   const [toId, setToId] = useState('');
   const [transferAmt, setTransferAmt] = useState('');
-  const [transferDesc, setTransferDesc] = useState('Admin simulated transfer');
+  const [transferDesc, setTransferDesc] = useState('Admin test transfer');
 
   // Payee state
   const [payeeName, setPayeeName] = useState('');
@@ -257,7 +257,7 @@ export const OperationsTab: React.FC<OperationsProps> = ({
             Operations Target Customer
           </p>
           <p className="text-[12px] text-gray-500 dark:text-gray-400">
-            Transfers, payees, and scheduled items apply to the selected simulator customer (no real payment rails)
+            Transfers, payees, and scheduled items apply to the selected test customer (no real payment rails)
           </p>
         </div>
         <SelectInput
@@ -503,7 +503,7 @@ export const OperationsTab: React.FC<OperationsProps> = ({
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-5">
         <Card className="xl:col-span-6 p-5">
           <CardHeader
-            title="Simulated Account / Debt Transfer"
+            title="Test Account / Debt Transfer"
             subtitle="Reconciles both source deposit balance and destination deposit, card, or loan ledger"
             action={<ArrowRightLeft className="w-4 h-4 text-[#0060F0]" />}
           />
@@ -590,7 +590,7 @@ export const OperationsTab: React.FC<OperationsProps> = ({
                   disabled={busy || isReadOnly || !toId || !transferAmt}
                 >
                   <ArrowRightLeft className="w-4 h-4" />
-                  Post Simulated Transfer
+                  Post Test Transfer
                 </Btn>
               </div>
             </form>
@@ -690,7 +690,7 @@ export const OperationsTab: React.FC<OperationsProps> = ({
       <Card className="p-5">
         <CardHeader
           title="Scheduled Payments & Recurring Instructions"
-          subtitle="Create, pause, resume, edit, or cancel simulated scheduled transfers and bill payments"
+          subtitle="Create, pause, resume, edit, or cancel test scheduled transfers and bill payments"
           action={<CalendarClock className="w-4 h-4 text-[#0060F0]" />}
         />
         {!isReadOnly && selectedUser && selectedUser.accounts.length > 0 && (
@@ -954,10 +954,10 @@ export const OperationsTab: React.FC<OperationsProps> = ({
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h3 className="text-[15.5px] font-semibold text-gray-900 dark:text-white">
-              Card Disputes &amp; Simulated Chargeback Refunds
+              Card Disputes &amp; Test Chargeback Refunds
             </h3>
             <p className="text-[12px] text-gray-500 dark:text-gray-400 mt-0.5">
-              Issuing a simulated refund posts a card-credit transaction, reduces the card balance, and resolves the dispute
+              Issuing a test refund posts a card-credit transaction, reduces the card balance, and resolves the dispute
             </p>
           </div>
           <div className="inline-flex rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-white/5 p-0.5">
@@ -1048,7 +1048,7 @@ export const OperationsTab: React.FC<OperationsProps> = ({
             <EmptyState
               icon={<AlertTriangle className="w-5 h-5" />}
               title="No card disputes in this view"
-              detail="Open a simulated dispute above on any customer card purchase to test chargeback resolution and card-credit refunds."
+              detail="Open a test dispute above on any customer card purchase to test chargeback resolution and card-credit refunds."
             />
           ) : (
             <TableShell>
@@ -1461,7 +1461,7 @@ export const SettingsTab: React.FC<SettingsProps> = ({
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-5">
         <Card className="xl:col-span-6 p-5">
           <CardHeader
-            title="Simulator Access Guardrails"
+            title="Test Environment Access Guardrails"
             subtitle="Server-enforced public customer enrollment & password recovery controls"
             action={<LockKeyhole className="w-4 h-4 text-[#0060F0]" />}
           />
@@ -1522,8 +1522,8 @@ export const SettingsTab: React.FC<SettingsProps> = ({
         <Card className="xl:col-span-6 p-5">
           <CardHeader
             title="Environment & Runtime Telemetry"
-            subtitle="Live Node.js process health, session counts & simulated storage footprint"
-            action={<Badge tone="success">Simulated Rails Only</Badge>}
+            subtitle="Live Node.js process health, session counts & test storage footprint"
+            action={<Badge tone="success">Test Environment Only</Badge>}
           />
           <div className="mt-4 grid grid-cols-2 sm:grid-cols-3 gap-3 text-[12.5px]">
             <div className="rounded-xl bg-gray-50 dark:bg-white/[0.04] p-3">
@@ -1784,7 +1784,7 @@ export const SettingsTab: React.FC<SettingsProps> = ({
         <Card className="xl:col-span-7 p-5">
           <CardHeader
             title="Encrypted-Hash JSON Backup & Restore"
-            subtitle="Export or restore all simulated customers, accounts, ledgers & settings (`chase-simulator-backup-v1`)"
+            subtitle="Export or restore all test customers, accounts, ledgers & settings (`chase-simulator-backup-v1`)"
           />
           <div className="mt-4 flex flex-wrap items-end gap-3">
             <Btn
@@ -1820,7 +1820,7 @@ export const SettingsTab: React.FC<SettingsProps> = ({
 
         <Card className="xl:col-span-5 p-5 border-red-200 dark:border-red-500/30">
           <CardHeader
-            title="Reset Simulator Environment"
+            title="Reset Test Environment"
             subtitle="Deletes customer profiles and customer sessions while retaining audit history"
             action={<ShieldAlert className="w-4 h-4 text-[#F04438]" />}
           />
@@ -1939,7 +1939,7 @@ export const SettingsTab: React.FC<SettingsProps> = ({
           setRestoreOpen(false);
           setRestoreConfirm('');
         }}
-        title="Restore Simulator Backup"
+        title="Restore Test Environment Backup"
         footer={
           <>
             <Btn variant="secondary" onClick={() => setRestoreOpen(false)}>
@@ -1964,7 +1964,7 @@ export const SettingsTab: React.FC<SettingsProps> = ({
         }
       >
         <p className="text-[13px] text-gray-600 dark:text-gray-300">
-          Restoring replaces all simulated customer records and revokes active customer sessions. Type{' '}
+          Restoring replaces all test customer records and revokes active customer sessions. Type{' '}
           <code className="font-mono font-bold text-[#F04438]">RESTORE SIMULATOR BACKUP</code>:
         </p>
         <TextInput
@@ -1982,7 +1982,7 @@ export const SettingsTab: React.FC<SettingsProps> = ({
           setResetSimOpen(false);
           setResetSimConfirm('');
         }}
-        title="Confirm Full Simulator Reset"
+        title="Confirm Full Test Environment Reset"
         footer={
           <>
             <Btn variant="secondary" onClick={() => setResetSimOpen(false)}>
@@ -2005,7 +2005,7 @@ export const SettingsTab: React.FC<SettingsProps> = ({
         }
       >
         <p className="text-[13px] text-gray-600 dark:text-gray-300">
-          Deletes all customer profiles and their sessions. No demo customer will be restored. Type{' '}
+          Deletes all customer profiles and their sessions. No sample customer will be restored. Type{' '}
           <code className="font-mono font-bold text-[#F04438]">RESET SIMULATOR</code>:
         </p>
         <TextInput

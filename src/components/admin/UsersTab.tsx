@@ -201,7 +201,7 @@ export const UsersTab: React.FC<Props> = ({
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
               <h3 className="text-[15.5px] font-semibold text-gray-900 dark:text-white">
-                Simulator Customers ({filtered.length})
+                Test Customers ({filtered.length})
               </h3>
               <p className="text-[12px] text-gray-500 dark:text-gray-400">
                 Select any profile to manage accounts, ledger, or preview banking
@@ -502,9 +502,9 @@ export const UsersTab: React.FC<Props> = ({
             {/* Simulated Activity History Generator (from 8f9d1770) */}
             <Card className="p-5">
               <CardHeader
-                title="Simulated Ledger History Generator"
+                title="Test Ledger History Generator"
                 subtitle="Synthesize realistic payroll deposits, merchant card purchases, transfers, interest & loan payments across any date range"
-                action={<Badge tone="violet">Simulator Engine</Badge>}
+                action={<Badge tone="violet">Test Environment</Badge>}
               />
               {selectedUser.accounts.length === 0 && (
                 <p className="mt-3 text-sm text-amber-700">Create an account for this customer in Accounts &amp; cards before generating transactions.</p>
@@ -649,7 +649,7 @@ export const UsersTab: React.FC<Props> = ({
                     </label>
                     <label className="block">
                       <span className="block text-[11.5px] font-medium text-gray-600 dark:text-gray-300 mb-1">
-                        Simulated Credit Score (300–850)
+                        Test Credit Score (300–850)
                       </span>
                       <TextInput
                         type="number"
@@ -700,7 +700,7 @@ export const UsersTab: React.FC<Props> = ({
               ) : (
                 <div className="mt-4 space-y-3">
                   <textarea
-                    aria-label="Simulator customer JSON record"
+                    aria-label="Test customer JSON record"
                     value={userJson}
                     onChange={(e) => onChangeUserJson(e.target.value)}
                     rows={16}
@@ -737,7 +737,7 @@ export const UsersTab: React.FC<Props> = ({
       <Modal
         open={createOpen}
         onClose={() => setCreateOpen(false)}
-        title="Create Simulated Customer Profile"
+        title="Create Test Customer Profile"
         footer={
           <>
             <Btn variant="secondary" onClick={() => setCreateOpen(false)}>
@@ -832,7 +832,7 @@ export const UsersTab: React.FC<Props> = ({
         }
       >
         <p className="text-[13px] text-gray-600 dark:text-gray-300">
-          This permanently removes <strong>{selectedIds.length}</strong> simulated customer profiles and their accounts. Type{' '}
+          This permanently removes <strong>{selectedIds.length}</strong> test customer profiles and their accounts. Type{' '}
           <code className="font-mono font-bold text-[#F04438]">DELETE SELECTED USERS</code> to confirm:
         </p>
         <TextInput
@@ -847,7 +847,7 @@ export const UsersTab: React.FC<Props> = ({
       <Modal
         open={deleteUserOpen}
         onClose={() => setDeleteUserOpen(false)}
-        title="Delete Simulated Customer"
+        title="Delete Test Customer"
         footer={
           <>
             <Btn variant="secondary" onClick={() => setDeleteUserOpen(false)}>
@@ -869,7 +869,7 @@ export const UsersTab: React.FC<Props> = ({
         <div className="flex items-start gap-3">
           <ShieldAlert className="w-5 h-5 text-[#F04438] shrink-0 mt-0.5" />
           <p className="text-[13px] text-gray-600 dark:text-gray-300">
-            Permanently delete simulator profile <strong>{selectedUser?.fullName}</strong> (@
+            Permanently delete test profile <strong>{selectedUser?.fullName}</strong> (@
             {selectedUser?.username}) and all attached accounts, transactions, and sessions?
           </p>
         </div>

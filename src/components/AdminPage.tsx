@@ -390,7 +390,7 @@ export const AdminPage: React.FC<{
         method: 'POST',
         body: JSON.stringify(payload),
       });
-      await acceptUpdatedUser(res.user, `Created simulator profile @${res.user.username}.`);
+      await acceptUpdatedUser(res.user, `Created test profile @${res.user.username}.`);
       return true;
     } catch (err) {
       notify('error', err instanceof Error ? err.message : 'Could not create customer.');
@@ -484,7 +484,7 @@ export const AdminPage: React.FC<{
         setSelectedUser(null);
         setUserJson('');
       }
-      notify('success', `Deleted simulator profile @${removedUsername}.`);
+      notify('success', `Deleted test profile @${removedUsername}.`);
     } catch (err) {
       notify('error', err instanceof Error ? err.message : 'Could not delete customer.');
     } finally {
@@ -547,7 +547,7 @@ export const AdminPage: React.FC<{
       });
       await acceptUpdatedUser(
         res.user,
-        `Generated ${res.transactionsAdded.toLocaleString()} ledger entries across ${res.eventsGenerated.toLocaleString()} simulated events.`
+        `Generated ${res.transactionsAdded.toLocaleString()} ledger entries across ${res.eventsGenerated.toLocaleString()} test events.`
       );
     } catch (err) {
       notify('error', err instanceof Error ? err.message : 'Could not generate history.');
@@ -902,7 +902,7 @@ export const AdminPage: React.FC<{
         `/api/admin/users/${encodeURIComponent(selectedUser.id)}/disputes`,
         { method: 'POST', body: JSON.stringify(payload) }
       );
-      await acceptUpdatedUser(res.user, 'Opened simulated card dispute.');
+      await acceptUpdatedUser(res.user, 'Opened test card dispute.');
       return true;
     } catch (err) {
       notify('error', err instanceof Error ? err.message : 'Could not open dispute.');
@@ -1234,7 +1234,7 @@ export const AdminPage: React.FC<{
       });
       const loaded = await loadData();
       if (loaded[0]) await loadSelectedUser(loaded[0].id);
-      notify('success', `Restored ${res.usersRestored} simulator customer profiles from backup.`);
+      notify('success', `Restored ${res.usersRestored} test customer profiles from backup.`);
       return true;
     } catch (err) {
       notify('error', err instanceof Error ? err.message : 'Could not restore backup file.');
@@ -1253,7 +1253,7 @@ export const AdminPage: React.FC<{
       });
       const loaded = await loadData();
       if (loaded[0]) await loadSelectedUser(loaded[0].id);
-      notify('success', 'Simulator customer data was reset.');
+      notify('success', 'Test customer data was reset.');
       return true;
     } catch (err) {
       notify('error', err instanceof Error ? err.message : 'Simulator reset failed.');
@@ -1910,7 +1910,7 @@ export const AdminPage: React.FC<{
               Active Customer:
             </span>
             <SelectInput
-              aria-label="Active simulator customer"
+              aria-label="Active test customer"
               value={selectedUser?.id || ''}
               onChange={(e) => e.target.value && void selectUserAndMaybeGo(e.target.value)}
               className="min-w-[230px] h-9 text-[13px] font-semibold"
