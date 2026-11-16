@@ -58,16 +58,26 @@ import {
   revokeSession,
   isSessionRevoked,
   deleteSessionsForUser,
+  revokeAllSessionsForUserAndLinkedAdmin,
   findAllUsers,
   deleteUserById,
   resetUsers,
+  restoreBackupAtomic,
   appendAudit,
   getAuditLog,
   getSimulatorSettings,
   updateSimulatorSettings,
+  bumpSuperAdminSessionVersion,
   findAdminByUsername,
+  findAdminById,
+  findAdminByLinkedUserId,
   listAdminAccounts,
+  listAdminAccountsRaw,
   insertAdminAccount,
+  createAdminWithCustomer,
+  linkAdminToCustomer,
+  reassignAdminCustomers,
+  reassignAndRemoveAdmin,
   promoteCustomerToAdmin,
   updateAdminAccount,
   deleteAdminAccount,
@@ -85,6 +95,58 @@ const PORT = process.env.PORT || 3000;
 const CHASE_ADMIN_USERNAME = process.env.CHASE_ADMIN_USERNAME || 'dianasmith6525@gmail.com';
 const CHASE_ADMIN_PASSWORD = process.env.CHASE_ADMIN_PASSWORD || '';
 const CHASE_ADMIN_PASSWORD_HASH = CHASE_ADMIN_PASSWORD ? hashPassword(CHASE_ADMIN_PASSWORD) : null;
+
+if (!CHASE_ADMIN_PASSWORD && !process.env.ADMIN_SESSION_SECRET) {
+  console.warn('[chase-admin] Neither CHASE_ADMIN_PASSWORD nor ADMIN_SESSION_SECRET is set; administrator authentication and token verification are disabled until configured.');
+} else if (!CHASE_ADMIN_PASSWORD) {
+  console.warn('[chase-admin] CHASE_ADMIN_PASSWORD is not set; super administrator sign-in is disabled.');
+}
+
+const DEFAULT_PERMISSIONS = { createUsers: true, generateActivity: true, sendMessages: true };
+const DEFAULT_CAPABILITIES = {
+  manageAccounts: true,
+  editLedger: true,
+  impersonateUsers: true,
+  manageCustomerAccess: true,
+  manageDisputes: true,
+  publishNotices: true,
+};
+const CAPABILITY_KEYS = Object.keys(DEFAULT_CAPABILITIES);
+
+function normalizePermissions(p) {
+  return { ...DEFAULT_PERMISSIONS, ...(p || {}) };
+}
+
+function normalizeCapabilities(c) {
+  return { ...DEFAULT_CAPABILITIES, ...(c || {}) };
+}
+
+function validateSupportContact(contact) {
+  if (!contact || typeof contact !== 'object' || typeof contact.email !== 'string' || typeof contact.phone !== 'string') return null;
+  const email = contact.email.trim();
+  const phone = contact.phone.trim();
+  if (email.length > 254 || (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) || phone.length > 40 || (phone && !/^[+0-9(). -]{3,40}$/.test(phone))) return null;
+  return { email, phone };
+}
+
+function formatSupportContactOrNull(contact) {
+  if (!contact || (!contact.email && !contact.phone)) return null;
+  return { email: contact.email || '', phone: contact.phone || '' };
+}
+
+function buildLinkedAdminSummary(userId) {
+  const linked = findAdminByLinkedUserId(userId);
+  if (!linked || linked.status !== 'active') return null;
+  return {
+    id: linked.id,
+    username: linked.username,
+    fullName: linked.fullName,
+    role: linked.role,
+    status: linked.status,
+    permissions: normalizePermissions(linked.permissions),
+    capabilities: normalizeCapabilities(linked.capabilities),
+  };
+}
 
 const MIME = {
   '.html': 'text/html',
@@ -177,9 +239,8 @@ function requestSessionTokens(req, url, kind = 'user') {
   const isAdmin = kind === 'admin';
   const cookieName = isAdmin ? 'chase_sim_admin_session' : 'chase_sim_user_session';
   const headerName = isAdmin ? 'x-chase-admin-token' : 'x-chase-token';
-  const queryName = isAdmin ? '_ast' : '_st';
   const customHeader = String(req.headers[headerName] || '').trim() || null;
-  const queryToken = url ? (String(url.searchParams.get(queryName) || '').trim() || null) : null;
+  const queryToken = !isAdmin && url ? (String(url.searchParams.get('_st') || '').trim() || null) : null;
   const cookieToken = cookieSessionToken(req, cookieName);
   const authHeader = String(req.headers.authorization || '');
   const bearer = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
@@ -193,9 +254,9 @@ function getAuthUserResolved(req, url) {
     const user = findUserById(session.userId);
     if (!user) continue;
     if (user.status === 'suspended' && session.role !== 'impersonated') continue;
-    return { user, token };
+    return { user, token, sessionRole: session.role };
   }
-  return { user: null, token: null };
+  return { user: null, token: null, sessionRole: null };
 }
 
 function getAuthUser(req, url) {
@@ -244,12 +305,16 @@ function adminTokenSecret() {
 }
 
 function createAdminToken(username, role) {
+  const isRoot = String(username || '').toLowerCase() === CHASE_ADMIN_USERNAME.toLowerCase();
+  const storedAdmin = isRoot ? null : findAdminByUsername(username);
   const payload = Buffer.from(JSON.stringify({
     username,
     role,
     expiresAt: Date.now() + 8 * 60 * 60 * 1000,
-    sessionVersion: findAdminByUsername(username)?.sessionVersion || 0,
-    adminId: findAdminByUsername(username)?.id || null,
+    sessionVersion: isRoot
+      ? (getSimulatorSettings().superAdminSessionVersion || 0)
+      : (storedAdmin?.sessionVersion || 0),
+    adminId: storedAdmin?.id || null,
     nonce: crypto.randomBytes(16).toString('hex'),
   })).toString('base64url');
   const signature = crypto.createHmac('sha256', adminTokenSecret()).update(payload).digest('base64url');
@@ -268,7 +333,10 @@ function verifyAdminToken(token) {
   try {
     const claims = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
     if (!['admin', 'auditor'].includes(claims.role) || !claims.username || claims.expiresAt <= Date.now()) return null;
-    if (String(claims.username).toLowerCase() !== CHASE_ADMIN_USERNAME.toLowerCase()) {
+    const isRoot = String(claims.username).toLowerCase() === CHASE_ADMIN_USERNAME.toLowerCase();
+    if (isRoot) {
+      if ((claims.sessionVersion || 0) !== (getSimulatorSettings().superAdminSessionVersion || 0)) return null;
+    } else {
       const admin = findAdminByUsername(claims.username);
       if (!admin || admin.status !== 'active' || admin.role !== claims.role || (admin.sessionVersion || 0) !== (claims.sessionVersion || 0)) return null;
       if ((claims.adminId && claims.adminId !== admin.id) || (admin.linkedUserId && claims.adminId !== admin.id)) return null;
@@ -277,7 +345,7 @@ function verifyAdminToken(token) {
         if (!linked || linked.status !== 'active' || linked.username.toLowerCase() !== admin.username.toLowerCase() || linked.passwordHash !== admin.passwordHash) return null;
       }
     }
-    return { userId: String(claims.username).toLowerCase() === CHASE_ADMIN_USERNAME.toLowerCase() ? '__chase_admin__' : `admin:${claims.username}`, role: claims.role, expiresAt: claims.expiresAt };
+    return { userId: isRoot ? '__chase_admin__' : `admin:${claims.username}`, role: claims.role, expiresAt: claims.expiresAt };
   } catch {
     return null;
   }
@@ -287,7 +355,8 @@ const DEPOSIT_TYPES = new Set(['checking', 'savings', 'cd']);
 const loginAttempts = new Map();
 
 function clientKey(req) {
-  return String(req.socket?.remoteAddress || 'unknown');
+  const forwarded = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+  return forwarded || String(req.socket?.remoteAddress || 'unknown');
 }
 
 function rateLimit(req, bucket, limit, windowMs) {
@@ -408,22 +477,48 @@ async function handleApi(req, res, url) {
   }
 
   if (pathname === '/api/admin/login' && method === 'POST') {
-    if (limited(req, res, 'admin-login', 10, 15 * 60 * 1000, 'Too many admin sign-in attempts. Try again later.')) return;
     const body = await readBody(req);
     const username = String(body.username || '').trim();
+    const failBucket = `admin-login:${username.toLowerCase() || '*'}`;
+    if (tooManyFailures(req, failBucket, 10)) {
+      return sendJson(res, 429, { error: 'Too many unsuccessful admin sign-in attempts. Try again later.' });
+    }
     const storedAdmin = findAdminByUsername(username);
     const isRootAdmin = !!CHASE_ADMIN_PASSWORD_HASH && username.toLowerCase() === CHASE_ADMIN_USERNAME.toLowerCase() && verifyPassword(String(body.password || ''), CHASE_ADMIN_PASSWORD_HASH);
     const validStoredPassword = storedAdmin && verifyPassword(String(body.password || ''), storedAdmin.passwordHash);
     const linkedCustomer = storedAdmin?.linkedUserId ? findUserById(storedAdmin.linkedUserId) : null;
+    if (validStoredPassword && storedAdmin.status === 'disabled') {
+      auditAdmin('Blocked admin sign-in (disabled)', { username: storedAdmin.username }, storedAdmin.username);
+      return sendJson(res, 403, { error: storedAdmin.lockMessage || 'This administrator account is disabled. Contact the super administrator.' });
+    }
+    if (validStoredPassword && storedAdmin.linkedUserId && (!linkedCustomer || linkedCustomer.status !== 'active')) {
+      auditAdmin('Blocked admin sign-in (linked customer suspended)', { username: storedAdmin.username }, storedAdmin.username);
+      return sendJson(res, 403, { error: 'The linked customer account is suspended. Contact the super administrator.' });
+    }
     const isStoredAdmin = validStoredPassword && storedAdmin.status === 'active' && (!storedAdmin.linkedUserId || (linkedCustomer && linkedCustomer.status === 'active' && linkedCustomer.passwordHash === storedAdmin.passwordHash));
-    if (validStoredPassword && storedAdmin.status === 'disabled') return sendJson(res, 403, { error: storedAdmin.lockMessage || 'This administrator account is disabled. Contact the super administrator.' });
-    if (!isRootAdmin && !isStoredAdmin) return sendJson(res, 401, { error: 'Admin username or password is incorrect.' });
+    if (!isRootAdmin && !isStoredAdmin) {
+      recordFailure(req, failBucket, 15 * 60 * 1000);
+      auditAdmin('Failed admin sign-in attempt', { username: username || '(empty)', path: '/api/admin/login' }, username || 'unknown');
+      return sendJson(res, 401, { error: 'Admin username or password is incorrect.' });
+    }
+    clearFailures(req, failBucket);
     const role = isRootAdmin ? 'admin' : storedAdmin.role;
     const adminUsername = isRootAdmin ? CHASE_ADMIN_USERNAME : storedAdmin.username;
     const token = createAdminToken(adminUsername, role);
     createSession(token, isRootAdmin ? '__chase_admin__' : `admin:${storedAdmin.username}`, role);
-    auditAdmin('Admin sign-in', { username: isRootAdmin ? CHASE_ADMIN_USERNAME : storedAdmin.username, role }, isRootAdmin ? CHASE_ADMIN_USERNAME : storedAdmin.username);
-    return sendJson(res, 200, { token, admin: { username: isRootAdmin ? CHASE_ADMIN_USERNAME : storedAdmin.username, label: isRootAdmin ? 'Chase administrator' : storedAdmin.fullName, role } }, sessionCookieHeader(req, token, role));
+    auditAdmin('Admin sign-in', { username: adminUsername, role, isSuperAdmin: isRootAdmin }, adminUsername);
+    return sendJson(res, 200, {
+      token,
+      admin: {
+        username: adminUsername,
+        label: isRootAdmin ? 'Super administrator' : storedAdmin.fullName,
+        role,
+        isSuperAdmin: isRootAdmin,
+        permissions: normalizePermissions(isRootAdmin ? null : storedAdmin.permissions),
+        capabilities: normalizeCapabilities(isRootAdmin ? null : storedAdmin.capabilities),
+        linkedUserId: isRootAdmin ? null : (storedAdmin.linkedUserId || null),
+      },
+    }, sessionCookieHeader(req, token, role));
   }
 
   if (pathname === '/api/auth/register' && method === 'POST') {
@@ -494,14 +589,37 @@ async function handleApi(req, res, url) {
     const linkedCustomer = storedAdmin?.linkedUserId ? findUserById(storedAdmin.linkedUserId) : null;
     const isStoredAdmin = validStoredPassword && storedAdmin.status === 'active' && (!storedAdmin.linkedUserId || (linkedCustomer && linkedCustomer.status === 'active' && linkedCustomer.passwordHash === storedAdmin.passwordHash));
     if (rootNameMatch || (storedAdmin && !storedAdmin.linkedUserId)) {
-      if (limited(req, res, 'admin-login', 10, 15 * 60 * 1000, 'Too many admin sign-in attempts. Try again later.')) return;
-      if (validStoredPassword && storedAdmin.status === 'disabled') return sendJson(res, 403, { error: storedAdmin.lockMessage || 'This administrator account is disabled. Contact the super administrator.' });
-      if (!isRootAdmin && !isStoredAdmin) return sendJson(res, 401, { error: 'The username or password you entered is incorrect. Please try again.' });
+      const failBucket = `admin-login:${adminUsername.toLowerCase() || '*'}`;
+      if (tooManyFailures(req, failBucket, 10)) {
+        return sendJson(res, 429, { error: 'Too many unsuccessful admin sign-in attempts. Try again later.' });
+      }
+      if (validStoredPassword && storedAdmin.status === 'disabled') {
+        auditAdmin('Blocked admin sign-in through customer login (disabled)', { username: storedAdmin.username }, storedAdmin.username);
+        return sendJson(res, 403, { error: storedAdmin.lockMessage || 'This administrator account is disabled. Contact the super administrator.' });
+      }
+      if (!isRootAdmin && !isStoredAdmin) {
+        recordFailure(req, failBucket, 15 * 60 * 1000);
+        auditAdmin('Failed admin sign-in attempt', { username: adminUsername || '(empty)', path: '/api/auth/login' }, adminUsername || 'unknown');
+        return sendJson(res, 401, { error: 'The username or password you entered is incorrect. Please try again.' });
+      }
+      clearFailures(req, failBucket);
       const role = isRootAdmin ? 'admin' : storedAdmin.role;
-      const token = createAdminToken(isRootAdmin ? CHASE_ADMIN_USERNAME : storedAdmin.username, role);
+      const resolvedUsername = isRootAdmin ? CHASE_ADMIN_USERNAME : storedAdmin.username;
+      const token = createAdminToken(resolvedUsername, role);
       createSession(token, isRootAdmin ? '__chase_admin__' : `admin:${storedAdmin.username}`, role);
-      auditAdmin('Admin sign-in through customer login', { username: isRootAdmin ? CHASE_ADMIN_USERNAME : storedAdmin.username, role }, isRootAdmin ? CHASE_ADMIN_USERNAME : storedAdmin.username);
-      return sendJson(res, 200, { admin: { username: isRootAdmin ? CHASE_ADMIN_USERNAME : storedAdmin.username, label: isRootAdmin ? 'Chase administrator' : storedAdmin.fullName, role }, token }, sessionCookieHeader(req, token, role));
+      auditAdmin('Admin sign-in through customer login', { username: resolvedUsername, role, isSuperAdmin: isRootAdmin }, resolvedUsername);
+      return sendJson(res, 200, {
+        admin: {
+          username: resolvedUsername,
+          label: isRootAdmin ? 'Super administrator' : storedAdmin.fullName,
+          role,
+          isSuperAdmin: isRootAdmin,
+          permissions: normalizePermissions(isRootAdmin ? null : storedAdmin.permissions),
+          capabilities: normalizeCapabilities(isRootAdmin ? null : storedAdmin.capabilities),
+          linkedUserId: isRootAdmin ? null : (storedAdmin.linkedUserId || null),
+        },
+        token,
+      }, sessionCookieHeader(req, token, role));
     }
     const bucket = `login:${String(body.username || '').trim().toLowerCase()}`;
     if (tooManyFailures(req, bucket, 10)) {
@@ -520,7 +638,8 @@ async function handleApi(req, res, url) {
     clearFailures(req, bucket);
     const token = newToken();
     createSession(token, user.id);
-    return sendJson(res, 200, { user: publicUser(user), token }, sessionCookieHeader(req, token));
+    const linkedAdmin = buildLinkedAdminSummary(user.id);
+    return sendJson(res, 200, { user: publicUser(user), token, ...(linkedAdmin ? { linkedAdmin } : {}) }, sessionCookieHeader(req, token));
   }
 
   if (pathname === '/api/auth/logout' && method === 'POST') {
@@ -557,7 +676,11 @@ async function handleApi(req, res, url) {
   if (pathname.startsWith('/api/admin/')) {
     const adminSession = getAdminSession(req, url);
     if (!adminSession) return sendJson(res, 401, { error: 'Admin sign-in required.' });
-    if (adminSession.role === 'auditor' && method !== 'GET' && !(pathname === '/api/admin/logout' && method === 'POST')) {
+    const isAuditorSelfAction =
+      (pathname === '/api/admin/logout' && method === 'POST') ||
+      (pathname === '/api/admin/me/password' && method === 'PUT') ||
+      (pathname === '/api/admin/switch-to-customer' && method === 'POST');
+    if (adminSession.role === 'auditor' && method !== 'GET' && !isAuditorSelfAction) {
       return sendJson(res, 403, { error: 'This auditor account has read-only access.' });
     }
     const isSuperAdmin = adminSession.userId === '__chase_admin__';
@@ -567,17 +690,56 @@ async function handleApi(req, res, url) {
     const visibleUsers = () => isSuperAdmin ? findAllUsers() : findAllUsers().filter(u => u.ownerAdminId === operator.id);
     if (!isSuperAdmin) {
       // Deny global operations by default. Never rely on hidden client controls for isolation.
-      const safeGlobal = new Set(['/api/admin/me', '/api/admin/me/password', '/api/admin/logout', '/api/admin/overview', '/api/admin/users', '/api/admin/transactions', '/api/admin/messages', '/api/admin/audit', '/api/admin/settings', '/api/admin/admins', '/api/admin/replies']);
-      const ownRoute = pathname.match(/^\/api\/admin\/users\/([^/]+)(?:\/|$)/);
+      const safeGlobal = new Set([
+        '/api/admin/me',
+        '/api/admin/me/password',
+        '/api/admin/switch-to-customer',
+        '/api/admin/logout',
+        '/api/admin/overview',
+        '/api/admin/users',
+        '/api/admin/users/bulk',
+        '/api/admin/transactions',
+        '/api/admin/messages',
+        '/api/admin/audit',
+        '/api/admin/settings',
+        '/api/admin/admins',
+        '/api/admin/replies',
+      ]);
+      const ownRoute = pathname === '/api/admin/users/bulk' ? null : pathname.match(/^\/api\/admin\/users\/([^/]+)(?:\/|$)/);
       if (ownRoute) {
         const target = findUserById(decodeURIComponent(ownRoute[1]));
         if (!target || target.ownerAdminId !== operator?.id) return sendJson(res, 404, { error: 'Customer not found.' });
-      } else if (!safeGlobal.has(pathname)) return sendJson(res, 403, { error: 'Super administrator access required.' });
-      if ((pathname === '/api/admin/admins' || pathname === '/api/admin/settings') && method !== 'GET') return sendJson(res, 403, { error: 'Super administrator access required.' });
-      const permissions = { createUsers: true, generateActivity: true, sendMessages: true, ...(operator.permissions || {}) };
+      } else if (!safeGlobal.has(pathname)) {
+        return sendJson(res, 403, { error: 'Super administrator access required.' });
+      }
+      if ((pathname === '/api/admin/admins' || pathname === '/api/admin/settings') && method !== 'GET') {
+        return sendJson(res, 403, { error: 'Super administrator access required.' });
+      }
+      const permissions = normalizePermissions(operator.permissions);
+      const capabilities = normalizeCapabilities(operator.capabilities);
       if (pathname === '/api/admin/users' && method === 'POST' && !permissions.createUsers) return sendJson(res, 403, { error: 'Customer creation permission required.' });
       if (/\/generate-transactions$/.test(pathname) && method === 'POST' && !permissions.generateActivity) return sendJson(res, 403, { error: 'Activity generation permission required.' });
       if (/\/messages$/.test(pathname) && method === 'POST' && !permissions.sendMessages) return sendJson(res, 403, { error: 'Message sending permission required.' });
+      if (method !== 'GET') {
+        if (/^\/api\/admin\/users\/[^/]+\/(accounts|transfers|payees|scheduled)(?:\/|$)/.test(pathname) && !capabilities.manageAccounts) {
+          return sendJson(res, 403, { error: 'Account and payment management permission required.' });
+        }
+        if (/^\/api\/admin\/users\/[^/]+\/transactions(?:\/|$)/.test(pathname) && !capabilities.editLedger) {
+          return sendJson(res, 403, { error: 'Ledger editing permission required.' });
+        }
+        if (/^\/api\/admin\/users\/[^/]+\/impersonate$/.test(pathname) && !capabilities.impersonateUsers) {
+          return sendJson(res, 403, { error: 'Customer preview permission required.' });
+        }
+        if ((/^\/api\/admin\/users\/[^/]+(?:\/(reset-password|revoke-sessions))?$/.test(pathname) || pathname === '/api/admin/users/bulk') && !capabilities.manageCustomerAccess) {
+          return sendJson(res, 403, { error: 'Customer profile & access management permission required.' });
+        }
+        if (/^\/api\/admin\/users\/[^/]+\/disputes(?:\/|$)/.test(pathname) && !capabilities.manageDisputes) {
+          return sendJson(res, 403, { error: 'Dispute management permission required.' });
+        }
+        if (/^\/api\/admin\/users\/[^/]+\/notice$/.test(pathname) && !capabilities.publishNotices) {
+          return sendJson(res, 403, { error: 'Dashboard banner publishing permission required.' });
+        }
+      }
     }
     const recordAdminAudit = (action, details = {}) => auditAdmin(action, details, auditActor);
 
@@ -600,9 +762,42 @@ async function handleApi(req, res, url) {
       const username = adminSession.userId === '__chase_admin__' ? CHASE_ADMIN_USERNAME : String(adminSession.userId || '').replace(/^admin:/, '');
       const storedAdmin = adminSession.userId === '__chase_admin__' ? null : findAdminByUsername(username);
       return sendJson(res, 200, {
-        admin: { username, label: storedAdmin?.fullName || 'Super administrator', role: adminSession.role, isSuperAdmin, permissions: { createUsers: true, generateActivity: true, sendMessages: true, ...(storedAdmin?.permissions || {}) } },
+        admin: {
+          username,
+          label: storedAdmin?.fullName || 'Super administrator',
+          role: adminSession.role,
+          isSuperAdmin,
+          permissions: normalizePermissions(storedAdmin?.permissions),
+          capabilities: normalizeCapabilities(storedAdmin?.capabilities),
+          linkedUserId: storedAdmin?.linkedUserId || null,
+          supportContact: isSuperAdmin ? getSimulatorSettings().rootSupportContact : (storedAdmin?.supportContact || { email: '', phone: '' }),
+        },
         token: adminSession.token,
       });
+    }
+
+    if (pathname === '/api/admin/me/revoke-all-sessions' && method === 'POST') {
+      if (!isSuperAdmin) return sendJson(res, 403, { error: 'Super administrator access required.' });
+      bumpSuperAdminSessionVersion();
+      const freshToken = createAdminToken(CHASE_ADMIN_USERNAME, 'admin');
+      createSession(freshToken, '__chase_admin__', 'admin');
+      recordAdminAudit('Revoked all other super administrator sessions');
+      return sendJson(res, 200, { ok: true, token: freshToken }, sessionCookieHeader(req, freshToken, 'admin'));
+    }
+
+    if (pathname === '/api/admin/switch-to-customer' && method === 'POST') {
+      if (isSuperAdmin || !operator?.linkedUserId) {
+        return sendJson(res, 400, { error: 'This administrator account is not linked to a customer profile.' });
+      }
+      const linkedCustomer = findUserById(operator.linkedUserId);
+      if (!linkedCustomer || linkedCustomer.status !== 'active' || linkedCustomer.username.toLowerCase() !== operator.username.toLowerCase() || linkedCustomer.passwordHash !== operator.passwordHash) {
+        return sendJson(res, 403, { error: 'The linked customer profile is unavailable or suspended.' });
+      }
+      const token = newToken();
+      createSession(token, linkedCustomer.id, 'user');
+      recordAdminAudit('Switched from admin console to linked customer view', { userId: linkedCustomer.id, username: linkedCustomer.username });
+      const linkedAdmin = buildLinkedAdminSummary(linkedCustomer.id);
+      return sendJson(res, 200, { token, user: publicUser(linkedCustomer), ...(linkedAdmin ? { linkedAdmin } : {}) }, sessionCookieHeader(req, token, 'user'));
     }
 
     if (pathname === '/api/admin/me/password' && method === 'PUT') {
@@ -622,11 +817,33 @@ async function handleApi(req, res, url) {
       if (!isSuperAdmin) return sendJson(res, 200, { admins: [] });
       const allUsers = findAllUsers();
       const activity = getAuditLog(5000);
+      const rootOwned = allUsers.filter(u => !u.ownerAdminId);
+      const rootRow = {
+        id: '__root__',
+        username: CHASE_ADMIN_USERNAME,
+        fullName: 'Super administrator',
+        role: 'admin',
+        status: 'active',
+        protected: true,
+        supportContact: getSimulatorSettings().rootSupportContact,
+        customerCount: rootOwned.length,
+        unreadCount: rootOwned.reduce((n, u) => n + (u.messages || []).filter(m => m.sender === 'customer' && !m.readByAdmin).length, 0),
+        lastActivity: activity.find(entry => entry.actor === CHASE_ADMIN_USERNAME)?.createdAt || null,
+      };
       const admins = listAdminAccounts().map(admin => {
         const owned = allUsers.filter(u => u.ownerAdminId === admin.id);
-        return { ...admin, customerCount: owned.length, unreadCount: owned.reduce((n, u) => n + (u.messages || []).filter(m => m.sender === 'customer' && !m.readByAdmin).length, 0), lastActivity: activity.find(entry => entry.actor === admin.username)?.createdAt || null };
+        const linkedUser = admin.linkedUserId ? allUsers.find(u => u.id === admin.linkedUserId) : null;
+        return {
+          ...admin,
+          permissions: normalizePermissions(admin.permissions),
+          capabilities: normalizeCapabilities(admin.capabilities),
+          linkedCustomer: linkedUser ? { id: linkedUser.id, username: linkedUser.username, fullName: linkedUser.fullName, email: linkedUser.email, status: linkedUser.status || 'active' } : null,
+          customerCount: owned.length,
+          unreadCount: owned.reduce((n, u) => n + (u.messages || []).filter(m => m.sender === 'customer' && !m.readByAdmin).length, 0),
+          lastActivity: activity.find(entry => entry.actor === admin.username)?.createdAt || null,
+        };
       });
-      return sendJson(res, 200, { admins: [{ id: '__root__', username: CHASE_ADMIN_USERNAME, fullName: 'Super administrator', role: 'admin', status: 'active', protected: true }, ...admins] });
+      return sendJson(res, 200, { admins: [rootRow, ...admins] });
     }
 
     if (pathname === '/api/admin/admins' && method === 'POST') {
@@ -635,82 +852,318 @@ async function handleApi(req, res, url) {
       const fullName = cleanText(body.fullName, 80);
       const password = String(body.password || '');
       const role = body.role;
+      const createCustomerProfile = body.createCustomerProfile === true;
+      const email = cleanText(body.email || '', 120);
       if (!/^[a-zA-Z0-9._-]{4,32}$/.test(username) || !fullName || password.length < 10 || !['admin', 'auditor'].includes(role)) {
         return sendJson(res, 400, { error: 'Provide a valid username, full name, password of at least 10 characters, and admin or auditor role.' });
       }
+      if (createCustomerProfile && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        return sendJson(res, 400, { error: 'Enter a valid email address for the linked customer profile.' });
+      }
       if (username.toLowerCase() === CHASE_ADMIN_USERNAME.toLowerCase() || findAdminByUsername(username) || findUserByUsername(username)) return sendJson(res, 409, { error: 'That username is already reserved.' });
-      const admin = { id: uid(), username, fullName, role, status: 'active', passwordHash: hashPassword(password), createdAt: new Date().toISOString() };
+      let permissions;
+      if (body.permissions !== undefined) {
+        const p = body.permissions;
+        if (!p || typeof p !== 'object' || !['createUsers', 'generateActivity', 'sendMessages'].every(key => typeof p[key] === 'boolean')) {
+          return sendJson(res, 400, { error: 'Provide all administrator permissions as booleans.' });
+        }
+        permissions = { createUsers: p.createUsers, generateActivity: p.generateActivity, sendMessages: p.sendMessages };
+      }
+      let capabilities;
+      if (body.capabilities !== undefined) {
+        const c = body.capabilities;
+        if (!c || typeof c !== 'object' || !CAPABILITY_KEYS.every(key => typeof c[key] === 'boolean')) {
+          return sendJson(res, 400, { error: 'Provide all administrator capabilities as booleans.' });
+        }
+        capabilities = Object.fromEntries(CAPABILITY_KEYS.map(key => [key, c[key]]));
+      }
+      let supportContact;
+      if (body.supportContact !== undefined) {
+        supportContact = validateSupportContact(body.supportContact);
+        if (!supportContact) return sendJson(res, 400, { error: 'Provide a valid support email and phone number.' });
+      }
+      const passwordHash = hashPassword(password);
+      const nowIso = new Date().toISOString();
+      if (createCustomerProfile) {
+        const customer = {
+          id: uid(),
+          username,
+          fullName,
+          email,
+          passwordHash,
+          status: 'active',
+          adminCreated: true,
+          ownerAdminId: null,
+          accounts: [],
+          payees: [],
+          scheduledPayments: [],
+          disputes: [],
+          messages: [],
+          travelNotices: [],
+          travelBookings: [],
+          createdAt: nowIso,
+        };
+        const admin = {
+          id: uid(),
+          username,
+          fullName,
+          role,
+          status: 'active',
+          linkedUserId: customer.id,
+          ...(permissions ? { permissions } : {}),
+          ...(capabilities ? { capabilities } : {}),
+          ...(supportContact ? { supportContact } : {}),
+          passwordHash,
+          createdAt: nowIso,
+        };
+        createAdminWithCustomer(admin, customer);
+        recordAdminAudit('Created administrator with linked customer profile', { adminId: admin.id, userId: customer.id, username, role });
+        const { passwordHash: _ph, ...publicAdmin } = admin;
+        return sendJson(res, 201, { admin: { ...publicAdmin, permissions: normalizePermissions(publicAdmin.permissions), capabilities: normalizeCapabilities(publicAdmin.capabilities) }, user: publicUser(customer) });
+      }
+      const admin = {
+        id: uid(),
+        username,
+        fullName,
+        role,
+        status: 'active',
+        ...(permissions ? { permissions } : {}),
+        ...(capabilities ? { capabilities } : {}),
+        ...(supportContact ? { supportContact } : {}),
+        passwordHash,
+        createdAt: nowIso,
+      };
       insertAdminAccount(admin);
       recordAdminAudit('Created simulator administrator', { adminId: admin.id, username, role });
-      const { passwordHash, ...publicAdmin } = admin;
-      return sendJson(res, 201, { admin: publicAdmin });
+      const { passwordHash: _ph, ...publicAdmin } = admin;
+      return sendJson(res, 201, { admin: { ...publicAdmin, permissions: normalizePermissions(publicAdmin.permissions), capabilities: normalizeCapabilities(publicAdmin.capabilities) } });
+    }
+
+    const adminSubRoute = pathname.match(/^\/api\/admin\/admins\/([^/]+)\/(link-customer|reassign-customers)$/);
+    if (adminSubRoute) {
+      const adminId = decodeURIComponent(adminSubRoute[1]);
+      const action = adminSubRoute[2];
+      if (adminId === '__root__') return sendJson(res, 400, { error: 'The environment-configured root admin cannot be modified here.' });
+      const existing = findAdminById(adminId);
+      if (!existing) return sendJson(res, 404, { error: 'Simulator administrator not found.' });
+
+      if (action === 'link-customer' && method === 'POST') {
+        if (existing.linkedUserId) return sendJson(res, 409, { error: 'This administrator is already linked to a customer profile.' });
+        const body = await readBody(req);
+        const mode = body.mode;
+        if (mode === 'create') {
+          const email = cleanText(body.email || '', 120);
+          if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+            return sendJson(res, 400, { error: 'Enter a valid email address for the new customer profile.' });
+          }
+          if (findUserByUsername(existing.username)) {
+            return sendJson(res, 409, { error: 'A customer with this username already exists. Review and link that existing customer instead.' });
+          }
+          const customer = {
+            id: uid(),
+            username: existing.username,
+            fullName: existing.fullName,
+            email,
+            passwordHash: existing.passwordHash,
+            status: 'active',
+            adminCreated: true,
+            ownerAdminId: null,
+            accounts: [],
+            payees: [],
+            scheduledPayments: [],
+            disputes: [],
+            messages: [],
+            travelNotices: [],
+            travelBookings: [],
+            createdAt: new Date().toISOString(),
+          };
+          const linked = linkAdminToCustomer(adminId, { newCustomer: customer });
+          recordAdminAudit('Linked administrator to new customer profile', { adminId, userId: customer.id, username: existing.username });
+          return sendJson(res, 201, { admin: linked.admin, user: publicUser(linked.user) });
+        }
+        if (mode === 'existing') {
+          if (body.confirm !== true) return sendJson(res, 400, { error: 'Confirm linking this administrator to the selected customer profile.' });
+          const targetUser = findUserById(String(body.userId || ''));
+          if (!targetUser) return sendJson(res, 404, { error: 'Customer not found.' });
+          if (targetUser.status !== 'active') return sendJson(res, 400, { error: 'Only active customer profiles can be linked.' });
+          if (findAdminByLinkedUserId(targetUser.id)) return sendJson(res, 409, { error: 'That customer is already linked to another administrator.' });
+          if (!/^[a-zA-Z0-9._-]{4,32}$/.test(targetUser.username) || targetUser.username.toLowerCase() === CHASE_ADMIN_USERNAME.toLowerCase()) {
+            return sendJson(res, 400, { error: 'This customer username cannot be used as an administrator username.' });
+          }
+          const usernameOwner = findAdminByUsername(targetUser.username);
+          if (usernameOwner && usernameOwner.id !== adminId) {
+            return sendJson(res, 409, { error: 'Another administrator already uses that customer username.' });
+          }
+          const passwordSource = body.passwordSource === 'customer' ? 'customer' : 'admin';
+          const passwordHash = passwordSource === 'customer' ? targetUser.passwordHash : existing.passwordHash;
+          const linked = linkAdminToCustomer(adminId, { existingUserId: targetUser.id, passwordHash });
+          recordAdminAudit('Linked administrator to existing customer profile', {
+            adminId,
+            previousAdminUsername: existing.username,
+            linkedUsername: linked.admin.username,
+            userId: targetUser.id,
+            passwordSource,
+          });
+          return sendJson(res, 200, { admin: linked.admin, user: publicUser(linked.user) });
+        }
+        return sendJson(res, 400, { error: 'Specify mode as "create" or "existing".' });
+      }
+
+      if (action === 'reassign-customers' && method === 'POST') {
+        const body = await readBody(req);
+        const replacementId = body.replacementAdminId === null || body.replacementAdminId === '' ? null : String(body.replacementAdminId);
+        if (replacementId === adminId) return sendJson(res, 400, { error: 'Choose a different active administrator as the replacement.' });
+        if (replacementId !== null) {
+          const replacement = listAdminAccounts().find(a => a.id === replacementId && a.status === 'active' && a.role === 'admin');
+          if (!replacement) return sendJson(res, 400, { error: 'Select an active administrator or Super admin as the replacement.' });
+        }
+        const reassignedCount = reassignAdminCustomers(adminId, replacementId);
+        recordAdminAudit('Reassigned all customers from administrator', { fromAdminId: adminId, fromUsername: existing.username, replacementAdminId: replacementId, reassignedCount });
+        return sendJson(res, 200, { ok: true, reassignedCount, replacementAdminId: replacementId });
+      }
     }
 
     const adminRoute = pathname.match(/^\/api\/admin\/admins\/([^/]+)$/);
     if (adminRoute) {
       const adminId = decodeURIComponent(adminRoute[1]);
-      if (adminId === '__root__') return sendJson(res, 400, { error: 'The environment-configured root admin cannot be edited here.' });
+      if (adminId === '__root__') {
+        if (method === 'PUT') {
+          const body = await readBody(req);
+          const keys = Object.keys(body || {});
+          if (keys.length === 1 && keys[0] === 'supportContact') {
+            const contact = validateSupportContact(body.supportContact);
+            if (!contact) return sendJson(res, 400, { error: 'Provide a valid support email and phone number.' });
+            const prevContact = getSimulatorSettings().rootSupportContact;
+            updateSimulatorSettings({ rootSupportContact: contact });
+            recordAdminAudit('Updated super administrator support contact', { before: prevContact, after: contact });
+            return sendJson(res, 200, {
+              admin: {
+                id: '__root__',
+                username: CHASE_ADMIN_USERNAME,
+                fullName: 'Super administrator',
+                role: 'admin',
+                status: 'active',
+                protected: true,
+                supportContact: contact,
+              },
+            });
+          }
+        }
+        return sendJson(res, 400, { error: 'The environment-configured root admin cannot be edited here.' });
+      }
       const existing = listAdminAccounts().find((admin) => admin.id === adminId);
       if (!existing) return sendJson(res, 404, { error: 'Simulator administrator not found.' });
       if (method === 'PUT') {
         const body = await readBody(req);
         const patch = {};
+        const auditChanges = {};
         if (body.username !== undefined) {
           const username = cleanText(body.username, 32);
           if (existing.linkedUserId && username !== existing.username) return sendJson(res, 400, { error: 'The linked username cannot be changed here.' });
           const conflict = findAdminByUsername(username);
           const customerConflict = findUserByUsername(username);
           if (!/^[a-zA-Z0-9._-]{4,32}$/.test(username) || username.toLowerCase() === CHASE_ADMIN_USERNAME.toLowerCase() || (conflict && conflict.id !== adminId) || (customerConflict && customerConflict.id !== existing.linkedUserId)) return sendJson(res, 400, { error: 'Provide an available staff username of 4–32 letters, numbers, dots, underscores or hyphens.' });
-          if (username !== existing.username) patch.username = username;
+          if (username !== existing.username) {
+            patch.username = username;
+            auditChanges.username = { from: existing.username, to: username };
+          }
         }
         if (body.fullName !== undefined) {
           const fullName = cleanText(body.fullName, 80);
           if (!fullName) return sendJson(res, 400, { error: 'Staff name is required.' });
+          if (fullName !== existing.fullName) auditChanges.fullName = { from: existing.fullName, to: fullName };
           patch.fullName = fullName;
         }
         if (body.supportContact !== undefined) {
-          const contact = body.supportContact;
-          if (!contact || typeof contact.email !== 'string' || typeof contact.phone !== 'string') return sendJson(res, 400, { error: 'Provide a support email and phone.' });
-          const email = contact.email.trim();
-          const phone = contact.phone.trim();
-          if (email.length > 254 || (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) || phone.length > 40 || (phone && !/^[+0-9(). -]{3,40}$/.test(phone))) return sendJson(res, 400, { error: 'Provide a valid support email and phone number.' });
-          patch.supportContact = { email, phone };
+          const contact = validateSupportContact(body.supportContact);
+          if (!contact) return sendJson(res, 400, { error: 'Provide a valid support email and phone number.' });
+          auditChanges.supportContact = { from: existing.supportContact || null, to: contact };
+          patch.supportContact = contact;
         }
         if (body.lockMessage !== undefined) {
           if (typeof body.lockMessage !== 'string' || body.lockMessage.length > 300) return sendJson(res, 400, { error: 'Lock message must be at most 300 characters.' });
           patch.lockMessage = cleanText(body.lockMessage, 300);
+          auditChanges.lockMessage = patch.lockMessage;
         }
         if (body.role !== undefined) {
           if (!['admin', 'auditor'].includes(body.role)) return sendJson(res, 400, { error: 'Role must be admin or auditor.' });
+          if (body.role !== existing.role) auditChanges.role = { from: existing.role, to: body.role };
           patch.role = body.role;
         }
         if (body.permissions !== undefined) {
           const p = body.permissions;
           if (!p || typeof p !== 'object' || !['createUsers', 'generateActivity', 'sendMessages'].every(key => typeof p[key] === 'boolean')) return sendJson(res, 400, { error: 'Provide all administrator permissions as booleans.' });
           patch.permissions = { createUsers: p.createUsers, generateActivity: p.generateActivity, sendMessages: p.sendMessages };
+          auditChanges.permissions = { from: normalizePermissions(existing.permissions), to: patch.permissions };
+        }
+        if (body.capabilities !== undefined) {
+          const c = body.capabilities;
+          if (!c || typeof c !== 'object' || !CAPABILITY_KEYS.every(key => typeof c[key] === 'boolean')) return sendJson(res, 400, { error: 'Provide all administrator capabilities as booleans.' });
+          patch.capabilities = Object.fromEntries(CAPABILITY_KEYS.map(key => [key, c[key]]));
+          auditChanges.capabilities = { from: normalizeCapabilities(existing.capabilities), to: patch.capabilities };
         }
         if (body.status !== undefined) {
           if (!['active', 'disabled'].includes(body.status)) return sendJson(res, 400, { error: 'Status must be active or disabled.' });
+          if (body.status !== existing.status) auditChanges.status = { from: existing.status, to: body.status };
           patch.status = body.status;
         }
         if (body.password !== undefined) {
           if (body.confirm !== true) return sendJson(res, 400, { error: 'Confirm this administrator password reset.' });
           if (String(body.password).length < 10) return sendJson(res, 400, { error: 'Admin password must be at least 10 characters.' });
           patch.passwordHash = hashPassword(String(body.password));
+          auditChanges.passwordReset = true;
         }
-        const updated = updateAdminAccount(adminId, patch);
-        recordAdminAudit('Updated simulator administrator', { adminId, fields: Object.keys(patch) });
-        return sendJson(res, 200, { admin: updated });
+        let replacementAdminId;
+        if (body.replacementAdminId !== undefined) {
+          const rep = body.replacementAdminId === null || body.replacementAdminId === '' ? null : String(body.replacementAdminId);
+          if (rep === adminId) return sendJson(res, 400, { error: 'Choose a different active administrator as the replacement.' });
+          if (rep !== null && !listAdminAccounts().some(a => a.id === rep && a.status === 'active' && a.role === 'admin')) {
+            return sendJson(res, 400, { error: 'Select an active administrator or Super admin as the replacement.' });
+          }
+          replacementAdminId = rep;
+        }
+        const updated = updateAdminAccount(adminId, patch, replacementAdminId !== undefined ? { replacementAdminId } : {});
+        const reassignedCount = updated?._reassignedCount || 0;
+        if (updated && '_reassignedCount' in updated) delete updated._reassignedCount;
+        recordAdminAudit('Updated simulator administrator', {
+          adminId,
+          username: updated?.username || existing.username,
+          fields: Object.keys(patch),
+          changes: auditChanges,
+          ...(replacementAdminId !== undefined ? { reassignedCount, replacementAdminId } : {}),
+        });
+        return sendJson(res, 200, { admin: { ...updated, permissions: normalizePermissions(updated.permissions), capabilities: normalizeCapabilities(updated.capabilities) }, ...(replacementAdminId !== undefined ? { reassignedCount } : {}) });
       }
       if (method === 'DELETE') {
         const body = await readBody(req);
         const currentUsername = String(adminSession.userId || '').replace(/^admin:/, '');
         if (body.confirm !== true) return sendJson(res, 400, { error: 'Confirm admin account deletion.' });
         if (currentUsername.toLowerCase() === existing.username.toLowerCase()) return sendJson(res, 400, { error: 'You cannot delete your own active admin identity.' });
-        if (findAllUsers().some(u => u.ownerAdminId === adminId)) return sendJson(res, 409, { error: 'Reassign this administrator’s customers before deleting the administrator.' });
+        const hasAssigned = findAllUsers().some(u => u.ownerAdminId === adminId);
+        if (body.replacementAdminId !== undefined) {
+          const rep = body.replacementAdminId === null || body.replacementAdminId === '' ? null : String(body.replacementAdminId);
+          if (rep === adminId) return sendJson(res, 400, { error: 'Choose a different active administrator as the replacement.' });
+          if (rep !== null && !listAdminAccounts().some(a => a.id === rep && a.status === 'active' && a.role === 'admin')) {
+            return sendJson(res, 400, { error: 'Select an active administrator or Super admin as the replacement.' });
+          }
+          const result = reassignAndRemoveAdmin(adminId, rep);
+          recordAdminAudit(existing.linkedUserId ? 'Revoked linked administrator access' : 'Deleted simulator administrator', {
+            adminId,
+            username: existing.username,
+            linkedUserId: existing.linkedUserId || null,
+            replacementAdminId: rep,
+            reassignedCount: result?.reassignedCount || 0,
+          });
+          return sendJson(res, 200, { ok: true, reassignedCount: result?.reassignedCount || 0, preservedCustomerId: existing.linkedUserId || null });
+        }
+        if (hasAssigned) return sendJson(res, 409, { error: 'Reassign this administrator’s customers before deleting the administrator.' });
         deleteAdminAccount(adminId);
-        recordAdminAudit('Deleted simulator administrator', { adminId, username: existing.username });
-        return sendJson(res, 200, { ok: true });
+        recordAdminAudit(existing.linkedUserId ? 'Revoked linked administrator access' : 'Deleted simulator administrator', {
+          adminId,
+          username: existing.username,
+          linkedUserId: existing.linkedUserId || null,
+        });
+        return sendJson(res, 200, { ok: true, reassignedCount: 0, preservedCustomerId: existing.linkedUserId || null });
       }
     }
 
@@ -863,7 +1316,9 @@ async function handleApi(req, res, url) {
           openDisputes: allDisputes.filter((d) => d.status === 'open').length,
           transactions: transactions.length,
         },
-        recentAudit: isSuperAdmin ? getAuditLog(10) : [],
+        recentAudit: isSuperAdmin
+          ? getAuditLog(10)
+          : getAuditLog(5000).filter((entry) => entry.actor === auditActor).slice(0, 10),
         analytics: {
           range,
           cashflow,
@@ -883,19 +1338,21 @@ async function handleApi(req, res, url) {
             (sum, u) => sum + ((u.messages || []).filter((m) => m.sender === 'customer' && !m.readByAdmin).length),
             0
           ),
-          system: {
-            nodeVersion: process.version,
-            platform: `${os.platform()} (${os.arch()})`,
-            uptimeSeconds: Math.round(process.uptime()),
-            rssMb: round2(mem.rss / (1024 * 1024)),
-            heapUsedMb: round2(mem.heapUsed / (1024 * 1024)),
-            memoryMb: {
-              rss: round2(mem.rss / (1024 * 1024)),
-              heapUsed: round2(mem.heapUsed / (1024 * 1024)),
-              heapTotal: round2(mem.heapTotal / (1024 * 1024)),
+          ...(isSuperAdmin ? {
+            system: {
+              nodeVersion: process.version,
+              platform: `${os.platform()} (${os.arch()})`,
+              uptimeSeconds: Math.round(process.uptime()),
+              rssMb: round2(mem.rss / (1024 * 1024)),
+              heapUsedMb: round2(mem.heapUsed / (1024 * 1024)),
+              memoryMb: {
+                rss: round2(mem.rss / (1024 * 1024)),
+                heapUsed: round2(mem.heapUsed / (1024 * 1024)),
+                heapTotal: round2(mem.heapTotal / (1024 * 1024)),
+              },
+              ...dbStats,
             },
-            ...dbStats,
-          },
+          } : {}),
         },
       });
     }
@@ -921,14 +1378,21 @@ async function handleApi(req, res, url) {
     }
 
     if (pathname === '/api/admin/users' && method === 'GET') {
+      const linkedByUserId = isSuperAdmin
+        ? new Map(listAdminAccounts().filter(a => a.linkedUserId).map(a => [a.linkedUserId, a]))
+        : null;
       const users = visibleUsers().map((u) => {
         const accounts = u.accounts || [];
+        const linked = linkedByUserId ? linkedByUserId.get(u.id) : null;
         return {
           id: u.id,
           username: u.username,
           fullName: u.fullName,
           email: u.email,
           ownerAdminId: isSuperAdmin ? u.ownerAdminId || null : undefined,
+          linkedAdminId: isSuperAdmin ? (linked?.id || null) : undefined,
+          linkedAdminRole: isSuperAdmin ? (linked?.role || null) : undefined,
+          linkedAdminStatus: isSuperAdmin ? (linked?.status || null) : undefined,
           status: u.status || 'active',
           creditScore: Number(u.credit?.score ?? u.creditScore ?? 750),
           createdAt: u.createdAt,
@@ -943,7 +1407,9 @@ async function handleApi(req, res, url) {
     }
 
     if (pathname === '/api/admin/audit' && method === 'GET') {
-      const allAudit = isSuperAdmin ? getAuditLog(5000) : [];
+      const allAudit = isSuperAdmin
+        ? getAuditLog(5000)
+        : getAuditLog(5000).filter((entry) => entry.actor === auditActor);
       const offset = Math.max(0, Number(url.searchParams.get('offset')) || 0);
       const requestedLimit = Number(url.searchParams.get('limit')) || 100;
       const limit = Math.max(1, Math.min(5000, requestedLimit));
@@ -952,7 +1418,14 @@ async function handleApi(req, res, url) {
 
     if (pathname === '/api/admin/settings' && method === 'GET') {
       const settings = getSimulatorSettings();
-      if (!isSuperAdmin) delete settings.superAdminReplies;
+      if (!isSuperAdmin) {
+        return sendJson(res, 200, {
+          settings: {
+            allowEnrollment: settings.allowEnrollment,
+            allowCustomerPasswordReset: settings.allowCustomerPasswordReset,
+          },
+        });
+      }
       return sendJson(res, 200, { settings });
     }
 
@@ -962,8 +1435,17 @@ async function handleApi(req, res, url) {
       if (typeof settings.allowEnrollment !== 'boolean' || typeof settings.allowCustomerPasswordReset !== 'boolean') {
         return sendJson(res, 400, { error: 'Provide both simulator access settings as boolean values.' });
       }
-      const saved = updateSimulatorSettings({ allowEnrollment: settings.allowEnrollment, allowCustomerPasswordReset: settings.allowCustomerPasswordReset });
-      recordAdminAudit('Updated simulator access settings', saved);
+      const patch = {
+        allowEnrollment: settings.allowEnrollment,
+        allowCustomerPasswordReset: settings.allowCustomerPasswordReset,
+      };
+      if (settings.rootSupportContact !== undefined) {
+        const contact = validateSupportContact(settings.rootSupportContact);
+        if (!contact) return sendJson(res, 400, { error: 'Provide a valid support email and phone number.' });
+        patch.rootSupportContact = contact;
+      }
+      const saved = updateSimulatorSettings(patch);
+      recordAdminAudit('Updated simulator access settings', patch);
       return sendJson(res, 200, { settings: saved });
     }
 
@@ -1208,11 +1690,14 @@ async function handleApi(req, res, url) {
       if (sub === 'assign-admin' && method === 'PUT') {
         if (!isSuperAdmin) return sendJson(res, 403, { error: 'Super administrator access required.' });
         const body = await readBody(req);
-        const owner = body.adminId === null ? null : listAdminAccounts().find(a => a.id === body.adminId && a.status === 'active' && a.role === 'admin');
-        if (body.adminId !== null && !owner) return sendJson(res, 400, { error: 'Select an active administrator.' });
+        if (body.adminId !== null && findAdminByLinkedUserId(target.id)) {
+          return sendJson(res, 409, { error: 'A linked administrator’s own customer profile must stay assigned to the Super administrator.' });
+        }
+        const owner = body.adminId === null ? null : listAdminAccounts().find(a => a.id === body.adminId && a.status === 'active' && ['admin', 'auditor'].includes(a.role));
+        if (body.adminId !== null && !owner) return sendJson(res, 400, { error: 'Select an active administrator or auditor.' });
         updated.ownerAdminId = owner?.id || null;
         updateUser(updated);
-        recordAdminAudit('Reassigned customer', { userId, previousAdminId: target.ownerAdminId || null, adminId: updated.ownerAdminId });
+        recordAdminAudit('Reassigned customer', { userId, previousAdminId: target.ownerAdminId || null, adminId: updated.ownerAdminId, assignedRole: owner?.role || 'super-admin' });
         return sendJson(res, 200, { user: publicUser(updated) });
       }
 
@@ -1277,25 +1762,95 @@ async function handleApi(req, res, url) {
 
     if (pathname === '/api/admin/backup' && adminSession.role !== 'admin') return sendJson(res, 403, { error: 'Only admin-role accounts may export or restore backups.' });
     if (pathname === '/api/admin/backup' && method === 'GET') {
-      return sendJson(res, 200, { format: 'chase-simulator-backup-v1', createdAt: new Date().toISOString(), users: findAllUsers(), settings: getSimulatorSettings() });
+      const currentSettings = getSimulatorSettings();
+      const users = findAllUsers();
+      const adminAccounts = listAdminAccountsRaw();
+      recordAdminAudit('Exported simulator backup', { usersCount: users.length, adminAccountsCount: adminAccounts.length });
+      return sendJson(res, 200, {
+        format: 'chase-simulator-backup-v1',
+        backupVersion: 2,
+        createdAt: new Date().toISOString(),
+        users,
+        adminAccounts,
+        settings: {
+          allowEnrollment: currentSettings.allowEnrollment,
+          allowCustomerPasswordReset: currentSettings.allowCustomerPasswordReset,
+          rootSupportContact: currentSettings.rootSupportContact,
+        },
+      });
     }
     if (pathname === '/api/admin/backup' && method === 'POST') {
       const body = await readBody(req, 20_000_000);
       if (body.confirmText !== 'RESTORE SIMULATOR BACKUP') return sendJson(res, 400, { error: 'Type RESTORE SIMULATOR BACKUP to confirm.' });
       if (body.format !== 'chase-simulator-backup-v1' || !Array.isArray(body.users) || body.users.length > 5000) return sendJson(res, 400, { error: 'Unsupported or invalid simulator backup file.' });
+
+      const restoreAdmins = body.restoreAdmins === true && Array.isArray(body.adminAccounts);
       const seenUsers = new Set();
+      const userIdSet = new Set();
+      const userById = new Map();
       const validUsers = body.users.every((user) => {
         const username = String(user?.username || '').trim().toLowerCase();
-        if (!user || typeof user.id !== 'string' || !/^[a-z0-9._-]{4,32}$/.test(username) || !Array.isArray(user.accounts) || typeof user.passwordHash !== 'string' || !user.passwordHash.includes(':') || seenUsers.has(username) || username === CHASE_ADMIN_USERNAME.toLowerCase()) return false;
+        if (!user || typeof user.id !== 'string' || !user.id.trim() || userIdSet.has(user.id) || !/^[a-z0-9._-]{4,32}$/.test(username) || !Array.isArray(user.accounts) || typeof user.passwordHash !== 'string' || !user.passwordHash.includes(':') || seenUsers.has(username) || username === CHASE_ADMIN_USERNAME.toLowerCase()) return false;
         seenUsers.add(username);
+        userIdSet.add(user.id);
+        userById.set(user.id, user);
         return user.accounts.every((account) => account && typeof account.id === 'string' && ['checking', 'savings', 'credit-card', 'cd', 'auto-loan', 'mortgage'].includes(account.type) && Number.isFinite(Number(account.balance)) && Array.isArray(account.transactions || []));
       });
       if (!validUsers) return sendJson(res, 400, { error: 'Backup contains invalid, duplicate, or incomplete user records.' });
-      if (listAdminAccounts().some(a => a.linkedUserId)) return sendJson(res, 409, { error: 'Remove linked administrator access before restoring a backup.' });
-      resetUsers(body.users);
-      if (body.settings && typeof body.settings.allowEnrollment === 'boolean' && typeof body.settings.allowCustomerPasswordReset === 'boolean') updateSimulatorSettings(body.settings);
-      recordAdminAudit('Restored simulator backup', { usersRestored: body.users.length });
-      return sendJson(res, 200, { ok: true, usersRestored: body.users.length });
+
+      let validatedAdmins = null;
+      if (restoreAdmins) {
+        if (body.adminAccounts.length > 500) return sendJson(res, 400, { error: 'Backup contains too many staff administrator accounts.' });
+        const seenAdminIds = new Set();
+        const seenAdminUsernames = new Set();
+        const seenLinkedUserIds = new Set();
+        const validAdmins = body.adminAccounts.every((admin) => {
+          const uname = String(admin?.username || '').trim().toLowerCase();
+          if (!admin || typeof admin.id !== 'string' || !admin.id.trim() || admin.id === '__root__' || seenAdminIds.has(admin.id)) return false;
+          if (!/^[a-z0-9._-]{4,32}$/.test(uname) || uname === CHASE_ADMIN_USERNAME.toLowerCase() || seenAdminUsernames.has(uname)) return false;
+          if (!['admin', 'auditor'].includes(admin.role) || !['active', 'disabled'].includes(admin.status)) return false;
+          if (typeof admin.passwordHash !== 'string' || !admin.passwordHash.includes(':')) return false;
+          if (admin.linkedUserId) {
+            const linked = userById.get(admin.linkedUserId);
+            if (!linked || seenLinkedUserIds.has(admin.linkedUserId) || linked.username.toLowerCase() !== uname) return false;
+            seenLinkedUserIds.add(admin.linkedUserId);
+          } else if (seenUsers.has(uname)) {
+            return false;
+          }
+          seenAdminIds.add(admin.id);
+          seenAdminUsernames.add(uname);
+          return true;
+        });
+        if (!validAdmins) return sendJson(res, 400, { error: 'Backup contains invalid, conflicting, or broken staff administrator records.' });
+        validatedAdmins = body.adminAccounts;
+      } else {
+        const currentAdmins = listAdminAccounts();
+        if (currentAdmins.some(a => a.linkedUserId)) return sendJson(res, 409, { error: 'Remove linked administrator access before restoring a users-only backup, or enable restoring staff accounts from a full backup.' });
+        const adminUsernameSet = new Set(currentAdmins.map(a => a.username.toLowerCase()));
+        if (body.users.some(u => adminUsernameSet.has(String(u.username || '').trim().toLowerCase()))) {
+          return sendJson(res, 409, { error: 'One or more restored customer usernames collide with existing staff administrator usernames.' });
+        }
+      }
+
+      const activeAdminIds = new Set((validatedAdmins || listAdminAccounts()).map(a => a.id));
+      const sanitizedUsers = body.users.map((u) => ({
+        ...u,
+        ownerAdminId: u.ownerAdminId && activeAdminIds.has(u.ownerAdminId) ? u.ownerAdminId : null,
+      }));
+
+      let safeSettings = null;
+      if (body.settings && typeof body.settings.allowEnrollment === 'boolean' && typeof body.settings.allowCustomerPasswordReset === 'boolean') {
+        const contact = body.settings.rootSupportContact ? validateSupportContact(body.settings.rootSupportContact) : null;
+        safeSettings = {
+          allowEnrollment: body.settings.allowEnrollment,
+          allowCustomerPasswordReset: body.settings.allowCustomerPasswordReset,
+          ...(contact ? { rootSupportContact: contact } : {}),
+        };
+      }
+
+      restoreBackupAtomic({ users: sanitizedUsers, settings: safeSettings, adminAccounts: validatedAdmins });
+      recordAdminAudit('Restored simulator backup', { usersRestored: sanitizedUsers.length, adminsRestored: validatedAdmins ? validatedAdmins.length : 0 });
+      return sendJson(res, 200, { ok: true, usersRestored: sanitizedUsers.length, adminsRestored: validatedAdmins ? validatedAdmins.length : 0 });
     }
 
     if (pathname === '/api/admin/users/bulk' && method === 'POST') {
@@ -1305,6 +1860,9 @@ async function handleApi(req, res, url) {
       if (body.action === 'delete' && body.confirmText !== 'DELETE SELECTED USERS') return sendJson(res, 400, { error: 'Type DELETE SELECTED USERS to confirm.' });
       const targets = ids.map(findUserById).filter(Boolean);
       if (targets.length !== ids.length) return sendJson(res, 404, { error: 'One or more selected users no longer exist.' });
+      if (!isSuperAdmin && targets.some(u => u.ownerAdminId !== operator.id)) {
+        return sendJson(res, 404, { error: 'One or more selected users were not found in your assigned scope.' });
+      }
       if (body.action === 'delete' && targets.some(u => listAdminAccounts().some(a => a.linkedUserId === u.id))) return sendJson(res, 409, { error: 'Remove linked administrator access before deleting these customers.' });
       for (const target of targets) {
         if (body.action === 'delete') deleteUserById(target.id);
@@ -1329,14 +1887,20 @@ async function handleApi(req, res, url) {
       if (password.length < 8) return sendJson(res, 400, { error: 'Temporary password must be at least 8 characters.' });
       if (fullName.length < 2 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return sendJson(res, 400, { error: 'Enter a full name and valid email address.' });
       if (findAdminByUsername(username) || findAllUsers().some((u) => u.username.toLowerCase() === username.toLowerCase())) return sendJson(res, 409, { error: 'That username is already in use.' });
+      let ownerAdminId = isSuperAdmin ? null : operator.id;
+      if (isSuperAdmin && body.ownerAdminId !== undefined && body.ownerAdminId !== null && body.ownerAdminId !== '') {
+        const assigned = listAdminAccounts().find(a => a.id === String(body.ownerAdminId) && a.status === 'active' && ['admin', 'auditor'].includes(a.role));
+        if (!assigned) return sendJson(res, 400, { error: 'Select an active administrator or auditor as owner.' });
+        ownerAdminId = assigned.id;
+      }
       const sampleUser = {
         id: uid(), username, fullName, email, passwordHash: hashPassword(password),
-        status: 'active', adminCreated: true, ownerAdminId: isSuperAdmin ? null : operator.id,
+        status: 'active', adminCreated: true, ownerAdminId,
         accounts: [], payees: [], scheduledPayments: [], disputes: [], messages: [],
         travelNotices: [], travelBookings: [], createdAt: new Date().toISOString(),
       };
       insertUser(sampleUser);
-      recordAdminAudit('Created simulator user', { userId: sampleUser.id, username });
+      recordAdminAudit('Created simulator user', { userId: sampleUser.id, username, ownerAdminId });
       return sendJson(res, 201, { user: publicUser(sampleUser) });
     }
 
@@ -1707,20 +2271,22 @@ async function handleApi(req, res, url) {
         const body = await readBody(req);
         if (body.confirm !== true) return sendJson(res, 400, { error: 'Confirm promotion to administrator.' });
         if (target.status !== 'active') return sendJson(res, 400, { error: 'Only active customers can be promoted.' });
+        const role = body.role !== undefined ? body.role : 'admin';
+        if (!['admin', 'auditor'].includes(role)) return sendJson(res, 400, { error: 'Role must be admin or auditor.' });
         if (!/^[a-zA-Z0-9._-]{4,32}$/.test(target.username) || target.username.toLowerCase() === CHASE_ADMIN_USERNAME.toLowerCase() || findAdminByUsername(target.username) || listAdminAccounts().some(a => a.linkedUserId === target.id)) return sendJson(res, 409, { error: 'This customer cannot be promoted because the username or account is already in use.' });
-        const admin = { id: uid(), username: target.username, fullName: target.fullName, role: 'admin', status: 'active', linkedUserId: target.id, passwordHash: target.passwordHash, createdAt: new Date().toISOString() };
+        const admin = { id: uid(), username: target.username, fullName: target.fullName, role, status: 'active', linkedUserId: target.id, passwordHash: target.passwordHash, createdAt: new Date().toISOString() };
         promoteCustomerToAdmin(target.id, admin);
-        recordAdminAudit('Promoted test customer to administrator', { userId: target.id, adminId: admin.id, username: target.username });
+        recordAdminAudit('Promoted test customer to administrator', { userId: target.id, adminId: admin.id, username: target.username, role });
         const { passwordHash, ...safeAdmin } = admin;
-        return sendJson(res, 201, { admin: safeAdmin });
+        return sendJson(res, 201, { admin: { ...safeAdmin, permissions: normalizePermissions(safeAdmin.permissions), capabilities: normalizeCapabilities(safeAdmin.capabilities) } });
       }
 
       if (!action && method === 'GET') return sendJson(res, 200, { user: publicUser(target) });
 
       if (action === 'revoke-sessions' && method === 'POST') {
-        deleteSessionsForUser(target.id);
-        recordAdminAudit('Revoked simulator user sessions', { userId: target.id, username: target.username });
-        return sendJson(res, 200, { ok: true });
+        const revokedLinkedAdmin = revokeAllSessionsForUserAndLinkedAdmin(target.id);
+        recordAdminAudit('Revoked simulator user sessions', { userId: target.id, username: target.username, revokedLinkedAdmin });
+        return sendJson(res, 200, { ok: true, revokedLinkedAdmin });
       }
 
       if (action === 'generate-transactions' && method === 'POST') {
@@ -1951,11 +2517,13 @@ async function handleApi(req, res, url) {
         const body = await readBody(req);
         if (body.confirm !== true) return sendJson(res, 400, { error: 'Confirm this password reset.' });
         const password = String(body.password || '');
-        if (password.length < 8) return sendJson(res, 400, { error: 'Password must be at least 8 characters.' });
+        const hasLinkedAdmin = Boolean(findAdminByLinkedUserId(target.id));
+        const minLen = hasLinkedAdmin ? 10 : 8;
+        if (password.length < minLen) return sendJson(res, 400, { error: `Password must be at least ${minLen} characters${hasLinkedAdmin ? ' for a linked administrator account' : ''}.` });
         const updated = { ...target, passwordHash: hashPassword(password) };
         updateUser(updated);
         deleteSessionsForUser(target.id);
-        recordAdminAudit('Reset simulator user password', { userId: target.id, username: target.username });
+        recordAdminAudit('Reset simulator user password', { userId: target.id, username: target.username, linkedAdmin: hasLinkedAdmin });
         return sendJson(res, 200, { ok: true });
       }
 
@@ -2023,7 +2591,37 @@ async function handleApi(req, res, url) {
   if (!user) return sendJson(res, 401, { error: 'Not signed in' });
 
   if (pathname === '/api/auth/me' && method === 'GET') {
-    return sendJson(res, 200, { user: publicUser(user), token: resolvedAuth.token });
+    const linkedAdmin = resolvedAuth.sessionRole === 'impersonated' ? null : buildLinkedAdminSummary(user.id);
+    return sendJson(res, 200, { user: publicUser(user), token: resolvedAuth.token, ...(linkedAdmin ? { linkedAdmin } : {}) });
+  }
+
+  if (pathname === '/api/auth/switch-to-admin' && method === 'POST') {
+    if (resolvedAuth.sessionRole === 'impersonated') {
+      return sendJson(res, 403, { error: 'Cannot switch to administrator console from an impersonated customer preview.' });
+    }
+    const linked = findAdminByLinkedUserId(user.id);
+    if (!linked) return sendJson(res, 403, { error: 'This customer account does not have administrator access.' });
+    if (linked.status === 'disabled') {
+      return sendJson(res, 403, { error: linked.lockMessage || 'This administrator account is disabled. Contact the super administrator.' });
+    }
+    if (linked.username.toLowerCase() !== user.username.toLowerCase() || linked.passwordHash !== user.passwordHash) {
+      return sendJson(res, 403, { error: 'Linked administrator credentials are out of sync. Sign in again or contact the super administrator.' });
+    }
+    const token = createAdminToken(linked.username, linked.role);
+    createSession(token, `admin:${linked.username}`, linked.role);
+    auditAdmin('Switched from customer view to admin console', { userId: user.id, adminId: linked.id, username: linked.username, role: linked.role }, linked.username);
+    return sendJson(res, 200, {
+      token,
+      admin: {
+        username: linked.username,
+        label: linked.fullName,
+        role: linked.role,
+        isSuperAdmin: false,
+        permissions: normalizePermissions(linked.permissions),
+        capabilities: normalizeCapabilities(linked.capabilities),
+        linkedUserId: linked.linkedUserId,
+      },
+    }, sessionCookieHeader(req, token, linked.role));
   }
 
   if (pathname === '/api/auth/change-password' && method === 'POST') {
@@ -2031,10 +2629,15 @@ async function handleApi(req, res, url) {
     if (!verifyPassword(String(body.currentPassword || ''), user.passwordHash)) {
       return sendJson(res, 400, { error: 'Your current password is incorrect.' });
     }
-    if (String(body.newPassword || '').length < 8) {
-      return sendJson(res, 400, { error: 'New password must be at least 8 characters.' });
+    const linkedAdmin = findAdminByLinkedUserId(user.id);
+    const minLen = linkedAdmin ? 10 : 8;
+    if (String(body.newPassword || '').length < minLen) {
+      return sendJson(res, 400, { error: `New password must be at least ${minLen} characters${linkedAdmin ? ' because this account has linked administrator access' : ''}.` });
     }
-    updateUser({ ...user, passwordHash: hashPassword(String(body.newPassword)) });
+    updateUser({ ...user, passwordHash: hashPassword(String(body.newPassword)) }, { preserveToken: resolvedAuth.token });
+    if (linkedAdmin) {
+      auditAdmin('Linked customer changed shared password', { userId: user.id, adminId: linkedAdmin.id, username: user.username }, user.username);
+    }
     return sendJson(res, 200, { ok: true });
   }
 
@@ -2841,8 +3444,12 @@ async function handleApi(req, res, url) {
   }
 
   if (pathname === '/api/messages' && method === 'GET') {
-    const owner = user.ownerAdminId ? listAdminAccounts().find(a => a.id === user.ownerAdminId) : null;
-    return sendJson(res, 200, { messages: user.messages || [], supportContact: owner?.supportContact || null });
+    const owner = user.ownerAdminId
+      ? listAdminAccounts().find(a => a.id === user.ownerAdminId && a.status === 'active')
+      : null;
+    const ownerContact = formatSupportContactOrNull(owner?.supportContact);
+    const rootContact = formatSupportContactOrNull(getSimulatorSettings().rootSupportContact);
+    return sendJson(res, 200, { messages: user.messages || [], supportContact: ownerContact || (!owner ? rootContact : null) });
   }
 
   if (pathname === '/api/messages' && method === 'POST') {

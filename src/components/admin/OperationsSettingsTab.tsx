@@ -14,7 +14,9 @@ import {
   Globe,
   HardDrive,
   KeyRound,
+  Link2,
   LockKeyhole,
+  LogOut,
   Pause,
   Pencil,
   Play,
@@ -26,9 +28,11 @@ import {
   Server,
   ShieldAlert,
   ShieldCheck,
+  SlidersHorizontal,
   Trash2,
   Upload,
   UserPlus,
+  Users,
   XCircle,
 } from 'lucide-react';
 import { ZelleLogo } from '../ChaseAssets';
@@ -56,8 +60,10 @@ import {
 } from './ui';
 import {
   AdminAccountRow,
+  AdminCapabilities,
   AdminUserRow,
   AuditEntry,
+  DEFAULT_ADMIN_CAPABILITIES,
   GlobalDispute,
   OverviewAnalytics,
   SimulatorSettings,
@@ -72,6 +78,7 @@ interface OperationsProps {
   selectedUser: User | null;
   globalDisputes: GlobalDispute[];
   isReadOnly: boolean;
+  isSuperAdmin?: boolean;
   busy: boolean;
   onSelectUser: (id: string) => void;
   onTransfer: (payload: {
@@ -144,6 +151,7 @@ export const OperationsTab: React.FC<OperationsProps> = ({
   selectedUser,
   globalDisputes,
   isReadOnly,
+  isSuperAdmin = false,
   busy,
   onSelectUser,
   onTransfer,
@@ -274,58 +282,60 @@ export const OperationsTab: React.FC<OperationsProps> = ({
         </SelectInput>
       </Card>
 
-      {/* Batch Engine: Executable Scheduled Payments & Month-End Statement Close */}
-      <Card className="p-5 border-t-[3px] border-t-[#117ACA]">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div>
-            <div className="flex items-center gap-2">
-              <h3 className="text-[15.5px] font-semibold text-gray-900 dark:text-white">
-                Batch Scheduled Processing &amp; Month-End Statement Close Engine
-              </h3>
-              <Badge tone="primary">Live Core Engine</Badge>
+      {/* Batch Engine: Executable Scheduled Payments & Month-End Statement Close (Super Admin only) */}
+      {isSuperAdmin && (
+        <Card className="p-5 border-t-[3px] border-t-[#117ACA]">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2">
+                <h3 className="text-[15.5px] font-semibold text-gray-900 dark:text-white">
+                  Batch Scheduled Processing &amp; Month-End Statement Close Engine
+                </h3>
+                <Badge tone="primary">Super Admin Engine</Badge>
+              </div>
+              <p className="mt-0.5 text-[12px] text-gray-500 dark:text-gray-400">
+                Execute due or upcoming scheduled bills/transfers onto account ledgers, credit monthly Savings &amp; CD APY interest, cut credit-card statement balances, and award Ultimate Rewards® points.
+              </p>
             </div>
-            <p className="mt-0.5 text-[12px] text-gray-500 dark:text-gray-400">
-              Execute due or upcoming scheduled bills/transfers onto account ledgers, credit monthly Savings &amp; CD APY interest, cut credit-card statement balances, and award Ultimate Rewards® points.
-            </p>
+            {!isReadOnly && (
+              <div className="flex flex-wrap items-center gap-2">
+                {selectedUser && onProcessScheduled && (
+                  <Btn
+                    variant="secondary"
+                    size="sm"
+                    disabled={busy}
+                    onClick={() =>
+                      void onProcessScheduled({ userId: selectedUser.id, forceAll: true })
+                    }
+                  >
+                    <Play className="w-3.5 h-3.5 text-[#12B76A]" /> Execute {selectedUser.fullName.split(' ')[0]}&apos;s Schedules
+                  </Btn>
+                )}
+                {selectedUser && onRunMonthEndClose && (
+                  <Btn
+                    variant="secondary"
+                    size="sm"
+                    disabled={busy}
+                    onClick={() => void onRunMonthEndClose({ userId: selectedUser.id })}
+                  >
+                    <RefreshCw className="w-3.5 h-3.5 text-[#117ACA]" /> Month-End Close ({selectedUser.fullName.split(' ')[0]})
+                  </Btn>
+                )}
+                {onRunMonthEndClose && (
+                  <Btn
+                    variant="primary"
+                    size="sm"
+                    disabled={busy}
+                    onClick={() => void onRunMonthEndClose({})}
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" /> Bank-Wide Month-End Close
+                  </Btn>
+                )}
+              </div>
+            )}
           </div>
-          {!isReadOnly && (
-            <div className="flex flex-wrap items-center gap-2">
-              {selectedUser && onProcessScheduled && (
-                <Btn
-                  variant="secondary"
-                  size="sm"
-                  disabled={busy}
-                  onClick={() =>
-                    void onProcessScheduled({ userId: selectedUser.id, forceAll: true })
-                  }
-                >
-                  <Play className="w-3.5 h-3.5 text-[#12B76A]" /> Execute {selectedUser.fullName.split(' ')[0]}&apos;s Schedules
-                </Btn>
-              )}
-              {selectedUser && onRunMonthEndClose && (
-                <Btn
-                  variant="secondary"
-                  size="sm"
-                  disabled={busy}
-                  onClick={() => void onRunMonthEndClose({ userId: selectedUser.id })}
-                >
-                  <RefreshCw className="w-3.5 h-3.5 text-[#117ACA]" /> Month-End Close ({selectedUser.fullName.split(' ')[0]})
-                </Btn>
-              )}
-              {onRunMonthEndClose && (
-                <Btn
-                  variant="primary"
-                  size="sm"
-                  disabled={busy}
-                  onClick={() => void onRunMonthEndClose({})}
-                >
-                  <RefreshCw className="w-3.5 h-3.5" /> Bank-Wide Month-End Close
-                </Btn>
-              )}
-            </div>
-          )}
-        </div>
-      </Card>
+        </Card>
+      )}
 
       {/* Row 0: Zelle®, Wire Transfers & QuickDeposit℠ Check Deposit (matching Customer Pay & Transfer) */}
       <Card className="p-5 border-t-[3px] border-t-[#1A4488]">
@@ -884,7 +894,7 @@ export const OperationsTab: React.FC<OperationsProps> = ({
                     {!isReadOnly && (
                       <Td className="text-right">
                         <div className="inline-flex items-center gap-1">
-                          {sp.status === 'scheduled' && onProcessScheduled && selectedUser && (
+                          {sp.status === 'scheduled' && isSuperAdmin && onProcessScheduled && selectedUser && (
                             <Btn
                               variant="secondary"
                               size="xs"
@@ -1274,7 +1284,10 @@ export const OperationsTab: React.FC<OperationsProps> = ({
 
 /* ============================== 2. AUDIT LOG TAB =========================== */
 
-export const AuditTab: React.FC<{ audit: AuditEntry[] }> = ({ audit }) => {
+export const AuditTab: React.FC<{ audit: AuditEntry[]; isSuperAdmin?: boolean }> = ({
+  audit,
+  isSuperAdmin = true,
+}) => {
   const [query, setQuery] = useState('');
   const [page, setPage] = useState(1);
   const pageSize = 30;
@@ -1297,10 +1310,14 @@ export const AuditTab: React.FC<{ audit: AuditEntry[] }> = ({ audit }) => {
       <div className="p-4 border-b border-gray-200 dark:border-gray-800 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h3 className="text-[15.5px] font-semibold text-gray-900 dark:text-white">
-            Immutable Administrator Audit Trail ({filtered.length.toLocaleString()})
+            {isSuperAdmin
+              ? `Immutable Administrator Audit Trail (${filtered.length.toLocaleString()})`
+              : `Your Activity Audit Trail (${filtered.length.toLocaleString()})`}
           </h3>
           <p className="text-[12px] text-gray-500 dark:text-gray-400">
-            Retains up to 5,000 administrative mutations, logins, backups, and impersonation sessions
+            {isSuperAdmin
+              ? 'Retains up to 5,000 administrative mutations, logins, failed attempts, backups, and impersonation sessions'
+              : 'Shows administrative actions and sign-ins recorded under your operator identity'}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -1388,6 +1405,7 @@ interface SettingsProps {
   onChangeSettings: (s: SimulatorSettings) => void;
   onSaveSettings: () => Promise<void>;
   adminAccounts: AdminAccountRow[];
+  users: AdminUserRow[];
   currentAdminUsername: string;
   isReadOnly: boolean;
   busy: boolean;
@@ -1397,23 +1415,56 @@ interface SettingsProps {
     fullName: string;
     password: string;
     role: 'admin' | 'auditor';
+    createCustomerProfile?: boolean;
+    email?: string;
   }) => Promise<boolean>;
   onUpdateAdmin: (
     admin: AdminAccountRow,
-    patch: { supportContact?: { email: string; phone: string }; username?: string; fullName?: string; lockMessage?: string; role?: 'admin' | 'auditor'; status?: 'active' | 'disabled'; password?: string; permissions?: { createUsers: boolean; generateActivity: boolean; sendMessages: boolean } }
+    patch: {
+      supportContact?: { email: string; phone: string };
+      username?: string;
+      fullName?: string;
+      lockMessage?: string;
+      role?: 'admin' | 'auditor';
+      status?: 'active' | 'disabled';
+      password?: string;
+      permissions?: { createUsers: boolean; generateActivity: boolean; sendMessages: boolean };
+      capabilities?: AdminCapabilities;
+      replacementAdminId?: string | null;
+    }
   ) => Promise<boolean>;
-  onDeleteAdmin: (admin: AdminAccountRow) => Promise<void>;
+  onDeleteAdmin: (admin: AdminAccountRow, replacementAdminId?: string | null) => Promise<boolean>;
+  onLinkCustomer: (
+    admin: AdminAccountRow,
+    payload:
+      | { mode: 'create'; email: string }
+      | { mode: 'existing'; userId: string; passwordSource: 'admin' | 'customer' }
+  ) => Promise<boolean>;
+  onReassignCustomers: (admin: AdminAccountRow, replacementAdminId: string | null) => Promise<boolean>;
+  onInspectAdminCustomers: (adminId: string) => void;
+  onOpenLinkedCustomer: (userId: string) => void;
   onChangeOwnPassword: (currentPassword: string, newPassword: string) => Promise<boolean>;
+  onRevokeSuperAdminSessions: () => Promise<void>;
   onDownloadBackup: () => Promise<void>;
-  onRestoreBackup: (file: File, confirmText: string) => Promise<boolean>;
+  onRestoreBackup: (file: File, confirmText: string, restoreAdmins: boolean) => Promise<boolean>;
   onResetSimulator: (confirmText: string) => Promise<boolean>;
 }
+
+const CAPABILITY_LABELS: { key: keyof AdminCapabilities; label: string; detail: string }[] = [
+  { key: 'manageAccounts', label: 'Accounts & payments', detail: 'Create/edit/lock accounts, transfers, payees, and schedules' },
+  { key: 'editLedger', label: 'Edit ledger entries', detail: 'Add, edit, and delete individual account transactions' },
+  { key: 'impersonateUsers', label: 'Preview as customer', detail: 'Open customer impersonation sessions' },
+  { key: 'manageCustomerAccess', label: 'Customer profile & access', detail: 'Edit profiles/JSON, reset passwords, suspend, bulk-manage, delete' },
+  { key: 'manageDisputes', label: 'Disputes & refunds', detail: 'Open/update card disputes and issue simulated refunds' },
+  { key: 'publishNotices', label: 'Dashboard notices', detail: 'Publish or clear custom customer dashboard banners' },
+];
 
 export const SettingsTab: React.FC<SettingsProps> = ({
   settings,
   onChangeSettings,
   onSaveSettings,
   adminAccounts,
+  users,
   currentAdminUsername,
   isReadOnly,
   busy,
@@ -1421,7 +1472,12 @@ export const SettingsTab: React.FC<SettingsProps> = ({
   onCreateAdmin,
   onUpdateAdmin,
   onDeleteAdmin,
+  onLinkCustomer,
+  onReassignCustomers,
+  onInspectAdminCustomers,
+  onOpenLinkedCustomer,
   onChangeOwnPassword,
+  onRevokeSuperAdminSessions,
   onDownloadBackup,
   onRestoreBackup,
   onResetSimulator,
@@ -1429,7 +1485,9 @@ export const SettingsTab: React.FC<SettingsProps> = ({
   const [staffUser, setStaffUser] = useState('');
   const [staffName, setStaffName] = useState('');
   const [staffPwd, setStaffPwd] = useState('');
-  const [staffRole, setStaffRole] = useState<'admin' | 'auditor'>('auditor');
+  const [staffRole, setStaffRole] = useState<'admin' | 'auditor'>('admin');
+  const [createLinkedCustomer, setCreateLinkedCustomer] = useState(true);
+  const [staffEmail, setStaffEmail] = useState('');
 
   // Modals
   const [ownPwdOpen, setOwnPwdOpen] = useState(false);
@@ -1442,14 +1500,32 @@ export const SettingsTab: React.FC<SettingsProps> = ({
   const [editUsername, setEditUsername] = useState('');
   const [editName, setEditName] = useState('');
   const [lockStaff, setLockStaff] = useState<AdminAccountRow | null>(null);
+  const [lockMode, setLockMode] = useState<'disable' | 'edit'>('disable');
   const [lockMessage, setLockMessage] = useState('');
+  const [lockReassignChoice, setLockReassignChoice] = useState<'keep' | string>('keep');
   const [supportStaff, setSupportStaff] = useState<AdminAccountRow | null>(null);
   const [supportEmail, setSupportEmail] = useState('');
   const [supportPhone, setSupportPhone] = useState('');
 
+  const [capStaff, setCapStaff] = useState<AdminAccountRow | null>(null);
+  const [capDraft, setCapDraft] = useState<AdminCapabilities>(DEFAULT_ADMIN_CAPABILITIES);
+
+  const [deleteStaffTarget, setDeleteStaffTarget] = useState<AdminAccountRow | null>(null);
+  const [deleteReplacementId, setDeleteReplacementId] = useState('');
+
+  const [reassignStaffTarget, setReassignStaffTarget] = useState<AdminAccountRow | null>(null);
+  const [reassignReplacementId, setReassignReplacementId] = useState('');
+
+  const [linkStaffTarget, setLinkStaffTarget] = useState<AdminAccountRow | null>(null);
+  const [linkMode, setLinkMode] = useState<'create' | 'existing'>('create');
+  const [linkEmail, setLinkEmail] = useState('');
+  const [linkExistingUserId, setLinkExistingUserId] = useState('');
+  const [linkPasswordSource, setLinkPasswordSource] = useState<'admin' | 'customer'>('admin');
+
   const [backupFile, setBackupFile] = useState<File | null>(null);
   const [restoreOpen, setRestoreOpen] = useState(false);
   const [restoreConfirm, setRestoreConfirm] = useState('');
+  const [restoreAdmins, setRestoreAdmins] = useState(false);
 
   const [resetSimOpen, setResetSimOpen] = useState(false);
   const [resetSimConfirm, setResetSimConfirm] = useState('');
@@ -1457,6 +1533,16 @@ export const SettingsTab: React.FC<SettingsProps> = ({
   const isRootProtected = adminAccounts.some(
     (a) => a.protected && a.username.toLowerCase() === currentAdminUsername.toLowerCase()
   );
+
+  const unlinkedActiveCustomers = useMemo(
+    () => users.filter((u) => u.status === 'active' && !u.linkedAdminId),
+    [users]
+  );
+
+  const replacementChoicesFor = (excludeAdminId?: string) =>
+    adminAccounts.filter(
+      (a) => !a.protected && a.status === 'active' && a.role === 'admin' && a.id !== excludeAdminId
+    );
 
   return (
     <div className="space-y-5">
@@ -1521,12 +1607,25 @@ export const SettingsTab: React.FC<SettingsProps> = ({
           </div>
         </Card>
 
-        {/* System Telemetry */}
+        {/* System Telemetry & Session Security */}
         <Card className="xl:col-span-6 p-5">
           <CardHeader
-            title="Environment & Runtime Telemetry"
-            subtitle="Live Node.js process health, session counts & test storage footprint"
-            action={<Badge tone="success">Test Environment Only</Badge>}
+            title="Environment, Runtime Telemetry & Sessions"
+            subtitle="Live Node.js process health, session counts & root session revocation"
+            action={
+              !isReadOnly && (
+                <Btn
+                  variant="secondary"
+                  size="xs"
+                  disabled={busy}
+                  onClick={() => void onRevokeSuperAdminSessions()}
+                  title="Invalidate all other active Super Admin tokens across devices"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                  Sign Out Other Sessions
+                </Btn>
+              )
+            }
           />
           <div className="mt-4 grid grid-cols-2 sm:grid-cols-3 gap-3 text-[12.5px]">
             <div className="rounded-xl bg-gray-50 dark:bg-white/[0.04] p-3">
@@ -1577,7 +1676,7 @@ export const SettingsTab: React.FC<SettingsProps> = ({
               <p className="mt-1 font-bold text-gray-900 dark:text-white">
                 {system?.activeAdminSessions ?? 1}
               </p>
-              <p className="text-[11px] text-gray-400">HMAC + DB verified</p>
+              <p className="text-[11px] text-gray-400">8h HMAC + DB verified</p>
             </div>
             <div className="rounded-xl bg-gray-50 dark:bg-white/[0.04] p-3">
               <p className="text-gray-500 flex items-center gap-1.5">
@@ -1596,7 +1695,7 @@ export const SettingsTab: React.FC<SettingsProps> = ({
       <Card className="p-5">
         <CardHeader
           title="Administrator & Read-Only Auditor Staff Accounts"
-          subtitle="Admins manage their assigned customers; auditors have read-only access to their assigned customers"
+          subtitle="Limited admins manage their assigned customers; auditors have read-only access to their assigned customers; linked staff share one login with personal banking"
           action={
             !isRootProtected && (
               <Btn variant="secondary" size="xs" onClick={() => setOwnPwdOpen(true)}>
@@ -1615,67 +1714,91 @@ export const SettingsTab: React.FC<SettingsProps> = ({
                 fullName: staffName.trim(),
                 password: staffPwd,
                 role: staffRole,
+                createCustomerProfile: createLinkedCustomer,
+                email: createLinkedCustomer ? staffEmail.trim() : undefined,
               });
               if (ok) {
                 setStaffUser('');
                 setStaffName('');
                 setStaffPwd('');
+                setStaffEmail('');
               }
             }}
-            className="mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5 items-end"
+            className="mt-4 space-y-3 rounded-xl border border-gray-200 dark:border-gray-800 bg-gray-50/60 dark:bg-white/[0.02] p-4"
           >
-            <label className="block">
-              <span className="block text-[11px] font-medium text-gray-600 dark:text-gray-300 mb-1">
-                Staff Username
-              </span>
-              <TextInput
-                placeholder="compliance.jane"
-                value={staffUser}
-                onChange={(e) => setStaffUser(e.target.value)}
-                minLength={4}
-                required
-              />
-            </label>
-            <label className="block">
-              <span className="block text-[11px] font-medium text-gray-600 dark:text-gray-300 mb-1">
-                Full Name
-              </span>
-              <TextInput
-                placeholder="Jane Doe"
-                value={staffName}
-                onChange={(e) => setStaffName(e.target.value)}
-                required
-              />
-            </label>
-            <label className="block">
-              <span className="block text-[11px] font-medium text-gray-600 dark:text-gray-300 mb-1">
-                Initial Password (10+ chars)
-              </span>
-              <TextInput
-                type="password"
-                placeholder="••••••••••"
-                value={staffPwd}
-                onChange={(e) => setStaffPwd(e.target.value)}
-                minLength={10}
-                required
-              />
-            </label>
-            <label className="block">
-              <span className="block text-[11px] font-medium text-gray-600 dark:text-gray-300 mb-1">
-                Role
-              </span>
-              <SelectInput
-                value={staffRole}
-                onChange={(e) => setStaffRole(e.target.value as 'admin' | 'auditor')}
-                className="w-full"
-              >
-                <option value="auditor">Read-only Auditor</option>
-                <option value="admin">Full Administrator</option>
-              </SelectInput>
-            </label>
-            <Btn type="submit" variant="primary" disabled={busy}>
-              <UserPlus className="w-4 h-4" /> Add Staff Account
-            </Btn>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5 items-end">
+              <label className="block">
+                <span className="block text-[11px] font-medium text-gray-600 dark:text-gray-300 mb-1">
+                  Staff Username
+                </span>
+                <TextInput
+                  placeholder="compliance.jane"
+                  value={staffUser}
+                  onChange={(e) => setStaffUser(e.target.value)}
+                  minLength={4}
+                  required
+                />
+              </label>
+              <label className="block">
+                <span className="block text-[11px] font-medium text-gray-600 dark:text-gray-300 mb-1">
+                  Full Name
+                </span>
+                <TextInput
+                  placeholder="Jane Doe"
+                  value={staffName}
+                  onChange={(e) => setStaffName(e.target.value)}
+                  required
+                />
+              </label>
+              <label className="block">
+                <span className="block text-[11px] font-medium text-gray-600 dark:text-gray-300 mb-1">
+                  Initial Password (10+ chars)
+                </span>
+                <TextInput
+                  type="password"
+                  placeholder="••••••••••"
+                  value={staffPwd}
+                  onChange={(e) => setStaffPwd(e.target.value)}
+                  minLength={10}
+                  required
+                />
+              </label>
+              <label className="block">
+                <span className="block text-[11px] font-medium text-gray-600 dark:text-gray-300 mb-1">
+                  Role
+                </span>
+                <SelectInput
+                  value={staffRole}
+                  onChange={(e) => setStaffRole(e.target.value as 'admin' | 'auditor')}
+                  className="w-full"
+                >
+                  <option value="admin">Limited Administrator</option>
+                  <option value="auditor">Read-only Auditor</option>
+                </SelectInput>
+              </label>
+              <Btn type="submit" variant="primary" disabled={busy}>
+                <UserPlus className="w-4 h-4" /> Add Staff Account
+              </Btn>
+            </div>
+            <div className="flex flex-wrap items-center gap-4 pt-1">
+              <label className="inline-flex items-center gap-2 text-[12px] font-medium text-gray-700 dark:text-gray-300 cursor-pointer">
+                <Checkbox
+                  checked={createLinkedCustomer}
+                  onChange={(e) => setCreateLinkedCustomer(e.target.checked)}
+                />
+                Also create a linked personal banking customer profile (shared username &amp; password)
+              </label>
+              {createLinkedCustomer && (
+                <TextInput
+                  type="email"
+                  placeholder="Customer email (e.g. jane@example.com)"
+                  value={staffEmail}
+                  onChange={(e) => setStaffEmail(e.target.value)}
+                  required
+                  className="max-w-[260px]"
+                />
+              )}
+            </div>
           </form>
         )}
 
@@ -1686,7 +1809,7 @@ export const SettingsTab: React.FC<SettingsProps> = ({
                 <Th>Operator</Th>
                 <Th>Role</Th>
                 <Th>Status</Th>
-                <Th>Permissions</Th>
+                <Th>Permissions &amp; Capabilities</Th>
                 <Th>Customers / unread</Th>
                 <Th>Last activity</Th>
                 {!isReadOnly && <Th className="text-right">Controls</Th>}
@@ -1695,21 +1818,42 @@ export const SettingsTab: React.FC<SettingsProps> = ({
             <tbody className="divide-y divide-gray-100 dark:divide-gray-800/70">
               {adminAccounts.map((adm) => {
                 const isSelf = adm.username.toLowerCase() === currentAdminUsername.toLowerCase();
+                const enabledCapCount = CAPABILITY_LABELS.filter(
+                  (c) => (adm.capabilities?.[c.key] ?? true)
+                ).length;
                 return (
                   <tr key={adm.id}>
                     <Td>
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-1.5">
                         <span className="font-semibold text-gray-900 dark:text-white">
                           {adm.fullName}
                         </span>
                         {isSelf && <Badge tone="primary">You</Badge>}
                         {adm.protected && <Badge tone="violet">Root Env</Badge>}
+                        {adm.linkedUserId && (
+                          <button
+                            type="button"
+                            onClick={() => onOpenLinkedCustomer(adm.linkedUserId!)}
+                            className="inline-flex items-center gap-1 rounded-full bg-blue-50 dark:bg-blue-500/20 px-2 py-0.5 text-[10.5px] font-semibold text-[#0060F0] dark:text-blue-300 hover:underline cursor-pointer"
+                            title="Inspect linked personal customer profile"
+                          >
+                            <Link2 className="w-3 h-3" />
+                            Linked Customer
+                          </button>
+                        )}
                       </div>
                       <p className="text-[11.5px] text-gray-500">@{adm.username}</p>
+                      {adm.supportContact && (adm.supportContact.email || adm.supportContact.phone) && (
+                        <p className="text-[10.5px] text-gray-400 mt-0.5">
+                          Support: {[adm.supportContact.email, adm.supportContact.phone].filter(Boolean).join(' · ')}
+                        </p>
+                      )}
                     </Td>
                     <Td>
                       {adm.protected || isReadOnly ? (
-                        <Badge tone={adm.role === 'admin' ? 'violet' : 'info'}>{adm.role}</Badge>
+                        <Badge tone={adm.role === 'admin' ? 'violet' : 'info'}>
+                          {adm.protected ? 'Super Admin' : adm.role}
+                        </Badge>
                       ) : (
                         <SelectInput
                           value={adm.role}
@@ -1721,7 +1865,7 @@ export const SettingsTab: React.FC<SettingsProps> = ({
                           }
                           className="py-1 text-[12px]"
                         >
-                          <option value="admin">Admin</option>
+                          <option value="admin">Limited Admin</option>
                           <option value="auditor">Auditor</option>
                         </SelectInput>
                       )}
@@ -1729,50 +1873,195 @@ export const SettingsTab: React.FC<SettingsProps> = ({
                     <Td>
                       <Badge tone={adm.status === 'active' ? 'success' : 'error'}>
                         {adm.status}
-                      </Badge>{adm.status === 'disabled' && adm.lockMessage && <p className="text-xs mt-1">{adm.lockMessage}</p>}
+                      </Badge>
+                      {adm.status === 'disabled' && adm.lockMessage && (
+                        <p className="text-xs text-gray-500 mt-1 max-w-[200px]">{adm.lockMessage}</p>
+                      )}
                     </Td>
-                    <Td>{!adm.protected && (['createUsers', 'generateActivity', 'sendMessages'] as const).map(key => <label className="block text-xs whitespace-nowrap" key={key}><input type="checkbox" className="mr-1" disabled={busy || isReadOnly} checked={adm.permissions?.[key] ?? true} onChange={e => void onUpdateAdmin(adm, { permissions: { createUsers: adm.permissions?.createUsers ?? true, generateActivity: adm.permissions?.generateActivity ?? true, sendMessages: adm.permissions?.sendMessages ?? true, [key]: e.target.checked } })} />{key === 'createUsers' ? 'Create customers' : key === 'generateActivity' ? 'Generate activity' : 'Send messages'}</label>)}</Td>
-                    <Td>{adm.protected ? "—" : `${adm.customerCount ?? 0} / ${adm.unreadCount ?? 0}`}</Td>
-                    <Td>{adm.lastActivity ? new Date(adm.lastActivity).toLocaleString() : "—"}</Td>
+                    <Td>
+                      {adm.protected ? (
+                        <Badge tone="violet">All privileges</Badge>
+                      ) : adm.role === 'auditor' ? (
+                        <Badge tone="info">Read-only auditor</Badge>
+                      ) : (
+                        <div className="space-y-1">
+                          {(['createUsers', 'generateActivity', 'sendMessages'] as const).map((key) => (
+                            <label className="block text-xs whitespace-nowrap" key={key}>
+                              <input
+                                type="checkbox"
+                                className="mr-1.5"
+                                disabled={busy || isReadOnly}
+                                checked={adm.permissions?.[key] ?? true}
+                                onChange={(e) =>
+                                  void onUpdateAdmin(adm, {
+                                    permissions: {
+                                      createUsers: adm.permissions?.createUsers ?? true,
+                                      generateActivity: adm.permissions?.generateActivity ?? true,
+                                      sendMessages: adm.permissions?.sendMessages ?? true,
+                                      [key]: e.target.checked,
+                                    },
+                                  })
+                                }
+                              />
+                              {key === 'createUsers'
+                                ? 'Create customers'
+                                : key === 'generateActivity'
+                                  ? 'Generate activity'
+                                  : 'Send messages'}
+                            </label>
+                          ))}
+                          {!isReadOnly && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setCapStaff(adm);
+                                setCapDraft({ ...DEFAULT_ADMIN_CAPABILITIES, ...(adm.capabilities || {}) });
+                              }}
+                              className="mt-1 inline-flex items-center gap-1 text-[11px] font-semibold text-[#0060F0] hover:underline cursor-pointer"
+                            >
+                              <SlidersHorizontal className="w-3 h-3" />
+                              Capabilities ({enabledCapCount}/{CAPABILITY_LABELS.length})
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </Td>
+                    <Td>
+                      <div className="flex flex-col items-start gap-1">
+                        <button
+                          type="button"
+                          onClick={() => onInspectAdminCustomers(adm.id)}
+                          className="text-xs font-semibold text-[#0060F0] hover:underline cursor-pointer tabular-nums"
+                          title="Filter Users directory by this administrator"
+                        >
+                          {adm.customerCount ?? 0} / {adm.unreadCount ?? 0}
+                        </button>
+                        {!adm.protected && (adm.customerCount ?? 0) > 0 && !isReadOnly && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setReassignStaffTarget(adm);
+                              setReassignReplacementId('');
+                            }}
+                            className="inline-flex items-center gap-1 text-[10.5px] text-gray-500 hover:text-gray-900 dark:hover:text-white cursor-pointer"
+                          >
+                            <Users className="w-3 h-3" /> Reassign all
+                          </button>
+                        )}
+                      </div>
+                    </Td>
+                    <Td className="text-xs text-gray-500 whitespace-nowrap">
+                      {adm.lastActivity ? new Date(adm.lastActivity).toLocaleString() : '—'}
+                    </Td>
                     {!isReadOnly && (
                       <Td className="text-right">
-                        {!adm.protected && (
-                          <div className="inline-flex items-center gap-1.5">
-                            <Btn
-                              variant="secondary"
-                              size="xs"
-                              disabled={busy || isSelf}
-                              onClick={() => {
-                                if (adm.status === 'active') { setLockStaff(adm); setLockMessage(adm.lockMessage || 'This administrator account is disabled. Contact the super administrator.'); }
-                                else void onUpdateAdmin(adm, { status: 'active' });
-                              }}
-                            >
-                              {adm.status === 'active' ? 'Disable' : 'Enable'}
-                            </Btn>
-                            {adm.status === 'disabled' && <Btn variant="secondary" size="xs" disabled={busy} onClick={() => { setLockStaff(adm); setLockMessage(adm.lockMessage || 'This administrator account is disabled. Contact the super administrator.'); }}>Edit lock message</Btn>}
-                            <Btn variant="secondary" size="xs" disabled={busy} onClick={() => { setSupportStaff(adm); setSupportEmail(adm.supportContact?.email || ''); setSupportPhone(adm.supportContact?.phone || ''); }}>Support contact</Btn>
-                            <Btn variant="secondary" size="xs" disabled={busy || isSelf} onClick={() => { setEditStaff(adm); setEditUsername(adm.username); setEditName(adm.fullName); }}>Edit credentials</Btn>
-                            <Btn
-                              variant="secondary"
-                              size="xs"
-                              disabled={busy || isSelf}
-                              onClick={() => {
-                                setResetStaffTarget(adm);
-                                setResetStaffPwd('');
-                              }}
-                            >
-                              Reset Password
-                            </Btn>
-                            <Btn
-                              variant="danger"
-                              size="xs"
-                              disabled={busy || isSelf}
-                              onClick={() => void onDeleteAdmin(adm)}
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </Btn>
-                          </div>
-                        )}
+                        <div className="inline-flex flex-wrap justify-end items-center gap-1.5">
+                          <Btn
+                            variant="secondary"
+                            size="xs"
+                            disabled={busy}
+                            onClick={() => {
+                              setSupportStaff(adm);
+                              setSupportEmail(adm.supportContact?.email || '');
+                              setSupportPhone(adm.supportContact?.phone || '');
+                            }}
+                          >
+                            Support contact
+                          </Btn>
+                          {!adm.protected && (
+                            <>
+                              {!adm.linkedUserId && (
+                                <Btn
+                                  variant="secondary"
+                                  size="xs"
+                                  disabled={busy}
+                                  onClick={() => {
+                                    setLinkStaffTarget(adm);
+                                    setLinkMode('create');
+                                    setLinkEmail(`${adm.username}@example.com`);
+                                    setLinkExistingUserId(unlinkedActiveCustomers[0]?.id || '');
+                                    setLinkPasswordSource('admin');
+                                  }}
+                                >
+                                  <Link2 className="w-3 h-3" /> Link Customer
+                                </Btn>
+                              )}
+                              <Btn
+                                variant="secondary"
+                                size="xs"
+                                disabled={busy || isSelf}
+                                onClick={() => {
+                                  if (adm.status === 'active') {
+                                    setLockStaff(adm);
+                                    setLockMode('disable');
+                                    setLockMessage(
+                                      adm.lockMessage ||
+                                        'This administrator account is disabled. Contact the super administrator.'
+                                    );
+                                    setLockReassignChoice('keep');
+                                  } else {
+                                    void onUpdateAdmin(adm, { status: 'active' });
+                                  }
+                                }}
+                              >
+                                {adm.status === 'active' ? 'Disable' : 'Enable'}
+                              </Btn>
+                              {adm.status === 'disabled' && (
+                                <Btn
+                                  variant="secondary"
+                                  size="xs"
+                                  disabled={busy}
+                                  onClick={() => {
+                                    setLockStaff(adm);
+                                    setLockMode('edit');
+                                    setLockMessage(
+                                      adm.lockMessage ||
+                                        'This administrator account is disabled. Contact the super administrator.'
+                                    );
+                                    setLockReassignChoice('keep');
+                                  }}
+                                >
+                                  Edit lock message
+                                </Btn>
+                              )}
+                              <Btn
+                                variant="secondary"
+                                size="xs"
+                                disabled={busy || isSelf}
+                                onClick={() => {
+                                  setEditStaff(adm);
+                                  setEditUsername(adm.username);
+                                  setEditName(adm.fullName);
+                                }}
+                              >
+                                Edit credentials
+                              </Btn>
+                              <Btn
+                                variant="secondary"
+                                size="xs"
+                                disabled={busy || isSelf}
+                                onClick={() => {
+                                  setResetStaffTarget(adm);
+                                  setResetStaffPwd('');
+                                }}
+                              >
+                                Reset Password
+                              </Btn>
+                              <Btn
+                                variant="danger"
+                                size="xs"
+                                disabled={busy || isSelf}
+                                onClick={() => {
+                                  setDeleteStaffTarget(adm);
+                                  setDeleteReplacementId('');
+                                }}
+                                title={adm.linkedUserId ? 'Revoke staff access (keeps personal customer profile)' : 'Delete staff account'}
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </Btn>
+                            </>
+                          )}
+                        </div>
                       </Td>
                     )}
                   </tr>
@@ -1788,7 +2077,7 @@ export const SettingsTab: React.FC<SettingsProps> = ({
         <Card className="xl:col-span-7 p-5">
           <CardHeader
             title="Encrypted-Hash JSON Backup & Restore"
-            subtitle="Export or restore all test customers, accounts, ledgers & settings (`chase-simulator-backup-v1`)"
+            subtitle="Export or restore all test customers, staff accounts, accounts, ledgers & settings (`chase-simulator-backup-v1`)"
           />
           <div className="mt-4 flex flex-wrap items-end gap-3">
             <Btn
@@ -1814,7 +2103,11 @@ export const SettingsTab: React.FC<SettingsProps> = ({
             <Btn
               variant="danger"
               disabled={busy || isReadOnly || !backupFile}
-              onClick={() => setRestoreOpen(true)}
+              onClick={() => {
+                setRestoreConfirm('');
+                setRestoreAdmins(false);
+                setRestoreOpen(true);
+              }}
             >
               <Upload className="w-4 h-4" />
               Restore Backup
@@ -1888,20 +2181,448 @@ export const SettingsTab: React.FC<SettingsProps> = ({
         </div>
       </Modal>
 
-      <Modal open={!!supportStaff} onClose={() => setSupportStaff(null)} title="Customer support contact" footer={<><Btn variant="secondary" onClick={() => setSupportStaff(null)}>Cancel</Btn><Btn variant="primary" disabled={busy} onClick={async () => { if (supportStaff && await onUpdateAdmin(supportStaff, { supportContact: { email: supportEmail.trim(), phone: supportPhone.trim() } })) setSupportStaff(null); }}>Save contact</Btn></>}>
-        <p className="text-sm mb-3">Displayed to this administrator’s assigned customers. This does not configure email or phone delivery.</p>
-        <label className="block mb-3">Support email<TextInput type="email" maxLength={254} value={supportEmail} onChange={e => setSupportEmail(e.target.value)} /></label>
-        <label className="block">Support phone<TextInput type="tel" maxLength={40} value={supportPhone} onChange={e => setSupportPhone(e.target.value)} /></label>
+      {/* Granular Capabilities Modal */}
+      <Modal
+        open={!!capStaff}
+        onClose={() => setCapStaff(null)}
+        title={`Granular Capabilities — ${capStaff?.fullName || ''}`}
+        footer={
+          <>
+            <Btn variant="secondary" onClick={() => setCapStaff(null)}>
+              Cancel
+            </Btn>
+            <Btn
+              variant="primary"
+              disabled={busy}
+              onClick={async () => {
+                if (!capStaff) return;
+                const ok = await onUpdateAdmin(capStaff, { capabilities: capDraft });
+                if (ok) setCapStaff(null);
+              }}
+            >
+              Save Capabilities
+            </Btn>
+          </>
+        }
+      >
+        <div className="space-y-2.5">
+          <p className="text-[12.5px] text-gray-500 dark:text-gray-400">
+            Control which actions <strong>@{capStaff?.username}</strong> can execute on their assigned customers.
+          </p>
+          {CAPABILITY_LABELS.map((item) => (
+            <label
+              key={item.key}
+              className="flex items-start gap-2.5 rounded-xl border border-gray-200 dark:border-gray-800 p-3 cursor-pointer"
+            >
+              <Checkbox
+                checked={capDraft[item.key]}
+                onChange={(e) => setCapDraft({ ...capDraft, [item.key]: e.target.checked })}
+                className="mt-0.5"
+              />
+              <div>
+                <p className="text-[13px] font-semibold text-gray-900 dark:text-white">{item.label}</p>
+                <p className="text-[11.5px] text-gray-500 dark:text-gray-400">{item.detail}</p>
+              </div>
+            </label>
+          ))}
+        </div>
       </Modal>
-      <Modal open={!!editStaff} onClose={() => setEditStaff(null)} title="Edit administrator credentials" footer={<><Btn variant="secondary" onClick={() => setEditStaff(null)}>Cancel</Btn><Btn variant="primary" disabled={busy} onClick={async () => { if (editStaff && await onUpdateAdmin(editStaff, { username: editUsername.trim(), fullName: editName.trim() })) setEditStaff(null); }}>Save</Btn></>}>
-        <p className="text-sm mb-3">Passwords cannot be viewed. Use Reset Password to set a new one.</p>
-        <label className="block mb-3">Username<TextInput value={editUsername} onChange={e => setEditUsername(e.target.value)} /></label>
-        <label className="block">Full name<TextInput value={editName} onChange={e => setEditName(e.target.value)} /></label>
+
+      {/* Support Contact Modal */}
+      <Modal
+        open={!!supportStaff}
+        onClose={() => setSupportStaff(null)}
+        title={
+          supportStaff?.protected
+            ? 'Super Administrator Default Support Contact'
+            : `Customer Support Contact — ${supportStaff?.fullName || ''}`
+        }
+        footer={
+          <>
+            <Btn variant="secondary" onClick={() => setSupportStaff(null)}>
+              Cancel
+            </Btn>
+            <Btn
+              variant="primary"
+              disabled={busy}
+              onClick={async () => {
+                if (
+                  supportStaff &&
+                  (await onUpdateAdmin(supportStaff, {
+                    supportContact: { email: supportEmail.trim(), phone: supportPhone.trim() },
+                  }))
+                ) {
+                  setSupportStaff(null);
+                }
+              }}
+            >
+              Save contact
+            </Btn>
+          </>
+        }
+      >
+        <p className="text-sm mb-3 text-gray-600 dark:text-gray-300">
+          {supportStaff?.protected
+            ? 'Displayed to customers assigned to Super admin (or whose assigned admin is disabled). This does not configure email or phone delivery.'
+            : 'Displayed to this administrator’s assigned customers. This does not configure email or phone delivery.'}
+        </p>
+        <label className="block mb-3">
+          <span className="block text-xs font-medium mb-1">Support email</span>
+          <TextInput type="email" maxLength={254} value={supportEmail} onChange={(e) => setSupportEmail(e.target.value)} />
+        </label>
+        <label className="block">
+          <span className="block text-xs font-medium mb-1">Support phone</span>
+          <TextInput type="tel" maxLength={40} value={supportPhone} onChange={(e) => setSupportPhone(e.target.value)} />
+        </label>
       </Modal>
-      <Modal open={!!lockStaff} onClose={() => setLockStaff(null)} title="Disable administrator" footer={<><Btn variant="secondary" onClick={() => setLockStaff(null)}>Cancel</Btn><Btn variant="danger" disabled={busy || !lockMessage.trim()} onClick={async () => { if (lockStaff && await onUpdateAdmin(lockStaff, { status: 'disabled', lockMessage: lockMessage.trim() })) setLockStaff(null); }}>Disable administrator</Btn></>}>
-        <p className="text-sm mb-3">This message is shown when the administrator enters the correct password. Existing sessions will be invalidated.</p>
-        <label className="block">Sign-in error message<TextInput maxLength={300} value={lockMessage} onChange={e => setLockMessage(e.target.value)} /></label>
+
+      {/* Edit Credentials Modal */}
+      <Modal
+        open={!!editStaff}
+        onClose={() => setEditStaff(null)}
+        title="Edit Administrator Credentials"
+        footer={
+          <>
+            <Btn variant="secondary" onClick={() => setEditStaff(null)}>
+              Cancel
+            </Btn>
+            <Btn
+              variant="primary"
+              disabled={busy}
+              onClick={async () => {
+                if (
+                  editStaff &&
+                  (await onUpdateAdmin(editStaff, {
+                    ...(editStaff.linkedUserId ? {} : { username: editUsername.trim() }),
+                    fullName: editName.trim(),
+                  }))
+                ) {
+                  setEditStaff(null);
+                }
+              }}
+            >
+              Save
+            </Btn>
+          </>
+        }
+      >
+        <p className="text-sm mb-3 text-gray-600 dark:text-gray-300">
+          Passwords cannot be viewed. Use Reset Password to set a new one.
+        </p>
+        <label className="block mb-3">
+          <span className="block text-xs font-medium mb-1">
+            Username {editStaff?.linkedUserId ? '(locked — linked to customer profile)' : ''}
+          </span>
+          <TextInput
+            value={editUsername}
+            disabled={!!editStaff?.linkedUserId}
+            onChange={(e) => setEditUsername(e.target.value)}
+          />
+        </label>
+        <label className="block">
+          <span className="block text-xs font-medium mb-1">Full name</span>
+          <TextInput value={editName} onChange={(e) => setEditName(e.target.value)} />
+        </label>
       </Modal>
+
+      {/* Disable / Edit Lock Message Modal */}
+      <Modal
+        open={!!lockStaff}
+        onClose={() => setLockStaff(null)}
+        title={lockMode === 'edit' ? 'Edit Lock Message' : `Disable Administrator — ${lockStaff?.fullName || ''}`}
+        footer={
+          <>
+            <Btn variant="secondary" onClick={() => setLockStaff(null)}>
+              Cancel
+            </Btn>
+            <Btn
+              variant={lockMode === 'edit' ? 'primary' : 'danger'}
+              disabled={busy || !lockMessage.trim()}
+              onClick={async () => {
+                if (!lockStaff) return;
+                const patch: Parameters<SettingsProps['onUpdateAdmin']>[1] = {
+                  status: 'disabled',
+                  lockMessage: lockMessage.trim(),
+                };
+                if (lockMode === 'disable' && lockReassignChoice !== 'keep') {
+                  patch.replacementAdminId = lockReassignChoice === '__root__' ? null : lockReassignChoice;
+                }
+                if (await onUpdateAdmin(lockStaff, patch)) setLockStaff(null);
+              }}
+            >
+              {lockMode === 'edit' ? 'Save lock message' : 'Disable administrator'}
+            </Btn>
+          </>
+        }
+      >
+        <div className="space-y-3">
+          <p className="text-sm text-gray-600 dark:text-gray-300">
+            This message is shown when the administrator enters the correct password. Existing admin sessions will be invalidated.
+            {lockStaff?.linkedUserId && ' Their linked personal customer account remains accessible.'}
+          </p>
+          <label className="block">
+            <span className="block text-xs font-medium mb-1">Sign-in error message</span>
+            <TextInput maxLength={300} value={lockMessage} onChange={(e) => setLockMessage(e.target.value)} />
+          </label>
+          {lockMode === 'disable' && (lockStaff?.customerCount || 0) > 0 && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50/70 dark:bg-amber-500/10 dark:border-amber-500/30 p-3 space-y-2">
+              <p className="text-xs font-semibold text-amber-800 dark:text-amber-300">
+                {lockStaff?.fullName} currently owns {lockStaff?.customerCount} customer
+                {lockStaff?.customerCount === 1 ? '' : 's'}.
+              </p>
+              <label className="block">
+                <span className="block text-[11.5px] font-medium mb-1">Assigned customer handoff</span>
+                <SelectInput
+                  value={lockReassignChoice}
+                  onChange={(e) => setLockReassignChoice(e.target.value)}
+                  className="w-full"
+                >
+                  <option value="keep">Keep assigned to this administrator (manageable by Super admin)</option>
+                  <option value="__root__">Reassign all to Super administrator</option>
+                  {replacementChoicesFor(lockStaff?.id).map((a) => (
+                    <option key={a.id} value={a.id}>
+                      Reassign all to {a.fullName} (@{a.username})
+                    </option>
+                  ))}
+                </SelectInput>
+              </label>
+            </div>
+          )}
+        </div>
+      </Modal>
+
+      {/* Guided Bulk Reassign Customers Modal */}
+      <Modal
+        open={!!reassignStaffTarget}
+        onClose={() => setReassignStaffTarget(null)}
+        title={`Reassign Customers — ${reassignStaffTarget?.fullName || ''}`}
+        footer={
+          <>
+            <Btn variant="secondary" onClick={() => setReassignStaffTarget(null)}>
+              Cancel
+            </Btn>
+            <Btn
+              variant="primary"
+              disabled={busy}
+              onClick={async () => {
+                if (!reassignStaffTarget) return;
+                const ok = await onReassignCustomers(
+                  reassignStaffTarget,
+                  reassignReplacementId || null
+                );
+                if (ok) setReassignStaffTarget(null);
+              }}
+            >
+              Reassign All ({reassignStaffTarget?.customerCount || 0})
+            </Btn>
+          </>
+        }
+      >
+        <div className="space-y-3 text-sm text-gray-600 dark:text-gray-300">
+          <p>
+            Move all <strong>{reassignStaffTarget?.customerCount || 0}</strong> customers owned by{' '}
+            <strong>@{reassignStaffTarget?.username}</strong> to another owner. All customer balances, messages, and staff notes are preserved.
+          </p>
+          <label className="block">
+            <span className="block text-xs font-medium mb-1">New Owner</span>
+            <SelectInput
+              value={reassignReplacementId}
+              onChange={(e) => setReassignReplacementId(e.target.value)}
+              className="w-full"
+            >
+              <option value="">Super administrator</option>
+              {replacementChoicesFor(reassignStaffTarget?.id).map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.fullName} (@{a.username})
+                </option>
+              ))}
+            </SelectInput>
+          </label>
+        </div>
+      </Modal>
+
+      {/* Confirm Delete / Revoke Staff Modal (with Atomic Reassignment) */}
+      <Modal
+        open={!!deleteStaffTarget}
+        onClose={() => setDeleteStaffTarget(null)}
+        title={
+          deleteStaffTarget?.linkedUserId
+            ? `Revoke Staff Access — ${deleteStaffTarget.fullName}`
+            : `Delete Staff Account — ${deleteStaffTarget?.fullName || ''}`
+        }
+        footer={
+          <>
+            <Btn variant="secondary" onClick={() => setDeleteStaffTarget(null)}>
+              Cancel
+            </Btn>
+            <Btn
+              variant="danger"
+              disabled={busy}
+              onClick={async () => {
+                if (!deleteStaffTarget) return;
+                const needsReassign = (deleteStaffTarget.customerCount || 0) > 0;
+                const ok = await onDeleteAdmin(
+                  deleteStaffTarget,
+                  needsReassign ? (deleteReplacementId || null) : undefined
+                );
+                if (ok) setDeleteStaffTarget(null);
+              }}
+            >
+              {deleteStaffTarget?.linkedUserId ? 'Revoke Staff Access' : 'Delete Staff Account'}
+            </Btn>
+          </>
+        }
+      >
+        <div className="space-y-3 text-sm text-gray-600 dark:text-gray-300">
+          <p>
+            {deleteStaffTarget?.linkedUserId ? (
+              <>
+                Remove administrator privileges from <strong>@{deleteStaffTarget.username}</strong> and sign out all admin sessions. Their personal banking customer profile and balances will remain intact.
+              </>
+            ) : (
+              <>
+                Permanently remove staff account <strong>@{deleteStaffTarget?.username}</strong> and invalidate all active sessions?
+              </>
+            )}
+          </p>
+          {(deleteStaffTarget?.customerCount || 0) > 0 && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50/70 dark:bg-amber-500/10 dark:border-amber-500/30 p-3 space-y-2">
+              <p className="text-xs font-semibold text-amber-800 dark:text-amber-300">
+                This administrator owns {deleteStaffTarget?.customerCount} customer
+                {deleteStaffTarget?.customerCount === 1 ? '' : 's'}. They will be reassigned atomically before removal:
+              </p>
+              <label className="block">
+                <span className="block text-[11.5px] font-medium mb-1">Reassign customers to</span>
+                <SelectInput
+                  value={deleteReplacementId}
+                  onChange={(e) => setDeleteReplacementId(e.target.value)}
+                  className="w-full"
+                >
+                  <option value="">Super administrator</option>
+                  {replacementChoicesFor(deleteStaffTarget?.id).map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.fullName} (@{a.username})
+                    </option>
+                  ))}
+                </SelectInput>
+              </label>
+            </div>
+          )}
+        </div>
+      </Modal>
+
+      {/* Link Existing Staff Account to Customer Profile Modal */}
+      <Modal
+        open={!!linkStaffTarget}
+        onClose={() => setLinkStaffTarget(null)}
+        title={`Link Customer Profile — ${linkStaffTarget?.fullName || ''}`}
+        footer={
+          <>
+            <Btn variant="secondary" onClick={() => setLinkStaffTarget(null)}>
+              Cancel
+            </Btn>
+            <Btn
+              variant="primary"
+              disabled={
+                busy ||
+                (linkMode === 'create' ? !linkEmail.trim() : !linkExistingUserId)
+              }
+              onClick={async () => {
+                if (!linkStaffTarget) return;
+                const ok =
+                  linkMode === 'create'
+                    ? await onLinkCustomer(linkStaffTarget, { mode: 'create', email: linkEmail.trim() })
+                    : await onLinkCustomer(linkStaffTarget, {
+                        mode: 'existing',
+                        userId: linkExistingUserId,
+                        passwordSource: linkPasswordSource,
+                      });
+                if (ok) setLinkStaffTarget(null);
+              }}
+            >
+              Link Customer Profile
+            </Btn>
+          </>
+        }
+      >
+        <div className="space-y-3.5 text-sm text-gray-600 dark:text-gray-300">
+          <div className="inline-flex rounded-lg border border-gray-200 dark:border-gray-700 p-0.5 bg-gray-50 dark:bg-white/5">
+            <button
+              type="button"
+              onClick={() => setLinkMode('create')}
+              className={`px-3 py-1.5 rounded-md text-xs font-semibold cursor-pointer ${
+                linkMode === 'create' ? 'bg-white dark:bg-[#0060F0] text-[#0060F0] dark:text-white shadow-xs' : 'text-gray-500'
+              }`}
+            >
+              Create New Customer
+            </button>
+            <button
+              type="button"
+              onClick={() => setLinkMode('existing')}
+              className={`px-3 py-1.5 rounded-md text-xs font-semibold cursor-pointer ${
+                linkMode === 'existing' ? 'bg-white dark:bg-[#0060F0] text-[#0060F0] dark:text-white shadow-xs' : 'text-gray-500'
+              }`}
+            >
+              Link Existing Customer
+            </button>
+          </div>
+
+          {linkMode === 'create' ? (
+            <>
+              <p className="text-xs">
+                Creates a matching personal customer profile with username <strong>@{linkStaffTarget?.username}</strong> and the staff member&apos;s current password.
+              </p>
+              <label className="block">
+                <span className="block text-xs font-medium mb-1">Customer Email Address</span>
+                <TextInput
+                  type="email"
+                  value={linkEmail}
+                  onChange={(e) => setLinkEmail(e.target.value)}
+                  placeholder="staff@example.com"
+                />
+              </label>
+            </>
+          ) : (
+            <>
+              <p className="text-xs">
+                Links <strong>@{linkStaffTarget?.username}</strong> to an existing active customer. The admin username will be aligned to the selected customer&apos;s username and existing sessions will be signed out.
+              </p>
+              {unlinkedActiveCustomers.length === 0 ? (
+                <p className="text-xs text-amber-700">No unlinked active customer profiles are available.</p>
+              ) : (
+                <>
+                  <label className="block">
+                    <span className="block text-xs font-medium mb-1">Select Existing Customer</span>
+                    <SelectInput
+                      value={linkExistingUserId}
+                      onChange={(e) => setLinkExistingUserId(e.target.value)}
+                      className="w-full"
+                    >
+                      {unlinkedActiveCustomers.map((u) => (
+                        <option key={u.id} value={u.id}>
+                          {u.fullName} (@{u.username} · {u.email})
+                        </option>
+                      ))}
+                    </SelectInput>
+                  </label>
+                  <label className="block">
+                    <span className="block text-xs font-medium mb-1">Shared Password Source</span>
+                    <SelectInput
+                      value={linkPasswordSource}
+                      onChange={(e) => setLinkPasswordSource(e.target.value as 'admin' | 'customer')}
+                      className="w-full"
+                    >
+                      <option value="admin">Use staff member&apos;s current admin password</option>
+                      <option value="customer">Use selected customer&apos;s current password</option>
+                    </SelectInput>
+                  </label>
+                </>
+              )}
+            </>
+          )}
+        </div>
+      </Modal>
+
       {/* Reset Staff Password Modal */}
       <Modal
         open={!!resetStaffTarget}
@@ -1929,16 +2650,23 @@ export const SettingsTab: React.FC<SettingsProps> = ({
           </>
         }
       >
-        <label className="block">
-          <span className="block text-[12px] font-medium mb-1">
-            New Password (minimum 10 characters)
-          </span>
-          <TextInput
-            type="password"
-            value={resetStaffPwd}
-            onChange={(e) => setResetStaffPwd(e.target.value)}
-          />
-        </label>
+        <div className="space-y-2.5">
+          {resetStaffTarget?.linkedUserId && (
+            <p className="text-xs text-blue-700 dark:text-blue-300">
+              This staff account is linked to a personal customer profile. Resetting updates both and signs out all sessions.
+            </p>
+          )}
+          <label className="block">
+            <span className="block text-[12px] font-medium mb-1">
+              New Password (minimum 10 characters)
+            </span>
+            <TextInput
+              type="password"
+              value={resetStaffPwd}
+              onChange={(e) => setResetStaffPwd(e.target.value)}
+            />
+          </label>
+        </div>
       </Modal>
 
       {/* Restore Backup Modal */}
@@ -1959,10 +2687,11 @@ export const SettingsTab: React.FC<SettingsProps> = ({
               disabled={busy || restoreConfirm !== 'RESTORE SIMULATOR BACKUP' || !backupFile}
               onClick={async () => {
                 if (!backupFile) return;
-                const ok = await onRestoreBackup(backupFile, restoreConfirm);
+                const ok = await onRestoreBackup(backupFile, restoreConfirm, restoreAdmins);
                 if (ok) {
                   setBackupFile(null);
                   setRestoreConfirm('');
+                  setRestoreAdmins(false);
                   setRestoreOpen(false);
                 }
               }}
@@ -1972,16 +2701,27 @@ export const SettingsTab: React.FC<SettingsProps> = ({
           </>
         }
       >
-        <p className="text-[13px] text-gray-600 dark:text-gray-300">
-          Restoring replaces all test customer records and revokes active customer sessions. Type{' '}
-          <code className="font-mono font-bold text-[#F04438]">RESTORE SIMULATOR BACKUP</code>:
-        </p>
-        <TextInput
-          className="mt-3"
-          value={restoreConfirm}
-          onChange={(e) => setRestoreConfirm(e.target.value)}
-          placeholder="RESTORE SIMULATOR BACKUP"
-        />
+        <div className="space-y-3">
+          <p className="text-[13px] text-gray-600 dark:text-gray-300">
+            Restoring replaces all test customer records and revokes active customer sessions. Type{' '}
+            <code className="font-mono font-bold text-[#F04438]">RESTORE SIMULATOR BACKUP</code>:
+          </p>
+          <label className="flex items-start gap-2.5 rounded-xl border border-gray-200 dark:border-gray-800 p-3 cursor-pointer text-[12.5px]">
+            <Checkbox
+              checked={restoreAdmins}
+              onChange={(e) => setRestoreAdmins(e.target.checked)}
+              className="mt-0.5"
+            />
+            <span>
+              <strong>Also restore staff administrator accounts</strong> (if included in this backup file). Required when restoring a snapshot containing linked staff accounts.
+            </span>
+          </label>
+          <TextInput
+            value={restoreConfirm}
+            onChange={(e) => setRestoreConfirm(e.target.value)}
+            placeholder="RESTORE SIMULATOR BACKUP"
+          />
+        </div>
       </Modal>
 
       {/* Reset Simulator Modal */}

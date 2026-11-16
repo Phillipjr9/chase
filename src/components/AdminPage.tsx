@@ -10,8 +10,10 @@ import {
   ArrowDownLeft,
   ArrowLeft,
   Bell,
+  Building2,
   Check,
   Eye,
+  KeyRound,
   LockKeyhole,
   Menu,
   RefreshCw,
@@ -21,6 +23,7 @@ import {
   X,
 } from 'lucide-react';
 import {
+  adoptSessionToken,
   readAdminToken,
   writeAdminToken,
   type AccountType,
@@ -41,11 +44,15 @@ import { WealthCreditTab } from './admin/WealthCreditTab';
 import {
   AdminAccountRow,
   AdminApiError,
+  AdminCapabilities,
   AdminMetrics,
+  AdminPermissions,
   AdminTab,
   AdminUserRow,
   AuditEntry,
   CashflowRange,
+  DEFAULT_ADMIN_CAPABILITIES,
+  DEFAULT_ADMIN_PERMISSIONS,
   GlobalTransaction,
   OverviewAnalytics,
   SimulatorSettings,
@@ -75,11 +82,12 @@ const LINE = '#E4E6E8';
 
 export const AdminPage: React.FC<{
   initialToken?: string;
-  initialAdmin?: { username: string; label: string; role?: 'admin' | 'auditor' } | null;
+  initialAdmin?: { username: string; label: string; role?: 'admin' | 'auditor'; isSuperAdmin?: boolean; linkedUserId?: string | null } | null;
   onTokenChange?: (token: string) => void;
   onExit: () => void;
   onImpersonate: (user: User, token: string) => void;
-}> = ({ initialToken = '', initialAdmin = null, onTokenChange, onExit, onImpersonate }) => {
+  onSwitchToCustomer?: (user: User, token: string) => void;
+}> = ({ initialToken = '', initialAdmin = null, onTokenChange, onExit, onImpersonate, onSwitchToCustomer }) => {
   const [token, setToken] = useState<string>(() => initialToken || readAdminToken());
   const [authenticated, setAuthenticated] = useState<boolean>(() =>
     Boolean((initialToken || readAdminToken()) && initialAdmin)
@@ -91,9 +99,17 @@ export const AdminPage: React.FC<{
     initialAdmin?.role || 'admin'
   );
   const [currentAdminUsername, setCurrentAdminUsername] = useState(initialAdmin?.username || '');
-  const [isSuperAdmin, setIsSuperAdmin] = useState(false);
-  const [permissions, setPermissions] = useState({ createUsers: false, generateActivity: false, sendMessages: false });
+  const [isSuperAdmin, setIsSuperAdmin] = useState(initialAdmin?.isSuperAdmin === true);
+  const [linkedUserId, setLinkedUserId] = useState<string | null>(initialAdmin?.linkedUserId || null);
+  const [permissions, setPermissions] = useState<AdminPermissions>(DEFAULT_ADMIN_PERMISSIONS);
+  const [capabilities, setCapabilities] = useState<AdminCapabilities>(DEFAULT_ADMIN_CAPABILITIES);
   const [adminAccounts, setAdminAccounts] = useState<AdminAccountRow[]>([]);
+  const [ownerFilter, setOwnerFilter] = useState<string>('all');
+
+  // Header Change Own Password Modal (reachable for all non-root staff including limited admins & auditors)
+  const [headerOwnPwdOpen, setHeaderOwnPwdOpen] = useState(false);
+  const [headerCurPwd, setHeaderCurPwd] = useState('');
+  const [headerNextPwd, setHeaderNextPwd] = useState('');
 
   // Public header state (for unauthenticated sign-in view)
   const [publicSegment, setPublicSegment] = useState<SegmentKey>('personal');
@@ -190,7 +206,7 @@ export const AdminPage: React.FC<{
 
   const loadData = useCallback(
     async (activeToken = token, activeRange = range) => {
-      const [overviewRes, userRes, auditRes, txRes, msgRes] = await Promise.all([
+      const [overviewRes, userRes, auditRes, txRes, msgRes, adminsRes] = await Promise.all([
         api<{ metrics: AdminMetrics; recentAudit: AuditEntry[]; analytics?: OverviewAnalytics }>(
           `/api/admin/overview?range=${activeRange}`,
           {},
@@ -206,6 +222,9 @@ export const AdminPage: React.FC<{
         api<{ threads: AdminMessageThread[] }>('/api/admin/messages', {}, activeToken).catch(
           () => ({ threads: [] })
         ),
+        api<{ admins: AdminAccountRow[] }>('/api/admin/admins', {}, activeToken).catch(
+          () => ({ admins: [] })
+        ),
       ]);
       setMetrics(overviewRes.metrics);
       if (overviewRes.analytics) setAnalytics(overviewRes.analytics);
@@ -213,6 +232,7 @@ export const AdminPage: React.FC<{
       setAudit(auditRes.audit);
       setGlobalTransactions(txRes.transactions);
       setMessageThreads(msgRes.threads || []);
+      if (adminsRes.admins.length > 0) setAdminAccounts(adminsRes.admins);
       return userRes.users;
     },
     [api, range, token]
@@ -238,7 +258,9 @@ export const AdminPage: React.FC<{
             label: string;
             role: 'admin' | 'auditor';
             isSuperAdmin?: boolean;
-            permissions: { createUsers: boolean; generateActivity: boolean; sendMessages: boolean };
+            linkedUserId?: string | null;
+            permissions: AdminPermissions;
+            capabilities?: AdminCapabilities;
           };
           token?: string;
         }>('/api/admin/me', {}, candidateToken);
@@ -251,8 +273,14 @@ export const AdminPage: React.FC<{
           writeAdminToken(resolvedTok);
           onTokenChangeRef.current?.(resolvedTok);
         }
-        setIsSuperAdmin(me.admin.isSuperAdmin === true);
-        setPermissions(me.admin.permissions);
+        const superFlag = me.admin.isSuperAdmin === true;
+        setIsSuperAdmin(superFlag);
+        if (!superFlag) {
+          setTab((prev) => (prev === 'settings' ? 'overview' : prev));
+        }
+        setPermissions(me.admin.permissions || DEFAULT_ADMIN_PERMISSIONS);
+        setCapabilities(me.admin.capabilities || DEFAULT_ADMIN_CAPABILITIES);
+        setLinkedUserId(me.admin.linkedUserId || null);
         setAdminName(me.admin.label);
         setCurrentAdminRole(me.admin.role || 'admin');
         setCurrentAdminUsername(me.admin.username);
@@ -300,6 +328,9 @@ export const AdminPage: React.FC<{
           setSelectedUser(selectedRes.user);
           setUserJson(JSON.stringify(selectedRes.user, null, 2));
           setQuickAcctId(selectedRes.user.accounts?.[0]?.id || '');
+        } else {
+          setSelectedUser(null);
+          setUserJson('');
         }
       } catch (err) {
         if (!mountedRef.current || authSeqRef.current !== seq) return;
@@ -309,6 +340,9 @@ export const AdminPage: React.FC<{
           onTokenChangeRef.current?.('');
           setToken('');
           setAuthenticated(false);
+          setIsSuperAdmin(false);
+          setLinkedUserId(null);
+          setTab('overview');
         } else {
           notify('error', err instanceof Error ? err.message : 'Could not verify admin session.');
         }
@@ -341,11 +375,25 @@ export const AdminPage: React.FC<{
 
   useEffect(() => {
     if (!authenticated || !token) return;
-    const timer = window.setInterval(() => { void loadData().catch(() => undefined); }, 30000);
+    const timer = window.setInterval(() => {
+      void loadData().catch((err) => {
+        if (err instanceof AdminApiError && err.status === 401) {
+          tokenRef.current = '';
+          writeAdminToken(null);
+          onTokenChangeRef.current?.('');
+          setToken('');
+          setAuthenticated(false);
+          setIsSuperAdmin(false);
+          setLinkedUserId(null);
+          setTab('overview');
+          setLoginError('Your administrator session expired or was revoked. Please sign in again.');
+        }
+      });
+    }, 30000);
     return () => window.clearInterval(timer);
   }, [authenticated, token, loadData]);
 
-  // Refresh only the support inbox frequently; the larger dashboard refresh remains separate.
+  // Refresh only the support inbox & operator permissions frequently; handle 401 session revocation cleanly.
   useEffect(() => {
     if (!authenticated || !token) return;
     let active = true;
@@ -355,10 +403,37 @@ export const AdminPage: React.FC<{
       pending = true;
       try {
         const result = await api<{ threads: AdminMessageThread[] }>('/api/admin/messages', {}, token);
-        const me = await api<{ admin: { permissions: { createUsers: boolean; generateActivity: boolean; sendMessages: boolean } } }>('/api/admin/me', {}, token);
-        if (active) { setMessageThreads(result.threads); setPermissions(me.admin.permissions); }
-      } catch { /* Retry on the next interval. */ }
-      finally { pending = false; }
+        const me = await api<{
+          admin: {
+            permissions: AdminPermissions;
+            capabilities?: AdminCapabilities;
+            role: 'admin' | 'auditor';
+            isSuperAdmin?: boolean;
+            linkedUserId?: string | null;
+          };
+        }>('/api/admin/me', {}, token);
+        if (active) {
+          setMessageThreads(result.threads);
+          setPermissions(me.admin.permissions || DEFAULT_ADMIN_PERMISSIONS);
+          if (me.admin.capabilities) setCapabilities(me.admin.capabilities);
+          setCurrentAdminRole(me.admin.role || 'admin');
+          setLinkedUserId(me.admin.linkedUserId || null);
+        }
+      } catch (err) {
+        if (active && err instanceof AdminApiError && err.status === 401) {
+          tokenRef.current = '';
+          writeAdminToken(null);
+          onTokenChangeRef.current?.('');
+          setToken('');
+          setAuthenticated(false);
+          setIsSuperAdmin(false);
+          setLinkedUserId(null);
+          setTab('overview');
+          setLoginError('Your administrator session expired or was revoked. Please sign in again.');
+        }
+      } finally {
+        pending = false;
+      }
     };
     void refresh();
     const timer = window.setInterval(() => void refresh(), 5000);
@@ -390,7 +465,15 @@ export const AdminPage: React.FC<{
     try {
       const res = await api<{
         token: string;
-        admin: { username: string; label: string; role: 'admin' | 'auditor' };
+        admin: {
+          username: string;
+          label: string;
+          role: 'admin' | 'auditor';
+          isSuperAdmin?: boolean;
+          permissions?: AdminPermissions;
+          capabilities?: AdminCapabilities;
+          linkedUserId?: string | null;
+        };
       }>(
         '/api/admin/login',
         { method: 'POST', body: JSON.stringify(creds) },
@@ -403,6 +486,12 @@ export const AdminPage: React.FC<{
       setAdminName(res.admin.label);
       setCurrentAdminRole(res.admin.role || 'admin');
       setCurrentAdminUsername(res.admin.username);
+      setIsSuperAdmin(res.admin.isSuperAdmin === true);
+      setPermissions(res.admin.permissions || DEFAULT_ADMIN_PERMISSIONS);
+      setCapabilities(res.admin.capabilities || DEFAULT_ADMIN_CAPABILITIES);
+      setLinkedUserId(res.admin.linkedUserId || null);
+      setTab('overview');
+      setOwnerFilter('all');
       setToken(res.token);
       setAuthenticated(true);
       void hydrateSession(res.token);
@@ -426,7 +515,33 @@ export const AdminPage: React.FC<{
     onTokenChangeRef.current?.('');
     setToken('');
     setAuthenticated(false);
+    setIsSuperAdmin(false);
+    setLinkedUserId(null);
+    setTab('overview');
+    setOwnerFilter('all');
     onExit();
+  };
+
+  const handleSwitchToCustomer = async () => {
+    if (!linkedUserId) return;
+    setBusy(true);
+    try {
+      const res = await api<{ token: string; user: User }>(
+        '/api/admin/switch-to-customer',
+        { method: 'POST', body: '{}' }
+      );
+      adoptSessionToken(res.token);
+      notify('info', 'Switching to your personal Chase banking workspace…');
+      if (onSwitchToCustomer) {
+        onSwitchToCustomer(res.user, res.token);
+      } else {
+        onExit();
+      }
+    } catch (err) {
+      notify('error', err instanceof Error ? err.message : 'Could not switch to customer view.');
+    } finally {
+      setBusy(false);
+    }
   };
 
   const acceptUpdatedUser = async (updated: User, successMsg: string) => {
@@ -472,17 +587,50 @@ export const AdminPage: React.FC<{
   /* --------------------------- Mutation Handlers -------------------------- */
 
 
-  const handlePromote = async (): Promise<boolean> => {
+  const handlePromote = async (role: 'admin' | 'auditor' = 'admin'): Promise<boolean> => {
     if (!selectedUser || !isSuperAdmin) return false;
     setBusy(true);
     try {
-      await api(`/api/admin/users/${encodeURIComponent(selectedUser.id)}/promote`, { method: 'POST', body: JSON.stringify({ confirm: true }) });
-      const result = await api<{ admins: AdminAccountRow[] }>('/api/admin/admins');
-      setAdminAccounts(result.admins);
-      notify('success', 'Limited test administrator access enabled. Use the administrator sign-in with the existing username and password.');
+      await api(`/api/admin/users/${encodeURIComponent(selectedUser.id)}/promote`, {
+        method: 'POST',
+        body: JSON.stringify({ confirm: true, role }),
+      });
+      await loadData();
+      await loadSelectedUser(selectedUser.id);
+      notify(
+        'success',
+        `Linked ${role === 'auditor' ? 'read-only auditor' : 'limited administrator'} access enabled for @${selectedUser.username}.`
+      );
       return true;
-    } catch (err) { notify('error', err instanceof Error ? err.message : 'Could not promote customer.'); return false; }
-    finally { setBusy(false); }
+    } catch (err) {
+      notify('error', err instanceof Error ? err.message : 'Could not promote customer.');
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleAssignOwner = async (userId: string, adminId: string | null): Promise<boolean> => {
+    if (!isSuperAdmin) return false;
+    setBusy(true);
+    try {
+      const res = await api<{ user: User }>(
+        `/api/admin/users/${encodeURIComponent(userId)}/assign-admin`,
+        { method: 'PUT', body: JSON.stringify({ adminId }) }
+      );
+      if (selectedUser?.id === userId) {
+        setSelectedUser(res.user);
+        setUserJson(JSON.stringify(res.user, null, 2));
+      }
+      await loadData();
+      notify('success', 'Updated customer staff assignment.');
+      return true;
+    } catch (err) {
+      notify('error', err instanceof Error ? err.message : 'Could not reassign customer.');
+      return false;
+    } finally {
+      setBusy(false);
+    }
   };
 
   const handleCreateUser = async (payload: {
@@ -490,6 +638,7 @@ export const AdminPage: React.FC<{
     fullName: string;
     email: string;
     password: string;
+    ownerAdminId?: string | null;
   }): Promise<boolean> => {
     setBusy(true);
     try {
@@ -1227,16 +1376,22 @@ export const AdminPage: React.FC<{
     fullName: string;
     password: string;
     role: 'admin' | 'auditor';
+    createCustomerProfile?: boolean;
+    email?: string;
   }): Promise<boolean> => {
     setBusy(true);
     try {
-      const res = await api<{ admin: AdminAccountRow }>('/api/admin/admins', {
+      const res = await api<{ admin: AdminAccountRow; user?: User }>('/api/admin/admins', {
         method: 'POST',
         body: JSON.stringify(payload),
       });
-      setAdminAccounts((prev) => [...prev, res.admin]);
       await loadData();
-      notify('success', `Created ${res.admin.role} account @${res.admin.username}.`);
+      notify(
+        'success',
+        res.user
+          ? `Created ${res.admin.role} account @${res.admin.username} with linked personal customer profile.`
+          : `Created ${res.admin.role} account @${res.admin.username}.`
+      );
       return true;
     } catch (err) {
       notify('error', err instanceof Error ? err.message : 'Could not create staff account.');
@@ -1248,20 +1403,34 @@ export const AdminPage: React.FC<{
 
   const handleUpdateAdmin = async (
     admin: AdminAccountRow,
-    patch: { supportContact?: { email: string; phone: string }; username?: string; fullName?: string; lockMessage?: string; role?: 'admin' | 'auditor'; status?: 'active' | 'disabled'; password?: string; permissions?: { createUsers: boolean; generateActivity: boolean; sendMessages: boolean } }
+    patch: {
+      supportContact?: { email: string; phone: string };
+      username?: string;
+      fullName?: string;
+      lockMessage?: string;
+      role?: 'admin' | 'auditor';
+      status?: 'active' | 'disabled';
+      password?: string;
+      permissions?: AdminPermissions;
+      capabilities?: AdminCapabilities;
+      replacementAdminId?: string | null;
+    }
   ): Promise<boolean> => {
     setBusy(true);
     try {
-      const res = await api<{ admin: AdminAccountRow }>(
+      const res = await api<{ admin: AdminAccountRow; reassignedCount?: number }>(
         `/api/admin/admins/${encodeURIComponent(admin.id)}`,
         {
           method: 'PUT',
           body: JSON.stringify({ ...patch, ...(patch.password ? { confirm: true } : {}) }),
         }
       );
-      setAdminAccounts((prev) => prev.map((a) => (a.id === admin.id ? res.admin : a)));
       await loadData();
-      notify('success', `Updated staff account @${admin.username}.`);
+      if (selectedUser && (admin.linkedUserId === selectedUser.id || patch.replacementAdminId !== undefined)) {
+        await loadSelectedUser(selectedUser.id).catch(() => undefined);
+      }
+      const suffix = res.reassignedCount ? ` Reassigned ${res.reassignedCount} customer(s).` : '';
+      notify('success', `Updated staff account @${res.admin.username}.${suffix}`);
       return true;
     } catch (err) {
       notify('error', err instanceof Error ? err.message : 'Could not update staff account.');
@@ -1271,18 +1440,122 @@ export const AdminPage: React.FC<{
     }
   };
 
-  const handleDeleteAdmin = async (admin: AdminAccountRow) => {
+  const handleDeleteAdmin = async (
+    admin: AdminAccountRow,
+    replacementAdminId?: string | null
+  ): Promise<boolean> => {
     setBusy(true);
     try {
-      await api(`/api/admin/admins/${encodeURIComponent(admin.id)}`, {
-        method: 'DELETE',
-        body: JSON.stringify({ confirm: true }),
-      });
-      setAdminAccounts((prev) => prev.filter((a) => a.id !== admin.id));
+      const body: Record<string, unknown> = { confirm: true };
+      if (replacementAdminId !== undefined) body.replacementAdminId = replacementAdminId;
+      const res = await api<{ ok: boolean; reassignedCount?: number; preservedCustomerId?: string | null }>(
+        `/api/admin/admins/${encodeURIComponent(admin.id)}`,
+        {
+          method: 'DELETE',
+          body: JSON.stringify(body),
+        }
+      );
       await loadData();
-      notify('success', `Deleted staff account @${admin.username}.`);
+      if (selectedUser) {
+        await loadSelectedUser(selectedUser.id).catch(() => undefined);
+      }
+      const suffix = res.reassignedCount ? ` Reassigned ${res.reassignedCount} customer(s).` : '';
+      notify(
+        'success',
+        admin.linkedUserId
+          ? `Revoked staff access for @${admin.username} (personal customer profile preserved).${suffix}`
+          : `Deleted staff account @${admin.username}.${suffix}`
+      );
+      return true;
     } catch (err) {
-      notify('error', err instanceof Error ? err.message : 'Could not delete staff account.');
+      notify('error', err instanceof Error ? err.message : 'Could not remove staff account.');
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleRevokeLinkedAdmin = async (
+    adminId: string,
+    replacementAdminId?: string | null
+  ): Promise<boolean> => {
+    const target = adminAccounts.find((a) => a.id === adminId);
+    if (!target) return false;
+    return handleDeleteAdmin(target, replacementAdminId);
+  };
+
+  const handleLinkCustomer = async (
+    admin: AdminAccountRow,
+    payload:
+      | { mode: 'create'; email: string }
+      | { mode: 'existing'; userId: string; passwordSource: 'admin' | 'customer' }
+  ): Promise<boolean> => {
+    setBusy(true);
+    try {
+      const res = await api<{ admin: AdminAccountRow; user: User }>(
+        `/api/admin/admins/${encodeURIComponent(admin.id)}/link-customer`,
+        {
+          method: 'POST',
+          body: JSON.stringify(
+            payload.mode === 'existing' ? { ...payload, confirm: true } : payload
+          ),
+        }
+      );
+      await loadData();
+      notify('success', `Linked staff account @${res.admin.username} with customer profile @${res.user.username}.`);
+      return true;
+    } catch (err) {
+      notify('error', err instanceof Error ? err.message : 'Could not link customer profile.');
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleReassignCustomers = async (
+    admin: AdminAccountRow,
+    replacementAdminId: string | null
+  ): Promise<boolean> => {
+    setBusy(true);
+    try {
+      const res = await api<{ reassignedCount: number }>(
+        `/api/admin/admins/${encodeURIComponent(admin.id)}/reassign-customers`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ replacementAdminId }),
+        }
+      );
+      await loadData();
+      if (selectedUser) {
+        await loadSelectedUser(selectedUser.id).catch(() => undefined);
+      }
+      notify('success', `Reassigned ${res.reassignedCount} customer(s) from @${admin.username}.`);
+      return true;
+    } catch (err) {
+      notify('error', err instanceof Error ? err.message : 'Could not reassign customers.');
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleRevokeSuperAdminSessions = async () => {
+    setBusy(true);
+    try {
+      const res = await api<{ ok: boolean; token: string }>('/api/admin/me/revoke-all-sessions', {
+        method: 'POST',
+        body: '{}',
+      });
+      if (res.token) {
+        tokenRef.current = res.token;
+        setToken(res.token);
+        writeAdminToken(res.token);
+        onTokenChangeRef.current?.(res.token);
+      }
+      await loadData(res.token || token);
+      notify('success', 'All other Super Administrator sessions were revoked.');
+    } catch (err) {
+      notify('error', err instanceof Error ? err.message : 'Could not revoke sessions.');
     } finally {
       setBusy(false);
     }
@@ -1304,6 +1577,9 @@ export const AdminPage: React.FC<{
       onTokenChangeRef.current?.('');
       setToken('');
       setAuthenticated(false);
+      setIsSuperAdmin(false);
+      setLinkedUserId(null);
+      setTab('overview');
       setLoginError('Password updated. Please sign in with your new administrator password.');
       return true;
     } catch (err) {
@@ -1326,6 +1602,7 @@ export const AdminPage: React.FC<{
       a.download = `chase-simulator-backup-${new Date().toISOString().slice(0, 10)}.json`;
       a.click();
       window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      await loadData();
       notify('success', 'Full simulator backup JSON downloaded.');
     } catch (err) {
       notify('error', err instanceof Error ? err.message : 'Could not download backup.');
@@ -1334,17 +1611,29 @@ export const AdminPage: React.FC<{
     }
   };
 
-  const handleRestoreBackup = async (file: File, confirmText: string): Promise<boolean> => {
+  const handleRestoreBackup = async (
+    file: File,
+    confirmText: string,
+    restoreAdmins = false
+  ): Promise<boolean> => {
     setBusy(true);
     try {
       const parsed = JSON.parse(await file.text());
-      const res = await api<{ usersRestored: number }>('/api/admin/backup', {
+      const res = await api<{ usersRestored: number; adminsRestored?: number }>('/api/admin/backup', {
         method: 'POST',
-        body: JSON.stringify({ ...parsed, confirmText }),
+        body: JSON.stringify({ ...parsed, confirmText, restoreAdmins }),
       });
       const loaded = await loadData();
-      if (loaded[0]) await loadSelectedUser(loaded[0].id);
-      notify('success', `Restored ${res.usersRestored} test customer profiles from backup.`);
+      if (loaded[0]) {
+        await loadSelectedUser(loaded[0].id);
+      } else {
+        setSelectedUser(null);
+        setUserJson('');
+      }
+      notify(
+        'success',
+        `Restored ${res.usersRestored} customer profile(s)${res.adminsRestored ? ` and ${res.adminsRestored} staff account(s)` : ''} from backup.`
+      );
       return true;
     } catch (err) {
       notify('error', err instanceof Error ? err.message : 'Could not restore backup file.');
@@ -1362,7 +1651,12 @@ export const AdminPage: React.FC<{
         body: JSON.stringify({ confirmText }),
       });
       const loaded = await loadData();
-      if (loaded[0]) await loadSelectedUser(loaded[0].id);
+      if (loaded[0]) {
+        await loadSelectedUser(loaded[0].id);
+      } else {
+        setSelectedUser(null);
+        setUserJson('');
+      }
       notify('success', 'Test customer data was reset.');
       return true;
     } catch (err) {
@@ -1745,11 +2039,46 @@ export const AdminPage: React.FC<{
               </button>
               <span className="hidden sm:inline-block h-4 w-px bg-white/25" />
               <span className="hidden sm:inline-block text-[12px] font-semibold tracking-wide uppercase text-blue-200 truncate">
-                {isReadOnly ? 'Auditor Console (Read-Only)' : 'Operations & Simulator'}
+                {isSuperAdmin
+                  ? 'Super Administrator'
+                  : isReadOnly
+                    ? 'Auditor Console (Read-Only)'
+                    : 'Limited Administrator'}
               </span>
             </div>
 
             <div className="flex items-center gap-2 sm:gap-3.5">
+              {/* Linked Admin → Personal Banking Switcher */}
+              {linkedUserId && (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void handleSwitchToCustomer()}
+                  className="inline-flex items-center gap-1.5 rounded-[4px] bg-white/15 hover:bg-white/25 text-white text-[12px] font-semibold px-2.5 py-1.5 cursor-pointer"
+                  title="Switch to your linked personal Chase banking view"
+                >
+                  <Building2 className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">My Banking</span>
+                </button>
+              )}
+
+              {/* Change Own Password — accessible for ALL non-root admins & auditors */}
+              {!isSuperAdmin && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setHeaderCurPwd('');
+                    setHeaderNextPwd('');
+                    setHeaderOwnPwdOpen(true);
+                  }}
+                  className="inline-flex items-center gap-1.5 rounded-[4px] border border-white/30 hover:bg-white/10 text-white text-[12px] font-semibold px-2.5 py-1.5 cursor-pointer"
+                  title="Change your administrator password"
+                >
+                  <KeyRound className="w-3.5 h-3.5" />
+                  <span className="hidden md:inline">Password</span>
+                </button>
+              )}
+
               {/* Mobile hamburger */}
               <button
                 type="button"
@@ -2139,6 +2468,7 @@ export const AdminPage: React.FC<{
         {tab === 'users' && (
           <UsersTab
             users={users}
+            adminAccounts={adminAccounts}
             selectedUser={selectedUser}
             userJson={userJson}
             onChangeUserJson={setUserJson}
@@ -2147,9 +2477,14 @@ export const AdminPage: React.FC<{
             onSelectUser={(id) => void selectUserAndMaybeGo(id)}
             isSuperAdmin={isSuperAdmin}
             isLinkedAdmin={adminAccounts.some(a => a.linkedUserId === selectedUser?.id)}
+            ownerFilter={ownerFilter}
+            onOwnerFilterChange={setOwnerFilter}
             onPromote={handlePromote}
+            onRevokeLinkedAdmin={handleRevokeLinkedAdmin}
+            onAssignOwner={handleAssignOwner}
             canCreateUsers={permissions.createUsers}
             canGenerateActivity={permissions.generateActivity}
+            capabilities={capabilities}
             onCreateUser={handleCreateUser}
             onBulkUsers={handleBulkUsers}
             onSaveUserObject={handleSaveUserObject}
@@ -2170,7 +2505,7 @@ export const AdminPage: React.FC<{
           <AccountsTab
             users={users}
             selectedUser={selectedUser}
-            isReadOnly={isReadOnly}
+            isReadOnly={isReadOnly || (!isSuperAdmin && !capabilities.manageAccounts)}
             busy={busy}
             onSelectUser={(id) => void selectUserAndMaybeGo(id)}
             onCreateAccount={handleCreateAccount}
@@ -2186,7 +2521,7 @@ export const AdminPage: React.FC<{
             users={users}
             selectedUser={selectedUser}
             globalTransactions={globalTransactions}
-            isReadOnly={isReadOnly}
+            isReadOnly={isReadOnly || (!isSuperAdmin && !capabilities.editLedger)}
             busy={busy}
             onSelectUser={(id) => void selectUserAndMaybeGo(id)}
             onCreateLedgerEntry={handleCreateLedgerEntry}
@@ -2201,6 +2536,7 @@ export const AdminPage: React.FC<{
             selectedUser={selectedUser}
             globalDisputes={analytics?.disputes || []}
             isReadOnly={isReadOnly}
+            isSuperAdmin={isSuperAdmin}
             busy={busy}
             onSelectUser={(id) => void selectUserAndMaybeGo(id)}
             onTransfer={handleAdminTransfer}
@@ -2214,8 +2550,8 @@ export const AdminPage: React.FC<{
             onSetDisputeStatus={handleSetDisputeStatus}
             onIssueRefund={handleIssueRefund}
             onCreateLedgerEntry={handleCreateLedgerEntry}
-            onProcessScheduled={handleProcessScheduled}
-            onRunMonthEndClose={handleRunMonthEndClose}
+            onProcessScheduled={isSuperAdmin ? handleProcessScheduled : undefined}
+            onRunMonthEndClose={isSuperAdmin ? handleRunMonthEndClose : undefined}
           />
         )}
 
@@ -2223,7 +2559,7 @@ export const AdminPage: React.FC<{
           <WealthCreditTab
             users={users}
             selectedUser={selectedUser}
-            isReadOnly={isReadOnly}
+            isReadOnly={isReadOnly || (!isSuperAdmin && !capabilities.manageCustomerAccess)}
             busy={busy}
             onSelectUser={(id) => void selectUserAndMaybeGo(id)}
             onSaveUserObject={handleSaveUserObject}
@@ -2248,14 +2584,15 @@ export const AdminPage: React.FC<{
           </>
         )}
 
-        {tab === 'audit' && <AuditTab audit={audit} />}
+        {tab === 'audit' && <AuditTab audit={audit} isSuperAdmin={isSuperAdmin} />}
 
-        {tab === 'settings' && (
+        {tab === 'settings' && isSuperAdmin && (
           <SettingsTab
             settings={simulatorSettings}
             onChangeSettings={setSimulatorSettings}
             onSaveSettings={handleSaveSettings}
             adminAccounts={adminAccounts}
+            users={users}
             currentAdminUsername={currentAdminUsername}
             isReadOnly={isReadOnly}
             busy={busy}
@@ -2263,13 +2600,76 @@ export const AdminPage: React.FC<{
             onCreateAdmin={handleCreateAdmin}
             onUpdateAdmin={handleUpdateAdmin}
             onDeleteAdmin={handleDeleteAdmin}
+            onLinkCustomer={handleLinkCustomer}
+            onReassignCustomers={handleReassignCustomers}
+            onInspectAdminCustomers={(adminId) => {
+              setOwnerFilter(adminId);
+              setTab('users');
+            }}
+            onOpenLinkedCustomer={(userId) => {
+              setOwnerFilter('all');
+              void selectUserAndMaybeGo(userId, 'users');
+            }}
             onChangeOwnPassword={handleChangeOwnPassword}
+            onRevokeSuperAdminSessions={handleRevokeSuperAdminSessions}
             onDownloadBackup={handleDownloadBackup}
             onRestoreBackup={handleRestoreBackup}
             onResetSimulator={handleResetSimulator}
           />
         )}
       </main>
+
+      {/* Change Own Administrator Password Modal (header action for limited admins & auditors) */}
+      <Modal
+        open={headerOwnPwdOpen}
+        onClose={() => setHeaderOwnPwdOpen(false)}
+        title="Change My Administrator Password"
+        footer={
+          <>
+            <Btn variant="secondary" onClick={() => setHeaderOwnPwdOpen(false)}>
+              Cancel
+            </Btn>
+            <Btn
+              variant="primary"
+              disabled={busy || headerNextPwd.length < 10 || !headerCurPwd}
+              onClick={async () => {
+                const ok = await handleChangeOwnPassword(headerCurPwd, headerNextPwd);
+                if (ok) {
+                  setHeaderOwnPwdOpen(false);
+                  setHeaderCurPwd('');
+                  setHeaderNextPwd('');
+                }
+              }}
+            >
+              Update Password
+            </Btn>
+          </>
+        }
+      >
+        <div className="space-y-3">
+          {linkedUserId && (
+            <p className="text-xs text-blue-700 dark:text-blue-300">
+              Your account is linked to a personal Chase banking profile. Changing your password updates both views and signs out all active sessions.
+            </p>
+          )}
+          <label className="block">
+            <span className="block text-[12px] font-medium mb-1">Current Password</span>
+            <TextInput
+              type="password"
+              value={headerCurPwd}
+              onChange={(e) => setHeaderCurPwd(e.target.value)}
+            />
+          </label>
+          <label className="block">
+            <span className="block text-[12px] font-medium mb-1">New Password (minimum 10 characters)</span>
+            <TextInput
+              type="password"
+              value={headerNextPwd}
+              onChange={(e) => setHeaderNextPwd(e.target.value)}
+            />
+          </label>
+        </div>
+      </Modal>
 
       {/* Quick Deposit / Adjust Customer Balance Modal (available from sub-bar on every tab) */}
       <Modal

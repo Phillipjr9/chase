@@ -252,6 +252,23 @@ export interface CustomChaseOffer {
   activated?: boolean;
 }
 
+export interface LinkedAdminSummary {
+  id: string;
+  username: string;
+  fullName: string;
+  role: 'admin' | 'auditor';
+  status: 'active' | 'disabled';
+  permissions?: { createUsers: boolean; generateActivity: boolean; sendMessages: boolean };
+  capabilities?: {
+    manageAccounts: boolean;
+    editLedger: boolean;
+    impersonateUsers: boolean;
+    manageCustomerAccess: boolean;
+    manageDisputes: boolean;
+    publishNotices: boolean;
+  };
+}
+
 export interface User {
   id: string;
   username: string;
@@ -277,6 +294,8 @@ export interface User {
   customOffers?: CustomChaseOffer[];
   status?: 'active' | 'suspended';
   adminCreated?: boolean;
+  ownerAdminId?: string | null;
+  linkedAdmin?: LinkedAdminSummary | null;
   createdAt: string;
 }
 
@@ -846,7 +865,9 @@ export async function fetchMe(): Promise<User | null> {
       const data = await apiFetch('/api/auth/me', { method: 'GET' });
       if ((token || readCustomerToken()) !== tokenBefore) return null;
       if (data.token) setToken(data.token);
-      return hydrateDefaults(data.user as User);
+      const u = hydrateDefaults(data.user as User);
+      if (data.linkedAdmin) u.linkedAdmin = data.linkedAdmin as LinkedAdminSummary;
+      return u;
     } catch {
       if ((token || readCustomerToken()) === tokenBefore) setToken(null);
       return null;
@@ -857,10 +878,24 @@ export async function fetchMe(): Promise<User | null> {
   return u ? hydrateDefaults(u) : null;
 }
 
+export async function switchToAdmin(): Promise<{
+  admin: { username: string; label: string; role: 'admin' | 'auditor'; isSuperAdmin?: boolean; linkedUserId?: string | null };
+  token: string;
+}> {
+  if (!(await detectApi())) throw new Error('Administrator console requires the server connection.');
+  const data = await apiFetch('/api/auth/switch-to-admin', { method: 'POST', body: JSON.stringify({}) });
+  if (data.token) writeAdminToken(data.token);
+  return { admin: data.admin, token: data.token };
+}
+
 export async function authenticate(
   username: string,
   password: string
-): Promise<{ user: User } | { admin: { username: string; label: string; role?: 'admin' | 'auditor' }; token: string } | { error: string }> {
+): Promise<
+  | { user: User; linkedAdmin?: LinkedAdminSummary | null }
+  | { admin: { username: string; label: string; role?: 'admin' | 'auditor'; isSuperAdmin?: boolean }; token: string }
+  | { error: string }
+> {
   if (await detectApi()) {
     try {
       const data = await apiFetch('/api/auth/login', {
@@ -873,7 +908,9 @@ export async function authenticate(
         return { admin: data.admin, token: data.token };
       }
       setToken(data.token);
-      return { user: hydrateDefaults(data.user as User) };
+      const hydrated = hydrateDefaults(data.user as User);
+      if (data.linkedAdmin) hydrated.linkedAdmin = data.linkedAdmin as LinkedAdminSummary;
+      return { user: hydrated, linkedAdmin: (data.linkedAdmin as LinkedAdminSummary) || null };
     } catch (e) {
       const err = e as ApiError;
       if (err.status && err.status >= 400 && err.status < 500) return { error: err.message };

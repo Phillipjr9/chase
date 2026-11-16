@@ -16,6 +16,36 @@ export type AdminTab =
 
 export type CashflowRange = '7d' | '30d' | '12w';
 
+export interface AdminPermissions {
+  createUsers: boolean;
+  generateActivity: boolean;
+  sendMessages: boolean;
+}
+
+export interface AdminCapabilities {
+  manageAccounts: boolean;
+  editLedger: boolean;
+  impersonateUsers: boolean;
+  manageCustomerAccess: boolean;
+  manageDisputes: boolean;
+  publishNotices: boolean;
+}
+
+export const DEFAULT_ADMIN_PERMISSIONS: AdminPermissions = {
+  createUsers: true,
+  generateActivity: true,
+  sendMessages: true,
+};
+
+export const DEFAULT_ADMIN_CAPABILITIES: AdminCapabilities = {
+  manageAccounts: true,
+  editLedger: true,
+  impersonateUsers: true,
+  manageCustomerAccess: true,
+  manageDisputes: true,
+  publishNotices: true,
+};
+
 export interface AdminUserRow {
   id: string;
   username: string;
@@ -23,6 +53,9 @@ export interface AdminUserRow {
   email: string;
   status: 'active' | 'suspended';
   ownerAdminId?: string | null;
+  linkedAdminId?: string | null;
+  linkedAdminRole?: 'admin' | 'auditor' | null;
+  linkedAdminStatus?: 'active' | 'disabled' | null;
   creditScore?: number;
   createdAt: string;
   accountCount: number;
@@ -61,9 +94,17 @@ export interface AdminAccountRow {
   createdAt?: string;
   protected?: boolean;
   linkedUserId?: string;
+  linkedCustomer?: {
+    id: string;
+    username: string;
+    fullName: string;
+    email: string;
+    status: 'active' | 'suspended';
+  } | null;
   lockMessage?: string;
   supportContact?: { email: string; phone: string };
-  permissions?: { createUsers: boolean; generateActivity: boolean; sendMessages: boolean };
+  permissions?: AdminPermissions;
+  capabilities?: AdminCapabilities;
   customerCount?: number;
   unreadCount?: number;
   lastActivity?: string | null;
@@ -110,7 +151,7 @@ export interface OverviewAnalytics {
   monthlyTarget: number;
   disputes: GlobalDispute[];
   unreadMessagesCount?: number;
-  system: {
+  system?: {
     storageBackend?: string;
     nodeVersion: string;
     platform: string;
@@ -131,6 +172,7 @@ export interface OverviewAnalytics {
 export interface SimulatorSettings {
   allowEnrollment: boolean;
   allowCustomerPasswordReset: boolean;
+  rootSupportContact?: { email: string; phone: string };
 }
 
 export class AdminApiError extends Error {
@@ -143,19 +185,12 @@ export class AdminApiError extends Error {
   }
 }
 
-export function withAdminTokenParam(path: string, authToken: string): string {
-  if (!authToken || !path.startsWith('/api/admin/') || path === '/api/admin/login') return path;
-  const sep = path.includes('?') ? '&' : '?';
-  return `${path}${sep}_ast=${encodeURIComponent(authToken)}`;
-}
-
 export async function adminFetch<T>(
   path: string,
   init: RequestInit = {},
   authToken = ''
 ): Promise<T> {
-  const url = withAdminTokenParam(path, authToken);
-  const response = await fetch(url, {
+  const response = await fetch(path, {
     ...init,
     credentials: init.credentials || 'same-origin',
     headers: {

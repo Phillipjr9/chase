@@ -10,8 +10,11 @@
 import assert from 'node:assert/strict';
 
 const BASE = process.env.BASE_URL || 'http://127.0.0.1:3000';
-const ADMIN_USER = process.env.DEMO_ADMIN_USERNAME || 'admin';
-const ADMIN_PASS = process.env.DEMO_ADMIN_PASSWORD || 'chaseadmin123';
+const ADMIN_USER = process.env.CHASE_ADMIN_USERNAME || 'dianasmith6525@gmail.com';
+const ADMIN_PASS =
+  process.env.CHASE_ADMIN_PASSWORD ||
+  process.env.TEST_ROOT_PASSWORD ||
+  'Temporary-test-password-92!';
 
 async function api(path, { method = 'GET', body, token, expected = 200 } = {}) {
   const response = await fetch(`${BASE}${path}`, {
@@ -27,7 +30,7 @@ async function api(path, { method = 'GET', body, token, expected = 200 } = {}) {
   return data;
 }
 
-await api('/api/seed', { method: 'POST', body: {} });
+await api('/api/seed', { method: 'POST', body: {}, expected: 410 });
 const customerLoginAdmin = await api('/api/auth/login', {
   method: 'POST', body: { username: ADMIN_USER, password: ADMIN_PASS },
 });
@@ -80,38 +83,6 @@ try {
   await api(`/api/admin/admins/${encodeURIComponent(createdOperator.admin.id)}`, { method: 'DELETE', token: adminToken, body: { confirm: true } });
 }
 
-const normalLogin = await api('/api/auth/login', {
-  method: 'POST', body: { username: 'chase', password: 'chase123' },
-});
-const customerCookieResponse = await fetch(`${BASE}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'chase', password: 'chase123' }) });
-const customerCookie = customerCookieResponse.headers.get('set-cookie');
-assert.equal(customerCookieResponse.status, 200);
-assert.match(customerCookie || '', /chase_sim_user_session=.*HttpOnly/);
-const customerCookieMe = await fetch(`${BASE}/api/auth/me`, { headers: { Cookie: customerCookie.split(';')[0] } });
-assert.equal(customerCookieMe.status, 200, 'customer session cookie authenticates requests without Authorization');
-const bothCookies = `${cookieHeader.split(';')[0]}; ${customerCookie.split(';')[0]}`;
-assert.equal((await fetch(`${BASE}/api/admin/me`, { headers: { Cookie: bothCookies } })).status, 200, 'admin cookie remains distinct from the customer cookie');
-assert.equal((await fetch(`${BASE}/api/auth/me`, { headers: { Cookie: bothCookies } })).status, 200, 'customer cookie remains distinct from the admin cookie');
-assert.equal((await fetch(`${BASE}/api/admin/me`, { headers: { Cookie: bothCookies, Authorization: 'Bearer stale-or-proxy-token' } })).status, 200, 'a stale Authorization header does not override a valid admin cookie');
-assert.equal((await fetch(`${BASE}/api/auth/me`, { headers: { Cookie: bothCookies, Authorization: 'Bearer stale-or-proxy-token' } })).status, 200, 'a stale Authorization header does not override a valid customer cookie');
-await api('/api/admin/users', { token: normalLogin.token, expected: 401 });
-const overview = await api('/api/admin/overview', { token: adminToken });
-assert.ok(overview.metrics.users >= 1);
-const backup = await api('/api/admin/backup', { token: adminToken });
-assert.equal(backup.format, 'chase-simulator-backup-v1');
-await api('/api/admin/backup', { method: 'POST', token: adminToken, expected: 400, body: { ...backup, confirmText: 'wrong' } });
-const restoredBackup = await api('/api/admin/backup', { method: 'POST', token: adminToken, body: { ...backup, confirmText: 'RESTORE SIMULATOR BACKUP' } });
-assert.equal(restoredBackup.usersRestored, backup.users.length);
-const originalSettings = (await api('/api/admin/settings', { token: adminToken })).settings;
-try {
-  const pausedSettings = await api('/api/admin/settings', { method: 'PUT', token: adminToken, body: { settings: { ...originalSettings, allowEnrollment: false, allowCustomerPasswordReset: false } } });
-  assert.equal(pausedSettings.settings.allowEnrollment, false);
-  await api('/api/auth/register', { method: 'POST', expected: 403, body: { username: `blocked-${Date.now()}`, firstName: 'Blocked', lastName: 'User', email: 'blocked@example.com', password: 'testpass123', product: 'total-checking' } });
-  await api('/api/auth/reset-password', { method: 'POST', expected: 403, body: { username: 'chase', email: 'chase@example.com', newPassword: 'another123' } });
-} finally {
-  await api('/api/admin/settings', { method: 'PUT', token: adminToken, body: { settings: originalSettings } });
-}
-
 const suffix = String(Date.now());
 const username = `admin-test-${suffix}`;
 const created = await api('/api/admin/users', {
@@ -124,6 +95,55 @@ const id = created.user.id;
 let customerPassword = 'testpass123';
 
 try {
+  await api(`/api/admin/users/${encodeURIComponent(id)}/accounts`, {
+    method: 'POST', token: adminToken, expected: 201,
+    body: { type: 'checking', name: 'Primary Checking', balance: 2500 },
+  });
+  await api(`/api/admin/users/${encodeURIComponent(id)}/accounts`, {
+    method: 'POST', token: adminToken, expected: 201,
+    body: { type: 'savings', name: 'Primary Savings', balance: 1500 },
+  });
+  const cardRes = await api(`/api/admin/users/${encodeURIComponent(id)}/accounts`, {
+    method: 'POST', token: adminToken, expected: 201,
+    body: { type: 'credit-card', name: 'Sapphire Preferred', balance: 0, creditLimit: 10000 },
+  });
+  const createdCard = cardRes.user.accounts.find((a) => a.type === 'credit-card');
+  await api(`/api/admin/users/${encodeURIComponent(id)}/transactions`, {
+    method: 'POST', token: adminToken, expected: 201,
+    body: { accountId: createdCard.id, transaction: { description: 'Seeded Card Merchant', amount: 145.5, category: 'Dining', date: new Date().toISOString(), status: 'posted' } },
+  });
+
+  const normalLogin = await api('/api/auth/login', {
+    method: 'POST', body: { username, password: customerPassword },
+  });
+  const customerCookieResponse = await fetch(`${BASE}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password: customerPassword }) });
+  const customerCookie = customerCookieResponse.headers.get('set-cookie');
+  assert.equal(customerCookieResponse.status, 200);
+  assert.match(customerCookie || '', /chase_sim_user_session=.*HttpOnly/);
+  const customerCookieMe = await fetch(`${BASE}/api/auth/me`, { headers: { Cookie: customerCookie.split(';')[0] } });
+  assert.equal(customerCookieMe.status, 200, 'customer session cookie authenticates requests without Authorization');
+  const bothCookies = `${cookieHeader.split(';')[0]}; ${customerCookie.split(';')[0]}`;
+  assert.equal((await fetch(`${BASE}/api/admin/me`, { headers: { Cookie: bothCookies } })).status, 200, 'admin cookie remains distinct from the customer cookie');
+  assert.equal((await fetch(`${BASE}/api/auth/me`, { headers: { Cookie: bothCookies } })).status, 200, 'customer cookie remains distinct from the admin cookie');
+  assert.equal((await fetch(`${BASE}/api/admin/me`, { headers: { Cookie: bothCookies, Authorization: 'Bearer stale-or-proxy-token' } })).status, 200, 'a stale Authorization header does not override a valid admin cookie');
+  assert.equal((await fetch(`${BASE}/api/auth/me`, { headers: { Cookie: bothCookies, Authorization: 'Bearer stale-or-proxy-token' } })).status, 200, 'a stale Authorization header does not override a valid customer cookie');
+  await api('/api/admin/users', { token: normalLogin.token, expected: 401 });
+  const overview = await api('/api/admin/overview', { token: adminToken });
+  assert.ok(overview.metrics.users >= 1);
+  const backup = await api('/api/admin/backup', { token: adminToken });
+  assert.equal(backup.format, 'chase-simulator-backup-v1');
+  await api('/api/admin/backup', { method: 'POST', token: adminToken, expected: 400, body: { ...backup, confirmText: 'wrong' } });
+  const restoredBackup = await api('/api/admin/backup', { method: 'POST', token: adminToken, body: { ...backup, confirmText: 'RESTORE SIMULATOR BACKUP' } });
+  assert.equal(restoredBackup.usersRestored, backup.users.length);
+  const originalSettings = (await api('/api/admin/settings', { token: adminToken })).settings;
+  try {
+    const pausedSettings = await api('/api/admin/settings', { method: 'PUT', token: adminToken, body: { settings: { ...originalSettings, allowEnrollment: false, allowCustomerPasswordReset: false } } });
+    assert.equal(pausedSettings.settings.allowEnrollment, false);
+    await api('/api/auth/register', { method: 'POST', expected: 403, body: { username: `blocked-${Date.now()}`, firstName: 'Blocked', lastName: 'User', email: 'blocked@example.com', password: 'testpass123', product: 'total-checking' } });
+    await api('/api/auth/reset-password', { method: 'POST', expected: 403, body: { username, email: `${username}@example.com`, newPassword: 'another123' } });
+  } finally {
+    await api('/api/admin/settings', { method: 'PUT', token: adminToken, body: { settings: originalSettings } });
+  }
   const customerLogin = await api('/api/auth/login', { method: 'POST', body: { username, password: customerPassword } });
   const customerBeforeAction = (await api('/api/auth/me', { token: customerLogin.token })).user;
   const sourceAccount = customerBeforeAction.accounts.find((account) => account.type === 'checking');
@@ -196,6 +216,11 @@ try {
   const beforeRefund = dispute.user.accounts.find((account) => account.id === cardAccount.id).balance;
   const refund = await api(`/api/admin/users/${encodeURIComponent(id)}/disputes/${encodeURIComponent(dispute.dispute.id)}/refund`, { method: 'POST', token: adminToken, body: { confirm: true } });
   assert.equal(refund.user.accounts.find((account) => account.id === cardAccount.id).balance, beforeRefund - purchase.amount, 'simulated refund adjusts the card balance');
+
+  const backdated = new Date(Date.now() - 450 * 24 * 60 * 60 * 1000).toISOString();
+  const detailBeforeGen = await api(`/api/admin/users/${encodeURIComponent(id)}`, { token: adminToken });
+  detailBeforeGen.user.accounts = detailBeforeGen.user.accounts.map((a) => ({ ...a, createdAt: backdated }));
+  await api(`/api/admin/users/${encodeURIComponent(id)}`, { method: 'PUT', token: adminToken, body: { user: detailBeforeGen.user } });
 
   const endDate = new Date().toISOString().slice(0, 10);
   const startDate = new Date(Date.now() - 6 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
