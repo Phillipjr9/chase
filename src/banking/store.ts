@@ -539,6 +539,7 @@ export function defaultBudgets(): Record<string, number> {
 const TOKEN_KEY = 'chase_clone_token_v1';
 const USERS_KEY = 'chase_clone_users_v2';
 const SESSION_KEY = 'chase_clone_session_v2';
+const ADMIN_TOKEN_KEY = 'chase_sim_admin_token';
 
 let token: string | null = null;
 try {
@@ -552,6 +553,16 @@ function setToken(t: string | null) {
   try {
     if (t) localStorage.setItem(TOKEN_KEY, t);
     else localStorage.removeItem(TOKEN_KEY);
+  } catch {
+    /* storage unavailable */
+  }
+}
+
+function clearUserSessionState() {
+  setToken(null);
+  setLocalSession(null);
+  try {
+    sessionStorage.removeItem(ADMIN_TOKEN_KEY);
   } catch {
     /* storage unavailable */
   }
@@ -941,11 +952,16 @@ export async function authenticate(
 
 export async function logout(): Promise<void> {
   if (await detectApi()) {
-    await apiFetch('/api/auth/logout', { method: 'POST' }).catch(() => undefined);
-    setToken(null);
+    try {
+      await apiFetch('/api/auth/logout', { method: 'POST' });
+    } catch {
+      // The backend may already have rejected a stale token. Clear the local
+      // customer and admin state so the user is not stuck with an invalid session.
+    }
+    clearUserSessionState();
     return;
   }
-  setLocalSession(null);
+  clearUserSessionState();
 }
 
 export async function resetPassword(
@@ -1881,10 +1897,10 @@ export async function cancelScheduledPayment(id: string): Promise<User> {
 export async function signOutAllDevices(): Promise<void> {
   if (await detectApi()) {
     await apiFetch('/api/auth/sign-out-all', { method: 'POST' }).catch(() => undefined);
-    setToken(null);
+    clearUserSessionState();
     return;
   }
-  setLocalSession(null);
+  clearUserSessionState();
 }
 
 export async function changePasswordApi(

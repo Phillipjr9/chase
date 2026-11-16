@@ -209,9 +209,9 @@ server-side and returns the updated user object.
   refunds; bulk user status/delete actions; admin and read-only auditor accounts;
   secure JSON backup/restore; user session revocation; environment access controls;
   and a persistent 5,000-entry audit log. Admin credentials entered in the regular
-  sign-in form route directly to administration; `/admin` also has one-click demo sign-in. Demo
-  credentials are `admin` / `chaseadmin123` (override with `DEMO_ADMIN_USERNAME`
-  and `DEMO_ADMIN_PASSWORD` environment variables).
+  sign-in form route directly to administration; `/admin` also has one-click Chase admin sign-in. Chase
+  admin credentials are `admin` / `chaseadmin123` (override with `CHASE_ADMIN_USERNAME`
+  and `CHASE_ADMIN_PASSWORD` environment variables).
   Admin controls only simulated data; this portal has no real payment rails.
 - Committed end-to-end test (`tests/e2e.mjs`) covering sign in → transfer →
   card payment → persistence, asserting balances through the API; admin API

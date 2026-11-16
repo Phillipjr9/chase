@@ -103,6 +103,8 @@ export function App() {
     if ('admin' in result) {
       try {
         sessionStorage.setItem('chase_sim_admin_token', result.token);
+        localStorage.removeItem('chase_clone_token_v1');
+        localStorage.removeItem('chase_clone_session_v2');
       } catch {
         return 'Admin sign-in requires browser session storage. Please enable it and try again.';
       }
@@ -113,6 +115,8 @@ export function App() {
       setView('admin');
       return null;
     }
+    sessionStorage.removeItem('chase_sim_admin_token');
+    setAdminTokenForView('');
     setCurrentUser(result.user);
     setView('dashboard');
     return null;
@@ -133,6 +137,8 @@ export function App() {
 
   const handleSignOut = async () => {
     await logout();
+    sessionStorage.removeItem('chase_sim_admin_token');
+    setAdminTokenForView('');
     setCurrentUser(null);
     setIsImpersonating(false);
     setDashboardStart('accounts');
@@ -152,6 +158,7 @@ export function App() {
   };
 
   const exitAdmin = () => {
+    sessionStorage.removeItem('chase_sim_admin_token');
     setAdminTokenForView('');
     if (window.location.pathname !== '/') window.history.pushState({}, '', '/');
     setView('home');
@@ -168,6 +175,8 @@ export function App() {
 
   const exitImpersonation = async () => {
     await logout();
+    sessionStorage.removeItem('chase_sim_admin_token');
+    setAdminTokenForView('');
     setCurrentUser(null);
     setIsImpersonating(false);
     if (window.location.pathname !== '/admin') window.history.pushState({}, '', '/admin');

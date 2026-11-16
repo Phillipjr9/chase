@@ -24,6 +24,8 @@ import {
   X,
 } from 'lucide-react';
 import type { AccountType, Transaction, User } from '../banking/store';
+import { Footer } from './Footer';
+import { Header } from './Header';
 import { Spinner } from './Loading';
 
 const BLUE = '#1A4488';
@@ -99,7 +101,7 @@ const inputDate = (daysAgo = 0) => {
 const fieldCls = 'w-full h-10 px-3 border border-[#B7BEC6] rounded-[4px] text-[14px] text-[#131313] bg-white focus:border-[#1A4488] outline-none';
 
 const Panel: React.FC<{ children: React.ReactNode; className?: string }> = ({ children, className = '' }) => (
-  <section className={`border rounded-[6px] bg-white ${className}`} style={{ borderColor: LINE }}>{children}</section>
+  <section className={`rounded-[18px] border border-slate-200 bg-white shadow-[0_8px_28px_rgba(15,23,42,0.06)] ${className}`} style={{ borderColor: LINE }}>{children}</section>
 );
 
 const Button: React.FC<{
@@ -132,7 +134,7 @@ export const AdminPage: React.FC<{
     if (initialToken) return initialToken;
     try { return sessionStorage.getItem(ADMIN_TOKEN_KEY) || ''; } catch { return ''; }
   });
-  const [adminName, setAdminName] = useState('Demo administrator');
+  const [adminName, setAdminName] = useState('Chase administrator');
   const [currentAdminRole, setCurrentAdminRole] = useState<'admin' | 'auditor'>('admin');
   const [currentAdminUsername, setCurrentAdminUsername] = useState('admin');
   const [adminAccounts, setAdminAccounts] = useState<AdminAccountRow[]>([]);
@@ -958,7 +960,7 @@ export const AdminPage: React.FC<{
             <button type="button" onClick={onExit} className="text-[12px] font-semibold hover:underline" style={{ color: BLUE }}>Back to site</button>
           </div>
           <h1 className="mt-5 text-[24px] font-light" style={{ color: INK }}>Administrator sign in</h1>
-          <p className="mt-1 text-[13px]" style={{ color: MUTED }}>Demo-only controls for the simulated banking environment.</p>
+          <p className="mt-1 text-[13px]" style={{ color: MUTED }}>Chase admin controls for the simulated banking environment.</p>
           {loginError && <p role="alert" className="mt-4 rounded-[4px] bg-[#FEF2F2] border border-[#F5C2C7] px-3 py-2 text-[13px] text-[#B42318]">{loginError}</p>}
           <form className="mt-5 space-y-4" onSubmit={signIn}>
             <label className="block"><span className="block text-[12.5px] font-semibold mb-1.5" style={{ color: MUTED }}>Admin username</span><input className={fieldCls} autoComplete="username" value={username} onChange={(e) => setUsername(e.target.value)} required /></label>
@@ -966,10 +968,10 @@ export const AdminPage: React.FC<{
             <Button type="submit" tone="primary" className="w-full" disabled={busy}>{busy && <Spinner size="sm" tone="white" />}{busy ? 'Signing in…' : 'Sign in as administrator'}</Button>
           </form>
           <Button type="button" tone="outline" className="mt-3 w-full" disabled={busy} onClick={() => void signIn(undefined, { username: 'admin', password: 'chaseadmin123' })}>
-            <UserRound className="w-4 h-4" /> One-click demo admin sign in
+            <UserRound className="w-4 h-4" /> One-click Chase admin sign in
           </Button>
           <div className="mt-4 rounded-[4px] bg-[#F7FAFD] border px-3 py-2.5 text-[12px] leading-relaxed" style={{ borderColor: '#CFE0F0', color: MUTED }}>
-            Demo credentials: <strong style={{ color: INK }}>admin / chaseadmin123</strong>. This portal only changes simulated data; it has no connection to real accounts or payment networks.
+            Chase admin credentials: <strong style={{ color: INK }}>admin / chaseadmin123</strong>. This portal only changes simulated data; it has no connection to real accounts or payment networks.
           </div>
         </Panel>
       </div>
@@ -985,6 +987,28 @@ export const AdminPage: React.FC<{
     { id: 'audit', label: 'Admin audit log', icon: <BookOpenCheck className="w-4 h-4" /> },
     { id: 'settings', label: 'Simulator settings', icon: <LockKeyhole className="w-4 h-4" /> },
   ];
+
+  const handleAdminToolbarAction = (actionId: string) => {
+    const map: Record<string, AdminTab> = {
+      'footer-accounts': 'overview',
+      'footer-pay': 'operations',
+      'footer-statements': 'transactions',
+      'footer-security': 'settings',
+      'footer-budgeting': 'overview',
+      'footer-offers': 'overview',
+      'footer-advisors': 'overview',
+      'footer-locations': 'overview',
+    };
+    if (map[actionId]) {
+      setTab(map[actionId]);
+      return;
+    }
+    if (actionId === 'admin-login') {
+      return;
+    }
+    onExit();
+  };
+
   const metricCards = metrics ? [
     { label: 'Simulator users', value: String(metrics.users), icon: <Users className="w-4 h-4" /> },
     { label: 'Deposit balances', value: money(metrics.deposits), icon: <CircleDollarSign className="w-4 h-4" /> },
@@ -995,31 +1019,97 @@ export const AdminPage: React.FC<{
   ] : [];
 
   return (
-    <div className="min-h-screen bg-[#F1F1F0] text-[#131313]">
-      <header className="bg-[#0A3B74] text-white">
-        <div className="max-w-[1440px] mx-auto px-4 sm:px-8 h-[60px] flex items-center justify-between gap-4">
-          <div className="flex items-center gap-3 min-w-0"><span className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center"><BadgeCheck className="w-4 h-4" /></span><div className="min-w-0"><p className="text-[14px] font-semibold truncate">Chase Online · Administration</p><p className="text-[11px] text-white/75">{adminName} · {currentAdminRole} · simulation environment</p></div></div>
-          <div className="flex items-center gap-2 shrink-0"><span className="hidden sm:inline-flex items-center gap-1.5 rounded-full bg-white/10 px-2.5 py-1 text-[10.5px] font-semibold"><ShieldAlert className="w-3.5 h-3.5" /> SIMULATOR</span><Button onClick={signOut} className="min-h-9 border-white/40 bg-transparent px-3 text-white hover:bg-white/10"><LogOut className="w-4 h-4" /> Sign out</Button></div>
-        </div>
-      </header>
+    <div className="min-h-screen bg-[#edf2f7] text-[#131313]">
+      <Header
+        activeSegment="personal"
+        onSegmentChange={() => setTab('overview')}
+        onAction={handleAdminToolbarAction}
+        spanishMode={false}
+        onToggleSpanish={() => undefined}
+        onFocusSignIn={onExit}
+        user={null}
+        onGoToDashboard={onExit}
+        onSignOut={signOut}
+      />
 
-      <main className="max-w-[1440px] mx-auto px-4 sm:px-8 py-6">
-        <div className="flex flex-wrap items-end justify-between gap-3">
-          <div><p className="text-[11px] font-bold uppercase tracking-[0.12em]" style={{ color: BLUE }}>Online banking control center</p><h1 className="mt-0.5 text-[26px] font-light" style={{ color: INK }}>Simulator administration</h1><p className="mt-0.5 text-[13px]" style={{ color: MUTED }}>Manage every sample customer, account, transaction, payment, reward, credit profile, and preference.</p></div>
-          <Button tone="outline" onClick={() => loadData().then(() => setNotice({ kind: 'success', text: 'Simulator data refreshed.' })).catch((e) => setNotice({ kind: 'error', text: e.message }))}><RefreshCw className="w-4 h-4" /> Refresh data</Button>
-        </div>
+      <main className="mx-auto max-w-[1700px] px-3 py-5 sm:px-5 lg:px-6">
+        <div className="overflow-hidden rounded-[28px] border border-slate-200 bg-[#f5f7fb] shadow-[0_24px_80px_rgba(15,23,42,0.12)]">
+          <div className="flex min-h-[calc(100vh-200px)]">
+            <aside className="hidden w-[280px] shrink-0 bg-gradient-to-b from-[#071a3a] via-[#0a2148] to-[#11295d] p-5 text-white lg:flex lg:flex-col">
+              <div className="flex items-center gap-3 border-b border-white/10 pb-4">
+                <div className="flex h-11 w-11 items-center justify-center rounded-[12px] bg-white/10 text-sm font-bold tracking-[0.22em]">C</div>
+                <div>
+                  <p className="text-[10px] uppercase tracking-[0.18em] text-blue-100/80">Chase</p>
+                  <h2 className="text-base font-semibold">Admin Console</h2>
+                </div>
+              </div>
 
-        {notice && <div role={notice.kind === 'error' ? 'alert' : 'status'} className={`mt-4 rounded-[4px] border px-3 py-2 text-[13px] ${notice.kind === 'error' ? 'bg-[#FEF2F2] border-[#F5C2C7] text-[#B42318]' : 'bg-[#EAF7EE] border-[#B5E2C4] text-[#14532D]'}`}>{notice.text}</div>}
-        {currentAdminRole === 'auditor' && <div className="mt-3 rounded border border-[#CFE0F0] bg-[#F2F7FC] px-3 py-2 text-[12px] text-[#1A4488]">Read-only auditor access: you can inspect, search, and export simulator data. Changes are blocked by the server.</div>}
+              <div className="mt-6 space-y-1">
+                {nav.map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => setTab(item.id)}
+                    className={`flex w-full items-center gap-3 rounded-[12px] px-3 py-2.5 text-left text-[13px] font-medium transition ${tab === item.id ? 'bg-white text-[#0d1d43] shadow-sm' : 'text-slate-200 hover:bg-white/5'}`}
+                  >
+                    <span className={`flex h-8 w-8 items-center justify-center rounded-[9px] ${tab === item.id ? 'bg-[#edf4ff] text-[#1a4488]' : 'bg-white/10 text-current'}`}>{item.icon}</span>
+                    {item.label}
+                  </button>
+                ))}
+              </div>
 
-        <nav className="mt-5 flex gap-1 overflow-x-auto border-b" style={{ borderColor: LINE }} aria-label="Admin sections">
-          {nav.map((item) => <button key={item.id} type="button" onClick={() => setTab(item.id)} className={`inline-flex items-center gap-2 whitespace-nowrap border-b-[3px] px-4 py-3 text-[13px] ${tab === item.id ? 'font-semibold' : ''}`} style={{ borderColor: tab === item.id ? BLUE : 'transparent', color: tab === item.id ? BLUE : MUTED }}>{item.icon}{item.label}</button>)}
-        </nav>
+              <div className="mt-auto rounded-[16px] border border-white/10 bg-white/5 p-3">
+                <p className="text-[10px] uppercase tracking-[0.18em] text-blue-100/70">Current admin</p>
+                <p className="mt-2 text-[15px] font-semibold">{adminName}</p>
+                <p className="text-[12px] text-slate-200">{currentAdminRole === 'admin' ? 'Full admin access' : 'Read-only auditor'}</p>
+              </div>
+            </aside>
+
+            <div className="flex-1 bg-[#f5f7fb]">
+              <header className="flex flex-wrap items-center justify-between gap-3 border-b border-[#e2e8f0] bg-white px-4 py-5 sm:px-6">
+                <div>
+                  <p className="text-[11px] font-bold uppercase tracking-[0.18em]" style={{ color: BLUE }}>Operations control center</p>
+                  <h1 className="mt-1 text-[28px] font-light tracking-[-0.03em]" style={{ color: INK }}>Chase banking administration</h1>
+                </div>
+
+                <div className="flex items-center gap-3">
+                  <div className="hidden items-center gap-2 rounded-[10px] border border-[#dfe6ef] bg-[#f8fafc] px-3 py-2 text-sm text-[#5C5C5C] md:flex">
+                    <Search className="h-4 w-4" />
+                    <span>Search dashboard</span>
+                  </div>
+                  <Button tone="outline" onClick={() => loadData().then(() => setNotice({ kind: 'success', text: 'Simulator data refreshed.' })).catch((e) => setNotice({ kind: 'error', text: e.message }))}><RefreshCw className="w-4 h-4" /> Refresh data</Button>
+                </div>
+              </header>
+
+              <div className="p-4 sm:p-6">
+                <div className="flex flex-wrap items-end justify-between gap-3">
+                  <div>
+                    <p className="text-[11px] font-bold uppercase tracking-[0.12em]" style={{ color: BLUE }}>Executive overview</p>
+                    <p className="mt-1 text-[13px]" style={{ color: MUTED }}>Monitor customer activity, account health, transfer behavior, and operational controls in a single workspace.</p>
+                  </div>
+                </div>
+
+                {notice && <div role={notice.kind === 'error' ? 'alert' : 'status'} className={`mt-4 rounded-[10px] border px-3 py-2.5 text-[13px] ${notice.kind === 'error' ? 'bg-[#FEF2F2] border-[#F5C2C7] text-[#B42318]' : 'bg-[#EAF7EE] border-[#B5E2C4] text-[#14532D]'}`}>{notice.text}</div>}
+                {currentAdminRole === 'auditor' && <div className="mt-3 rounded-[10px] border border-[#CFE0F0] bg-[#F2F7FC] px-3 py-2 text-[12px] text-[#1A4488]">Read-only auditor access: you can inspect, search, and export simulator data. Changes are blocked by the server.</div>}
+
+                <div className="mt-5 rounded-[16px] border border-[#e2e8f0] bg-white p-2 shadow-sm">
+                  <nav className="flex gap-1 overflow-x-auto" style={{ borderColor: LINE }} aria-label="Admin sections">
+                    {nav.map((item) => <button key={item.id} type="button" onClick={() => setTab(item.id)} className={`inline-flex items-center gap-2 whitespace-nowrap rounded-[10px] px-4 py-2.5 text-[13px] ${tab === item.id ? 'font-semibold shadow-sm' : ''}`} style={{ backgroundColor: tab === item.id ? '#eef4ff' : 'transparent', color: tab === item.id ? BLUE : MUTED }}>{item.icon}{item.label}</button>)}
+                  </nav>
+                </div>
 
         {tab === 'overview' && (
           <div className="mt-5">
-            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
-              {metricCards.map((card) => <Panel key={card.label} className="p-4"><div className="flex items-center justify-between"><p className="text-[12px]" style={{ color: MUTED }}>{card.label}</p><span style={{ color: BLUE }}>{card.icon}</span></div><p className="mt-1 text-[24px] font-light" style={{ color: INK }}>{card.value}</p></Panel>)}
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+              {metricCards.map((card) => (
+                <Panel key={card.label} className="p-4">
+                  <div className="flex items-center justify-between">
+                    <p className="text-[12px] font-semibold uppercase tracking-[0.08em]" style={{ color: MUTED }}>{card.label}</p>
+                    <span className="flex h-9 w-9 items-center justify-center rounded-[10px] bg-[#edf4ff]" style={{ color: BLUE }}>{card.icon}</span>
+                  </div>
+                  <p className="mt-4 text-[30px] font-light leading-none tracking-[-0.04em]" style={{ color: INK }}>{card.value}</p>
+                </Panel>
+              ))}
             </div>
             {metrics && metrics.suspendedUsers > 0 && <p className="mt-3 text-[12.5px]" style={{ color: MUTED }}>{metrics.suspendedUsers} simulator user{metrics.suspendedUsers === 1 ? '' : 's'} suspended.</p>}
             <Panel className="mt-4 p-4"><div className="flex flex-wrap items-end justify-between gap-3"><div><h2 className="text-[14px] font-semibold">Activity report</h2><p className="mt-0.5 text-[11px]" style={{ color: MUTED }}>Based on simulated ledger entries; date range is inclusive.</p></div><div className="flex flex-wrap gap-2"><label className="text-[10px] font-semibold">From<input className={`${fieldCls} mt-1`} type="date" value={reportFrom} onChange={(event) => setReportFrom(event.target.value)} /></label><label className="text-[10px] font-semibold">Through<input className={`${fieldCls} mt-1`} type="date" value={reportThrough} onChange={(event) => setReportThrough(event.target.value)} /></label></div></div><div className="mt-3 flex flex-wrap gap-6 text-[12px]"><span><strong>{reportRows.length.toLocaleString()}</strong> entries</span><span><strong>{money(reportRows.reduce((sum, entry) => sum + Number(entry.amount || 0), 0))}</strong> net ledger amount</span></div><div className="mt-4 grid grid-cols-6 gap-3 items-end h-24" aria-label="Monthly transaction counts for the last six months">{monthlyReport.map((month) => { const peak = Math.max(1, ...monthlyReport.map((item) => item.count)); return <div key={month.label} className="flex h-full flex-col items-center justify-end gap-1"><span className="text-[9px]" style={{ color: MUTED }}>{month.count}</span><div className="w-full max-w-10 rounded-t bg-[#1A4488]" style={{ height: `${Math.max(4, month.count / peak * 70)}%` }} /><span className="text-[9px]" style={{ color: FAINT }}>{month.label}</span></div>; })}</div></Panel>
@@ -1141,7 +1231,7 @@ export const AdminPage: React.FC<{
             <Panel className="p-4"><label className="block max-w-xl"><span className="block text-[11.5px] font-semibold mb-1" style={{ color: MUTED }}>Simulator customer</span><select className={fieldCls} value={selectedUser?.id || ''} onChange={(event) => { if (event.target.value) void selectUser(event.target.value); }}><option value="">Choose a customer</option>{users.map((user) => <option key={user.id} value={user.id}>{user.fullName} (@{user.username})</option>)}</select></label></Panel>
             {selectedUser && <>
               <Panel className="p-5"><h2 className="text-[15px] font-semibold">Post a simulated transfer or payment</h2><p className="mt-1 text-[11px]" style={{ color: MUTED }}>Moves only sample balances between this customer’s accounts; no external service is contacted.</p><form onSubmit={createAdminTransfer} className="mt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2 items-end"><label className="block"><span className="block text-[10.5px] font-semibold mb-1">From checking/savings</span><select className={fieldCls} value={transferFromId || selectedUser.accounts.find((account) => ['checking', 'savings', 'cd'].includes(account.type))?.id || ''} onChange={(event) => { setTransferFromId(event.target.value); if (event.target.value === transferToId) setTransferToId(''); }} required>{selectedUser.accounts.filter((account) => ['checking', 'savings', 'cd'].includes(account.type)).map((account) => <option key={account.id} value={account.id}>{account.name} · {money(account.balance)}</option>)}</select></label><label className="block"><span className="block text-[10.5px] font-semibold mb-1">To account / pay down</span><select className={fieldCls} value={transferToId} onChange={(event) => setTransferToId(event.target.value)} required><option value="">Choose destination</option>{selectedUser.accounts.filter((account) => account.id !== (transferFromId || selectedUser.accounts.find((item) => ['checking', 'savings', 'cd'].includes(item.type))?.id)).map((account) => <option key={account.id} value={account.id}>{account.name} · {money(account.balance)}</option>)}</select></label><label className="block"><span className="block text-[10.5px] font-semibold mb-1">Amount</span><input className={fieldCls} type="number" min="0.01" step="0.01" value={transferAmount} onChange={(event) => setTransferAmount(event.target.value)} required /></label><label className="block lg:col-span-1"><span className="block text-[10.5px] font-semibold mb-1">Description</span><input className={fieldCls} value={transferDescription} onChange={(event) => setTransferDescription(event.target.value)} maxLength={100} required /></label><Button type="submit" tone="primary" disabled={busy || currentAdminRole !== 'admin' || selectedUser.accounts.filter((account) => ['checking', 'savings', 'cd'].includes(account.type)).length === 0 || selectedUser.accounts.length < 2}>Post simulated transfer</Button></form></Panel>
-              <Panel className="p-5"><div className="flex items-start justify-between gap-3"><div><h2 className="text-[15px] font-semibold">Payees</h2><p className="mt-1 text-[11px]" style={{ color: MUTED }}>Manage masked demo destinations only.</p></div></div>
+              <Panel className="p-5"><div className="flex items-start justify-between gap-3"><div><h2 className="text-[15px] font-semibold">Payees</h2><p className="mt-1 text-[11px]" style={{ color: MUTED }}>Manage masked Chase destinations only.</p></div></div>
                 <form onSubmit={createPayee} className="mt-3 grid grid-cols-1 sm:grid-cols-4 gap-2 items-end"><label className="block"><span className="block text-[10.5px] font-semibold mb-1">Name</span><input className={fieldCls} value={payeeName} onChange={(event) => setPayeeName(event.target.value)} required /></label><label className="block"><span className="block text-[10.5px] font-semibold mb-1">Masked account reference</span><input className={fieldCls} value={payeeAccount} onChange={(event) => setPayeeAccount(event.target.value)} required placeholder="•••• 1234" /></label><label className="block"><span className="block text-[10.5px] font-semibold mb-1">Category</span><input className={fieldCls} value={payeeCategory} onChange={(event) => setPayeeCategory(event.target.value)} /></label><Button type="submit" tone="primary" disabled={busy || currentAdminRole !== 'admin'}><Plus className="w-4 h-4" /> Add payee</Button></form>
                 <ul className="mt-3 divide-y" style={{ borderColor: LINE }}>{selectedUser.payees.map((payee) => <li key={payee.id} className="flex flex-wrap items-center justify-between gap-3 py-3"><div><strong className="text-[12.5px]">{payee.name}</strong><span className="ml-2 text-[11px]" style={{ color: MUTED }}>{payee.category} · {payee.accountNumber}</span></div><div className="flex gap-2"><Button className="min-h-8 px-2.5 text-[10.5px]" onClick={() => void editPayee(payee)} disabled={busy || currentAdminRole !== 'admin'}>Edit</Button><Button tone="danger" className="min-h-8 px-2.5 text-[10.5px]" onClick={() => void deletePayee(payee)} disabled={busy || currentAdminRole !== 'admin'}>Delete</Button></div></li>)}{selectedUser.payees.length === 0 && <li className="py-4 text-[12px]" style={{ color: MUTED }}>No payees saved.</li>}</ul>
               </Panel>
@@ -1151,7 +1241,7 @@ export const AdminPage: React.FC<{
                 <div className="mt-3 overflow-x-auto"><table className="w-full text-left"><thead className="bg-[#F7F8F9] text-[10.5px] uppercase" style={{ color: MUTED }}><tr><th className="px-3 py-2">Schedule</th><th className="px-3 py-2">Date / cadence</th><th className="px-3 py-2">Status</th><th className="px-3 py-2 text-right">Amount</th><th className="px-3 py-2">Actions</th></tr></thead><tbody>{(selectedUser.scheduledPayments || []).map((payment) => <tr key={payment.id} className="border-t" style={{ borderColor: LINE }}><td className="px-3 py-2 text-[11.5px]">{payment.label}<span className="block" style={{ color: MUTED }}>{payment.kind}</span></td><td className="px-3 py-2 text-[11px]">{new Date(payment.date).toLocaleDateString()} · {payment.frequency}</td><td className="px-3 py-2 text-[11px]">{payment.status}</td><td className="px-3 py-2 text-right text-[11px]">{money(payment.amount)}</td><td className="px-3 py-2"><div className="flex flex-wrap gap-1"><Button className="min-h-8 px-2 text-[10px]" disabled={busy || currentAdminRole !== 'admin'} onClick={() => void editSchedule(payment)}>Edit</Button><Button className="min-h-8 px-2 text-[10px]" disabled={busy || currentAdminRole !== 'admin'} onClick={() => void updateScheduleStatus(payment.id, payment.status === 'paused' ? 'scheduled' : 'paused')}>{payment.status === 'paused' ? 'Resume' : 'Pause'}</Button><Button className="min-h-8 px-2 text-[10px]" disabled={busy || currentAdminRole !== 'admin'} onClick={() => void updateScheduleStatus(payment.id, 'cancelled')}>Cancel</Button><Button tone="danger" className="min-h-8 px-2 text-[10px]" disabled={busy || currentAdminRole !== 'admin'} onClick={() => void deleteSchedule(payment.id, payment.label)}>Delete</Button></div></td></tr>)}</tbody></table></div>
               </Panel>
 
-              <Panel className="p-5"><h2 className="text-[15px] font-semibold">Card disputes & simulated refunds</h2><p className="mt-1 text-[11px]" style={{ color: MUTED }}>A refund adds a simulated card-credit ledger entry and adjusts the demo card balance only.</p>
+              <Panel className="p-5"><h2 className="text-[15px] font-semibold">Card disputes & simulated refunds</h2><p className="mt-1 text-[11px]" style={{ color: MUTED }}>A refund adds a simulated card-credit ledger entry and adjusts the Chase card balance only.</p>
                 <form onSubmit={openDispute} className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-2 items-end"><label className="block sm:col-span-2"><span className="block text-[10.5px] font-semibold mb-1">Card purchase</span><select className={fieldCls} value={disputePurchase} onChange={(event) => setDisputePurchase(event.target.value)} required><option value="">Choose an eligible purchase</option>{selectedUser.accounts.filter((account) => account.type === 'credit-card').flatMap((account) => account.transactions.filter((transaction) => transaction.amount > 0 && !(selectedUser.disputes || []).some((dispute) => dispute.transactionId === transaction.id && dispute.status === 'open')).map((transaction) => <option key={transaction.id} value={`${account.id}|${transaction.id}`}>{account.name} · {transaction.description} · {money(transaction.amount)}</option>))}</select></label><label className="block"><span className="block text-[10.5px] font-semibold mb-1">Reason</span><input className={fieldCls} value={disputeReason} onChange={(event) => setDisputeReason(event.target.value)} required /></label><Button type="submit" tone="primary" disabled={busy || currentAdminRole !== 'admin'}><Plus className="w-4 h-4" /> Open dispute</Button></form>
                 <ul className="mt-3 divide-y" style={{ borderColor: LINE }}>{(selectedUser.disputes || []).map((dispute) => <li key={dispute.id} className="flex flex-wrap items-center justify-between gap-3 py-3"><div><strong className="block text-[12px]">{dispute.description} · {money(dispute.amount)}</strong><span className="text-[11px]" style={{ color: MUTED }}>{dispute.reason} · {dispute.status} · {dateTime(dispute.createdAt)}</span></div><div className="flex flex-wrap gap-1"><select className="h-8 rounded border px-2 text-[10px]" disabled={busy || currentAdminRole !== 'admin'} value={dispute.status} onChange={(event) => void setDisputeStatus(dispute.id, event.target.value as 'open' | 'resolved' | 'denied')}><option value="open">Open</option><option value="resolved">Resolved</option><option value="denied">Denied</option></select>{dispute.status === 'open' && <Button tone="primary" className="min-h-8 px-2 text-[10px]" disabled={busy || currentAdminRole !== 'admin'} onClick={() => void issueDisputeRefund(dispute)}>Issue simulated refund</Button>}</div></li>)}{!(selectedUser.disputes || []).length && <li className="py-4 text-[12px]" style={{ color: MUTED }}>No disputes on this profile.</li>}</ul>
               </Panel>
@@ -1163,12 +1253,12 @@ export const AdminPage: React.FC<{
 
         {tab === 'settings' && (
           <div className="mt-5 grid grid-cols-1 xl:grid-cols-2 gap-4">
-            <Panel className="p-5"><div className="flex items-start gap-3"><LockKeyhole className="mt-0.5 h-5 w-5" style={{ color: BLUE }} /><div><h2 className="text-[15px] font-semibold">Simulator access controls</h2><p className="mt-1 text-[12px]" style={{ color: MUTED }}>These settings only affect this demo environment and are enforced by the server.</p></div></div>
+            <Panel className="p-5"><div className="flex items-start gap-3"><LockKeyhole className="mt-0.5 h-5 w-5" style={{ color: BLUE }} /><div><h2 className="text-[15px] font-semibold">Simulator access controls</h2><p className="mt-1 text-[12px]" style={{ color: MUTED }}>These settings only affect the Chase simulator environment and are enforced by the server.</p></div></div>
               <div className="mt-4 space-y-4"><label className="flex items-start gap-3 rounded border p-3" style={{ borderColor: LINE }}><input className="mt-1" type="checkbox" checked={simulatorSettings.allowEnrollment} onChange={(event) => setSimulatorSettings((settings) => ({ ...settings, allowEnrollment: event.target.checked }))} /><span><strong className="block text-[13px]">Allow customer enrollment</strong><span className="text-[11.5px]" style={{ color: MUTED }}>When off, new simulator customer registrations are rejected.</span></span></label>
                 <label className="flex items-start gap-3 rounded border p-3" style={{ borderColor: LINE }}><input className="mt-1" type="checkbox" checked={simulatorSettings.allowCustomerPasswordReset} onChange={(event) => setSimulatorSettings((settings) => ({ ...settings, allowCustomerPasswordReset: event.target.checked }))} /><span><strong className="block text-[13px]">Allow customer password recovery</strong><span className="text-[11.5px]" style={{ color: MUTED }}>When off, public password reset requests are rejected.</span></span></label>
               </div><Button className="mt-4" tone="primary" onClick={() => void saveSimulatorSettings()} disabled={busy}>Save access settings</Button>
             </Panel>
-            <Panel className="p-5"><h2 className="text-[15px] font-semibold">Environment & guardrails</h2><dl className="mt-3 space-y-2 text-[12px]"><div className="flex justify-between gap-3 border-b pb-2" style={{ borderColor: LINE }}><dt style={{ color: MUTED }}>Data mode</dt><dd className="font-semibold">Simulated only</dd></div><div className="flex justify-between gap-3 border-b pb-2" style={{ borderColor: LINE }}><dt style={{ color: MUTED }}>Real payment connections</dt><dd className="font-semibold">Disabled</dd></div><div className="flex justify-between gap-3 border-b pb-2" style={{ borderColor: LINE }}><dt style={{ color: MUTED }}>Admin actions logged</dt><dd className="font-semibold">Yes</dd></div><div className="flex justify-between gap-3"><dt style={{ color: MUTED }}>User session control</dt><dd className="font-semibold">Revoke per user or suspend</dd></div></dl><p className="mt-4 text-[11.5px] leading-relaxed" style={{ color: MUTED }}>Customer accounts, balances, transfers, and ledger entries are demo records only.</p></Panel>
+            <Panel className="p-5"><h2 className="text-[15px] font-semibold">Environment & guardrails</h2><dl className="mt-3 space-y-2 text-[12px]"><div className="flex justify-between gap-3 border-b pb-2" style={{ borderColor: LINE }}><dt style={{ color: MUTED }}>Data mode</dt><dd className="font-semibold">Simulated only</dd></div><div className="flex justify-between gap-3 border-b pb-2" style={{ borderColor: LINE }}><dt style={{ color: MUTED }}>Real payment connections</dt><dd className="font-semibold">Disabled</dd></div><div className="flex justify-between gap-3 border-b pb-2" style={{ borderColor: LINE }}><dt style={{ color: MUTED }}>Admin actions logged</dt><dd className="font-semibold">Yes</dd></div><div className="flex justify-between gap-3"><dt style={{ color: MUTED }}>User session control</dt><dd className="font-semibold">Revoke per user or suspend</dd></div></dl><p className="mt-4 text-[11.5px] leading-relaxed" style={{ color: MUTED }}>Customer accounts, balances, transfers, and ledger entries are simulated Chase records only.</p></Panel>
             <Panel className="p-5 xl:col-span-2"><div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="text-[15px] font-semibold">Administrator accounts & roles</h2><p className="mt-1 text-[11.5px]" style={{ color: MUTED }}>Admins can change simulator data. Auditors can read and export but cannot mutate it.</p></div><Button className="min-h-8 px-2 text-[10.5px]" disabled={busy} onClick={() => void changeOwnAdminPassword()}>Change my password</Button></div>
               {currentAdminRole === 'admin' && <form onSubmit={createAdminAccount} className="mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2 items-end"><label className="block"><span className="block text-[10.5px] font-semibold mb-1">Username</span><input className={fieldCls} value={newAdminUsername} onChange={(event) => setNewAdminUsername(event.target.value)} minLength={4} maxLength={32} required /></label><label className="block"><span className="block text-[10.5px] font-semibold mb-1">Full name</span><input className={fieldCls} value={newAdminName} onChange={(event) => setNewAdminName(event.target.value)} required /></label><label className="block"><span className="block text-[10.5px] font-semibold mb-1">Initial password (10+ chars)</span><input className={fieldCls} type="password" value={newAdminPassword} onChange={(event) => setNewAdminPassword(event.target.value)} minLength={10} required /></label><label className="block"><span className="block text-[10.5px] font-semibold mb-1">Role</span><select className={fieldCls} value={newAdminRole} onChange={(event) => setNewAdminRole(event.target.value as typeof newAdminRole)}><option value="admin">Admin</option><option value="auditor">Read-only auditor</option></select></label><Button type="submit" tone="primary" disabled={busy}><Plus className="w-4 h-4" /> Add admin</Button></form>}
               <div className="mt-4 overflow-x-auto"><table className="w-full text-left"><thead className="bg-[#F7F8F9] text-[10.5px] uppercase tracking-wide" style={{ color: MUTED }}><tr><th className="px-3 py-2">Account</th><th className="px-3 py-2">Role</th><th className="px-3 py-2">Status</th><th className="px-3 py-2">Actions</th></tr></thead><tbody>{adminAccounts.map((admin) => <tr key={admin.id} className="border-t" style={{ borderColor: LINE }}><td className="px-3 py-3"><strong className="block text-[12px]">{admin.fullName}</strong><span className="text-[11px]" style={{ color: MUTED }}>@{admin.username}{admin.username === currentAdminUsername ? ' · you' : ''}</span></td><td className="px-3 py-3"><select className="h-8 rounded border px-2 text-[11px]" disabled={busy || currentAdminRole !== 'admin' || admin.protected} value={admin.role} onChange={(event) => void updateAdminAccount(admin, { role: event.target.value as AdminAccountRow['role'] })}><option value="admin">Admin</option><option value="auditor">Auditor</option></select></td><td className="px-3 py-3 text-[11px]">{admin.status}</td><td className="px-3 py-3"><div className="flex flex-wrap gap-1">{!admin.protected && currentAdminRole === 'admin' && <><Button className="min-h-8 px-2 text-[10px]" disabled={busy || admin.username === currentAdminUsername} onClick={() => void updateAdminAccount(admin, { status: admin.status === 'active' ? 'disabled' : 'active' })}>{admin.status === 'active' ? 'Disable' : 'Enable'}</Button><Button className="min-h-8 px-2 text-[10px]" disabled={busy || admin.username === currentAdminUsername || admin.status === 'disabled'} onClick={() => void resetAdminPassword(admin)}>Reset password</Button><Button tone="danger" className="min-h-8 px-2 text-[10px]" disabled={busy || admin.username === currentAdminUsername} onClick={() => void deleteAdmin(admin)}>Delete</Button></>}</div></td></tr>)}</tbody></table></div>
@@ -1177,8 +1267,19 @@ export const AdminPage: React.FC<{
           </div>
         )}
 
-        <div className="mt-5 flex flex-wrap items-center justify-between gap-2 text-[11.5px]" style={{ color: FAINT }}><span>Simulation only · no real funds or external payment services</span><button type="button" onClick={onExit} className="font-semibold hover:underline" style={{ color: BLUE }}><ArrowLeft className="inline w-3.5 h-3.5" /> Return to Chase.com</button></div>
+        <div className="mt-5 flex flex-wrap items-center justify-between gap-2 text-[11.5px]" style={{ color: FAINT }}><span>Secure testing environment · no real funds or external payment services</span><button type="button" onClick={onExit} className="font-semibold hover:underline" style={{ color: BLUE }}><ArrowLeft className="inline w-3.5 h-3.5" /> Return to Chase.com</button></div>
+      </div>
+      </div>
+      </div>
+      </div>
       </main>
+
+      <Footer
+        variant="dashboard"
+        userLabel={adminName}
+        onAction={handleAdminToolbarAction}
+        onHome={() => setTab('overview')}
+      />
     </div>
   );
 };

@@ -251,7 +251,7 @@ export function Footer({ onAction, onHome, variant = 'public', userLabel, spanis
           <div className="footer-bottom-row">
             <span>&copy; {new Date().getFullYear()} Chase Online banking website.</span>
             <div className="footer-regulatory-links">
-              {!isDashboard && <button type="button" onClick={() => onAction('admin-login')} className="footer-legal-link">Demo admin sign in</button>}
+              {!isDashboard && <button type="button" onClick={() => onAction('admin-login')} className="footer-legal-link">Chase admin sign in</button>}
               <a href="https://www.fdic.gov/resources/deposit-insurance" target="_blank" rel="noopener noreferrer">
                 <FdicBadge className="h-[15px] w-auto" />
                 About FDIC insurance
