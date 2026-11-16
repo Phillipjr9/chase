@@ -15,7 +15,6 @@ import { SignUpWizard } from './components/SignUpWizard';
 import { BankingDashboard } from './components/BankingDashboard';
 import { AdminPage } from './components/AdminPage';
 import ProductsPage from './components/ProductsPage';
-import { ChasePageLoader } from './components/Loading';
 import type { DashboardView } from './components/BankingDashboard';
 import { OFFER_MODALS, SegmentKey } from './data/chaseData';
 import {
@@ -34,18 +33,22 @@ import {
 
 type View = 'home' | 'wizard' | 'dashboard' | 'products' | 'admin';
 
+const isAdminPath = () =>
+  /^\/admin\/?$/.test(window.location.pathname) ||
+  window.location.hash.replace(/^#\/?/, '') === 'admin';
+
 export function App() {
-  const [view, setView] = useState<View>(() =>
-    window.location.pathname === '/admin' || window.location.hash.replace(/^#\/?/, '') === 'admin'
-      ? 'admin'
-      : 'home'
-  );
+  const [view, setView] = useState<View>(() => (isAdminPath() ? 'admin' : 'home'));
   const [activeSegment, setActiveSegment] = useState<SegmentKey>('personal');
   const [spanishMode, setSpanishMode] = useState(false);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [adminTokenForView, setAdminTokenForView] = useState(() => readAdminToken());
+  const [adminSessionInfo, setAdminSessionInfo] = useState<{
+    username: string;
+    label: string;
+    role?: 'admin' | 'auditor';
+  } | null>(null);
   const [isImpersonating, setIsImpersonating] = useState(false);
-  const [authReady, setAuthReady] = useState(false);
   const [sessionNotice, setSessionNotice] = useState(false);
   const [dashboardStart, setDashboardStart] = useState<DashboardView>('accounts');
   const [productTab, setProductTab] = useState<'checking' | 'cards' | 'rates'>('checking');
@@ -56,19 +59,21 @@ export function App() {
   const [autoOpen, setAutoOpen] = useState(false);
 
   const usernameInputRef = useRef<HTMLInputElement | null>(null);
+  const authMutationSeqRef = useRef(0);
 
-  /* Seed Chase sample data and restore the session on load */
+  /* Restore any active session in the background without blocking the homepage */
   useEffect(() => {
     let active = true;
+    const seq = authMutationSeqRef.current;
     (async () => {
       try {
         await seedSampleUserIfNeeded();
         const me = await fetchMe();
-        if (active && me) setCurrentUser(me);
+        if (active && me && authMutationSeqRef.current === seq) {
+          setCurrentUser(me);
+        }
       } catch {
         /* Stay signed out when storage or the local API is unavailable. */
-      } finally {
-        if (active) setAuthReady(true);
       }
     })();
     return () => {
@@ -77,7 +82,7 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    const onPopState = () => setView(window.location.pathname === '/admin' ? 'admin' : 'home');
+    const onPopState = () => setView(isAdminPath() ? 'admin' : 'home');
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
   }, []);
@@ -88,6 +93,7 @@ export function App() {
 
   useEffect(() => {
     const onExpired = () => {
+      authMutationSeqRef.current += 1;
       setCurrentUser(null);
       setDashboardStart('accounts');
       setView('home');
@@ -105,10 +111,12 @@ export function App() {
   const handleSignIn = async (username: string, password: string): Promise<string | null> => {
     const result = await authenticate(username, password);
     if ('error' in result) return result.error;
+    authMutationSeqRef.current += 1;
     setSessionNotice(false);
     if ('admin' in result) {
       writeAdminToken(result.token);
       setAdminTokenForView(result.token);
+      setAdminSessionInfo(result.admin);
       setCurrentUser(null);
       setIsImpersonating(false);
       if (window.location.pathname !== '/admin') {
@@ -119,6 +127,7 @@ export function App() {
     }
     writeAdminToken(null);
     setAdminTokenForView('');
+    setAdminSessionInfo(null);
     setCurrentUser(result.user);
     setView('dashboard');
     return null;
@@ -138,9 +147,11 @@ export function App() {
   };
 
   const handleSignOut = async () => {
+    authMutationSeqRef.current += 1;
     await logout(false);
     writeAdminToken(null);
     setAdminTokenForView('');
+    setAdminSessionInfo(null);
     setCurrentUser(null);
     setIsImpersonating(false);
     setDashboardStart('accounts');
@@ -159,6 +170,7 @@ export function App() {
   };
 
   const openAdmin = () => {
+    setAdminTokenForView(readAdminToken());
     if (window.location.pathname !== '/admin') {
       try { window.history.pushState({}, '', '/admin'); } catch { /* ignore */ }
     }
@@ -166,6 +178,9 @@ export function App() {
   };
 
   const exitAdmin = () => {
+    const latestAdminToken = readAdminToken();
+    setAdminTokenForView(latestAdminToken);
+    if (!latestAdminToken) setAdminSessionInfo(null);
     if (window.location.pathname !== '/') {
       try { window.history.pushState({}, '', '/'); } catch { /* ignore */ }
     }
@@ -173,6 +188,7 @@ export function App() {
   };
 
   const startImpersonation = (user: User, sessionToken: string) => {
+    authMutationSeqRef.current += 1;
     adoptSessionToken(sessionToken);
     setCurrentUser(user);
     setIsImpersonating(true);
@@ -184,6 +200,7 @@ export function App() {
   };
 
   const exitImpersonation = async () => {
+    authMutationSeqRef.current += 1;
     await logout(true);
     setCurrentUser(null);
     setIsImpersonating(false);
@@ -200,6 +217,7 @@ export function App() {
   };
 
   const handleWizardComplete = (user: User) => {
+    authMutationSeqRef.current += 1;
     setCurrentUser(user);
     setView('dashboard');
   };
@@ -275,18 +293,20 @@ export function App() {
 
   const activeOffer = activeOfferId ? OFFER_MODALS[activeOfferId] : null;
 
-  if (!authReady) {
-    return (
-      <ChasePageLoader
-        message="Loading Chase Online…"
-        detail="Restoring your sample session securely."
-      />
-    );
-  }
-
   /* ------------------------------ Admin view -------------------------------- */
   if (view === 'admin') {
-    return <AdminPage initialToken={adminTokenForView} onExit={exitAdmin} onImpersonate={startImpersonation} />;
+    return (
+      <AdminPage
+        initialToken={adminTokenForView}
+        initialAdmin={adminSessionInfo}
+        onTokenChange={(nextToken) => {
+          setAdminTokenForView(nextToken);
+          if (!nextToken) setAdminSessionInfo(null);
+        }}
+        onExit={exitAdmin}
+        onImpersonate={startImpersonation}
+      />
+    );
   }
 
   /* ------------------------------ Wizard view ------------------------------ */
