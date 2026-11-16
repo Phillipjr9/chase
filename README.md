@@ -24,11 +24,9 @@ npm run build         # build the frontend into dist/
 node server/index.js  # start API + static server (PORT env, default 3000)
 ```
 
-**Sample Customer credentials (Alex Rivera — Personal Banking):** username `chase` · password `chase123`
-(or enroll a brand-new account through the sign-up wizard).
+**Customer accounts:** enroll through the sign-up wizard or provision test customers from the Administrator Console (`/admin`). Sample seeding (`/api/seed`) is disabled (`410`).
 
-**Chase Administrator credentials (Operations & Simulator Console):** username `admin` · password `chaseadmin123`
-(configurable via `CHASE_ADMIN_USERNAME` and `CHASE_ADMIN_PASSWORD`). Open directly at `/admin`, click **Admin Console** in the header/sign-in card/footer, or enter `admin` / `chaseadmin123` in the homepage sign-in card. See [Admin Simulator Console](#admin-simulator-console).
+**Super Administrator credentials (Operations & Simulator Console):** configured via server environment variables `CHASE_ADMIN_USERNAME` (default `dianasmith6525@gmail.com`), `CHASE_ADMIN_PASSWORD` (required to enable root Super Admin sign-in), and optionally `ADMIN_SESSION_SECRET` (recommended for multi-instance / serverless deployments). Open directly at `/admin`, click **Admin Console** in the header/sign-in card/footer, or sign in through the homepage sign-in card. See [Admin Simulator Console](#admin-simulator-console).
 
 The frontend also works **standalone** (static preview only): if the API is
 unreachable, the app automatically falls back to browser-local storage with
@@ -69,7 +67,7 @@ All endpoints are JSON. Authenticated routes require
 | Method | Endpoint | Auth | Description |
 | --- | --- | --- | --- |
 | GET | `/api/health` | — | Liveness probe (`{ status, uptime, users }`) |
-| POST | `/api/seed` | — | Seed the sample Chase user (idempotent) |
+| POST | `/api/seed` | — | Disabled (`410`) — sample accounts are not seeded automatically |
 | POST | `/api/auth/register` | — | Enroll + open first account → `{ user, token }` |
 | POST | `/api/auth/login` | — | Sign in → `{ user, token }` (401 on bad credentials) |
 | POST | `/api/auth/logout` | ✓ | Invalidate the session token |
@@ -106,37 +104,45 @@ All endpoints are JSON. Authenticated routes require
 | POST | `/api/cards/replace` | ✓ | Order a replacement and lock the old card |
 | POST | `/api/cards/dispute` | ✓ | Dispute a posted card purchase |
 | POST | `/api/credit/simulate` | ✓ | Estimate a score range for a scenario |
-| POST | `/api/admin/login` | — | Sign in as root admin (`admin` / `chaseadmin123`) or staff admin/auditor |
-| GET | `/api/admin/me` | ⛨ | Verify active admin/auditor session |
-| GET | `/api/admin/overview?range=7d\|30d\|12w` | ⛨ | Bank-wide KPIs, cashflow velocity, account mix, credit utilization, categories & disputes |
-| POST | `/api/admin/seed-demo` | ⛨ | Populate sample Private Client & Sapphire households for testing |
-| GET / POST | `/api/admin/users` | ⛨ | List customer directory or provision a new customer household |
-| POST | `/api/admin/users/bulk` | ⛨ | Bulk suspend, reactivate, or confirmed-delete customer profiles |
+| POST | `/api/admin/login` | — | Sign in as Super Admin (`CHASE_ADMIN_USERNAME`/`CHASE_ADMIN_PASSWORD`), Limited Admin, or Auditor |
+| GET | `/api/admin/me` | ⛨ | Verify active admin/auditor session, capabilities, and linked customer identity |
+| POST | `/api/admin/me/revoke-all-sessions` | ⛨ | Super Admin global session revocation across all other browsers/devices |
+| POST | `/api/admin/switch-to-customer` | ⛨ | Mint personal banking session for a linked staff admin/auditor |
+| POST | `/api/auth/switch-to-admin` | ✓ | Mint administrator session for a signed-in linked staff member (forbidden when impersonated) |
+| GET | `/api/admin/overview?range=7d\|30d\|12w` | ⛨ | Scoped KPIs, cashflow velocity, account mix, credit utilization, categories & disputes (system telemetry Super Admin only) |
+| GET / POST | `/api/admin/users` | ⛨ | List customer directory (scoped by owner for Limited Admins) or provision a customer with optional initial owner |
+| POST | `/api/admin/users/bulk` | ⛨ | Bulk suspend, reactivate, or confirmed-delete owned/authorized customer profiles |
 | GET / PUT / DELETE | `/api/admin/users/:id` | ⛨ | Inspect, edit full simulator JSON record, suspend, or delete customer |
-| POST | `/api/admin/users/:id/impersonate` | ⛨ | Mint customer preview session while preserving admin session |
-| POST | `/api/admin/users/:id/generate-transactions` | ⛨ | Generate daily/weekly/monthly/yearly realistic ledger activity |
+| POST | `/api/admin/users/:id/promote` | ⛨ | Super Admin: promote a customer to a linked Limited Admin or Auditor (shared credentials) |
+| POST | `/api/admin/users/:id/impersonate` | ⛨ | Mint customer preview session while preserving admin session (capability-gated) |
+| POST | `/api/admin/users/:id/generate-transactions` | ⛨ | Generate daily/weekly/monthly/yearly realistic ledger activity (capability-gated) |
 | POST / PUT / DELETE | `/api/admin/users/:id/accounts[/:accountId]` | ⛨ | Create, edit balances/limits, lock/unlock, or delete simulated accounts |
-| GET | `/api/admin/transactions` | ⛨ | Cross-customer global ledger search, date-range filter & pagination |
+| GET | `/api/admin/transactions` | ⛨ | Cross-customer global ledger search, date-range filter & pagination (scoped for Limited Admins) |
 | POST / PUT / DELETE | `/api/admin/users/:id/transactions[/:txId]` | ⛨ | Post, edit, or reverse & delete ledger entries with automatic balance reconciliation |
 | POST / PUT / DELETE | `/api/admin/users/:id/{transfers,payees,scheduled,disputes}` | ⛨ | Execute internal transfers, manage payees/schedules, resolve disputes & issue card refunds |
-| GET | `/api/admin/audit` | ⛨ | Immutable 5,000-entry compliance & operator audit trail |
-| GET / PUT | `/api/admin/settings` | ⛨ | Toggle customer self-enrollment and password reset guardrails |
-| GET / POST / PUT / DELETE | `/api/admin/admins[/:id]` | ⛨ | Manage full-access `admin` and read-only `auditor` staff accounts |
-| GET / POST | `/api/admin/backup` | ⛨ | Download or confirmed-restore full JSON simulator backup |
-| POST | `/api/admin/reset` | ⛨ | Confirmed reset of simulator to clean baseline |
+| GET | `/api/admin/audit` | ⛨ | 5,000-entry compliance & operator audit trail (Super Admin sees all; Limited Admins see own/owned-customer entries) |
+| GET / PUT | `/api/admin/settings` | ⛨ | Super Admin: toggle customer self-enrollment and password reset guardrails |
+| GET / POST / PUT / DELETE | `/api/admin/admins[/:id]` | ⛨ | Super Admin: manage Limited Admins & Auditors, granular capabilities, root support contact, and atomic ownership handoff |
+| POST | `/api/admin/admins/:id/link-customer` | ⛨ | Super Admin: link an unlinked staff account to a newly created or existing personal customer profile |
+| POST | `/api/admin/admins/:id/reassign-customers` | ⛨ | Super Admin: bulk-reassign all customers owned by a staff member to another active staff owner or Super Admin |
+| GET / POST | `/api/admin/backup` | ⛨ | Super Admin: export v2 JSON backup (users + staff accounts + settings) or restore with optional `restoreAdmins` |
+| POST | `/api/admin/reset` | ⛨ | Super Admin: confirmed reset of simulator to clean baseline |
 
-Every mutation validates ownership, amounts, and sufficient funds
+Every mutation validates ownership, capabilities, amounts, and sufficient funds
 server-side and returns the updated user object.
 
-⛨ = requires a valid administrator or read-only auditor session (`X-Chase-Admin-Token`, `chase_sim_admin_session` cookie, or `Bearer` token; auditors receive `403` on non-GET mutations).
+⛨ = requires a valid administrator or read-only auditor session (`X-Chase-Admin-Token`, `chase_sim_admin_session` cookie, or `Bearer` token; auditors receive `403` on mutations except self-service password change, workspace switch, and logout).
 
 ---
 
 ## Admin Simulator Console
 
-An executive operations, analytics, and simulator control center (`/admin`) combining full customer/ledger simulation with TailAdmin / shadcn-admin grade data visualization: a collapsible dark Chase Navy sidebar with live badges, sticky topbar with `⌘K` command palette, dark/light mode, customer context switcher with one-click **Preview as Customer (Impersonate)**, and proxy-safe multi-channel session transport.
+An executive operations, analytics, and simulator control center (`/admin`) supporting three distinct tiers:
+- **Super Administrator (Root)**: full cross-bank visibility, staff lifecycle & granular capability control, customer ownership assignment & atomic bulk handoff, linked personal-banking identity management, global session revocation, simulator settings, v2 backups (including staff accounts), and platform telemetry.
+- **Limited Administrator**: scoped exclusively to assigned customers (plus optional per-admin capability toggles for customer creation, deletion, ledger editing, transaction generation, impersonation, and account mutation), with support messaging isolation and optional linked personal banking workspace switching.
+- **Read-Only Auditor**: scoped read-only oversight (assigned customers or full oversight when unassigned), self-service password rotation, and linked personal banking switching when linked.
 
-Sign in at `/admin` with `admin` / `chaseadmin123` (while customer `chase` / `chase123` signs into Personal Banking as Alex Rivera).
+Sign in at `/admin` with the configured `CHASE_ADMIN_USERNAME` / `CHASE_ADMIN_PASSWORD` (or a staff account provisioned by the Super Admin). Users with a linked personal banking + staff identity see a Workspace Chooser after signing in and can switch cleanly between **Personal Banking** and **Admin Console** at any time.
 
 | Section | What it does |
 | --- | --- |
@@ -260,15 +266,15 @@ to the same browser-local mode as the banking app, so it never dead-ends.
 
 ```bash
 npm run build
-node server/index.js &                      # serve app + API
-node tests/admin-api.mjs                    # verify full Admin Simulator API, RBAC, backup/restore & reconciliation
-npm install --no-save playwright && npx playwright install chromium
-BASE_URL=http://127.0.0.1:3000 node tests/e2e.mjs
+CHASE_ADMIN_PASSWORD='Temporary-test-password-92!' node server/index.js &
+CHASE_ADMIN_PASSWORD='Temporary-test-password-92!' node tests/admin-api.mjs
+CHASE_ADMIN_PASSWORD='Temporary-test-password-92!' node tests/admin-ownership.mjs
+CHASE_ADMIN_PASSWORD='Temporary-test-password-92!' node tests/admin-promotion.mjs
+CHASE_ADMIN_PASSWORD='Temporary-test-password-92!' node tests/super-admin-complete.mjs
+node tests/supabase-concurrency.mjs
 ```
 
-The E2E suite signs in with the sample Chase account, transfers money, pays the card,
-and verifies both account balances through the API. It exits non-zero on any
-failure and is safe to run on a fresh database (it seeds the sample user).
+The backend/API suites cover Super Admin governance, linked customer-staff identities, workspace switching, granular capabilities, auditor isolation, ownership handoffs, session revocation, audit scoping, backup v2 restore, and Supabase optimistic concurrency.
 
 Auth hardening already in place: scrypt password hashing, 24-hour session
 tokens, ten-attempt sign-in throttling per client/username, password reset

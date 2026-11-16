@@ -218,18 +218,48 @@ export function getAuditLog(limit = 100) {
   return load().auditLog.slice(0, limit);
 }
 
-const DEFAULT_SIMULATOR_SETTINGS = { allowEnrollment: true, allowCustomerPasswordReset: true };
+const DEFAULT_SIMULATOR_SETTINGS = {
+  allowEnrollment: true,
+  allowCustomerPasswordReset: true,
+  rootSupportContact: { email: '', phone: '' },
+  superAdminSessionVersion: 0,
+};
 
 export function getSimulatorSettings() {
   const stored = load().simulatorSettings || {};
-  return { ...DEFAULT_SIMULATOR_SETTINGS, ...stored };
+  return {
+    ...DEFAULT_SIMULATOR_SETTINGS,
+    ...stored,
+    rootSupportContact: {
+      email: stored.rootSupportContact?.email || '',
+      phone: stored.rootSupportContact?.phone || '',
+    },
+    superAdminSessionVersion: Number(stored.superAdminSessionVersion || 0),
+  };
 }
 
 export function updateSimulatorSettings(patch) {
   const db = load();
   db.simulatorSettings = { ...DEFAULT_SIMULATOR_SETTINGS, ...(db.simulatorSettings || {}), ...patch };
   save();
-  return db.simulatorSettings;
+  return getSimulatorSettings();
+}
+
+export function bumpSuperAdminSessionVersion(preserveToken = null) {
+  const db = load();
+  const current = Number(db.simulatorSettings?.superAdminSessionVersion || 0);
+  db.simulatorSettings = {
+    ...DEFAULT_SIMULATOR_SETTINGS,
+    ...(db.simulatorSettings || {}),
+    superAdminSessionVersion: current + 1,
+  };
+  for (const [token, session] of Object.entries(db.sessions)) {
+    if (session.userId === '__chase_admin__' && token !== preserveToken) {
+      delete db.sessions[token];
+    }
+  }
+  save();
+  return db.simulatorSettings.superAdminSessionVersion;
 }
 
 export function findAdminByUsername(username) {
@@ -237,8 +267,21 @@ export function findAdminByUsername(username) {
   return (load().adminAccounts || []).find((admin) => admin.username.toLowerCase() === needle) || null;
 }
 
+export function findAdminById(id) {
+  return (load().adminAccounts || []).find((admin) => admin.id === id) || null;
+}
+
+export function findAdminByLinkedUserId(userId) {
+  if (!userId) return null;
+  return (load().adminAccounts || []).find((admin) => admin.linkedUserId === userId) || null;
+}
+
 export function listAdminAccounts() {
   return (load().adminAccounts || []).map(({ passwordHash, ...admin }) => admin);
+}
+
+export function listAdminAccountsRaw() {
+  return load().adminAccounts || [];
 }
 
 export function promoteCustomerToAdmin(userId, admin) {
@@ -250,6 +293,97 @@ export function promoteCustomerToAdmin(userId, admin) {
   save();
 }
 
+export function createAdminWithCustomer(admin, customer) {
+  const db = load();
+  db.users.push(customer);
+  db.adminAccounts.push(admin);
+  save();
+}
+
+export function linkAdminToCustomer(adminId, { newCustomer, existingUserId, passwordHash }) {
+  const db = load();
+  const adminIdx = db.adminAccounts.findIndex((a) => a.id === adminId);
+  if (adminIdx < 0) throw new Error('Administrator not found');
+  const admin = db.adminAccounts[adminIdx];
+  const oldAdminUsername = admin.username;
+
+  let linkedUser;
+  if (newCustomer) {
+    db.users.push(newCustomer);
+    linkedUser = newCustomer;
+    db.adminAccounts[adminIdx] = {
+      ...admin,
+      linkedUserId: newCustomer.id,
+      sessionVersion: (admin.sessionVersion || 0) + 1,
+    };
+  } else {
+    const userIdx = db.users.findIndex((u) => u.id === existingUserId);
+    if (userIdx < 0) throw new Error('Customer not found');
+    const user = db.users[userIdx];
+    const resolvedHash = passwordHash || admin.passwordHash;
+    linkedUser = {
+      ...user,
+      ownerAdminId: null,
+      passwordHash: resolvedHash,
+      updatedAt: new Date().toISOString(),
+    };
+    db.users[userIdx] = linkedUser;
+    db.adminAccounts[adminIdx] = {
+      ...admin,
+      username: linkedUser.username,
+      fullName: linkedUser.fullName || admin.fullName,
+      passwordHash: resolvedHash,
+      linkedUserId: linkedUser.id,
+      sessionVersion: (admin.sessionVersion || 0) + 1,
+    };
+    for (const [token, session] of Object.entries(db.sessions)) {
+      if (session.userId === linkedUser.id) delete db.sessions[token];
+    }
+  }
+
+  for (const [token, session] of Object.entries(db.sessions)) {
+    if (session.userId === `admin:${oldAdminUsername}` || session.userId === `admin:${db.adminAccounts[adminIdx].username}`) {
+      delete db.sessions[token];
+    }
+  }
+
+  save();
+  const { passwordHash: _ph, ...publicAdmin } = db.adminAccounts[adminIdx];
+  return { admin: publicAdmin, user: linkedUser };
+}
+
+export function reassignAdminCustomers(fromAdminId, replacementAdminId) {
+  const db = load();
+  let reassignedCount = 0;
+  for (let i = 0; i < db.users.length; i += 1) {
+    if (db.users[i].ownerAdminId === fromAdminId) {
+      db.users[i] = { ...db.users[i], ownerAdminId: replacementAdminId || null };
+      reassignedCount += 1;
+    }
+  }
+  if (reassignedCount > 0) save();
+  return reassignedCount;
+}
+
+export function reassignAndRemoveAdmin(adminId, replacementAdminId) {
+  const db = load();
+  const removed = db.adminAccounts.find((admin) => admin.id === adminId);
+  if (!removed) return null;
+  let reassignedCount = 0;
+  for (let i = 0; i < db.users.length; i += 1) {
+    if (db.users[i].ownerAdminId === adminId) {
+      db.users[i] = { ...db.users[i], ownerAdminId: replacementAdminId || null };
+      reassignedCount += 1;
+    }
+  }
+  db.adminAccounts = db.adminAccounts.filter((admin) => admin.id !== adminId);
+  for (const [token, session] of Object.entries(db.sessions)) {
+    if (session.userId === `admin:${removed.username}`) delete db.sessions[token];
+  }
+  save();
+  return { removed, reassignedCount };
+}
+
 export function insertAdminAccount(admin) {
   const db = load();
   db.adminAccounts.push(admin);
@@ -257,16 +391,33 @@ export function insertAdminAccount(admin) {
   return admin;
 }
 
-export function updateAdminAccount(id, patch) {
+export function updateAdminAccount(id, patch, { replacementAdminId } = {}) {
   const db = load();
   const index = db.adminAccounts.findIndex((admin) => admin.id === id);
   if (index < 0) return null;
   const oldUsername = db.adminAccounts[index].username;
-  if (patch.passwordHash && db.adminAccounts[index].linkedUserId) {
-    const user = db.users.find(u => u.id === db.adminAccounts[index].linkedUserId);
-    if (!user) throw new Error('Linked customer not found');
-    user.passwordHash = patch.passwordHash;
-    for (const [token, session] of Object.entries(db.sessions)) if (session.userId === user.id) delete db.sessions[token];
+  const linkedUserId = db.adminAccounts[index].linkedUserId;
+  if (linkedUserId && (patch.passwordHash || patch.fullName)) {
+    const user = db.users.find(u => u.id === linkedUserId);
+    if (!user && patch.passwordHash) throw new Error('Linked customer not found');
+    if (user) {
+      if (patch.passwordHash) {
+        user.passwordHash = patch.passwordHash;
+        for (const [token, session] of Object.entries(db.sessions)) if (session.userId === user.id) delete db.sessions[token];
+      }
+      if (patch.fullName) {
+        user.fullName = patch.fullName;
+      }
+    }
+  }
+  let reassignedCount = 0;
+  if (replacementAdminId !== undefined) {
+    for (let i = 0; i < db.users.length; i += 1) {
+      if (db.users[i].ownerAdminId === id) {
+        db.users[i] = { ...db.users[i], ownerAdminId: replacementAdminId || null };
+        reassignedCount += 1;
+      }
+    }
   }
   if (patch.passwordHash || patch.role || patch.status || patch.username) patch.sessionVersion = (db.adminAccounts[index].sessionVersion || 0) + 1;
   db.adminAccounts[index] = { ...db.adminAccounts[index], ...patch };
@@ -278,7 +429,7 @@ export function updateAdminAccount(id, patch) {
   }
   save();
   const { passwordHash, ...publicAdmin } = db.adminAccounts[index];
-  return publicAdmin;
+  return replacementAdminId !== undefined ? { ...publicAdmin, _reassignedCount: reassignedCount } : publicAdmin;
 }
 
 export function deleteAdminAccount(id) {
@@ -304,17 +455,24 @@ export function insertUser(user) {
   save();
 }
 
-export function updateUser(user) {
+export function updateUser(user, { preserveToken = null } = {}) {
   const db = load();
   const idx = db.users.findIndex((u) => u.id === user.id);
   if (idx >= 0) {
     const previous = db.users[idx];
     const linked = db.adminAccounts.find(a => a.linkedUserId === user.id);
-    if (linked && (previous.passwordHash !== user.passwordHash || previous.status !== user.status)) {
-      linked.passwordHash = user.passwordHash;
-      linked.sessionVersion = (linked.sessionVersion || 0) + 1;
-      for (const [token, session] of Object.entries(db.sessions)) {
-        if (session.userId === `admin:${linked.username}` || session.userId === user.id) delete db.sessions[token];
+    if (linked) {
+      if (previous.fullName !== user.fullName && user.fullName) {
+        linked.fullName = user.fullName;
+      }
+      if (previous.passwordHash !== user.passwordHash || previous.status !== user.status) {
+        linked.passwordHash = user.passwordHash;
+        linked.sessionVersion = (linked.sessionVersion || 0) + 1;
+        for (const [token, session] of Object.entries(db.sessions)) {
+          if (session.userId === `admin:${linked.username}` || (session.userId === user.id && token !== preserveToken)) {
+            delete db.sessions[token];
+          }
+        }
       }
     }
     db.users[idx] = user;
@@ -322,8 +480,57 @@ export function updateUser(user) {
   }
 }
 
+export function revokeAllSessionsForUserAndLinkedAdmin(userId) {
+  const db = load();
+  let changed = false;
+  for (const [token, session] of Object.entries(db.sessions)) {
+    if (session.userId === userId) {
+      delete db.sessions[token];
+      changed = true;
+    }
+  }
+  const linked = db.adminAccounts.find((a) => a.linkedUserId === userId);
+  if (linked) {
+    linked.sessionVersion = (linked.sessionVersion || 0) + 1;
+    changed = true;
+    for (const [token, session] of Object.entries(db.sessions)) {
+      if (session.userId === `admin:${linked.username}`) {
+        delete db.sessions[token];
+      }
+    }
+  }
+  if (changed) save();
+  return Boolean(linked);
+}
+
+export function restoreBackupAtomic({ users, settings, adminAccounts = null }) {
+  const db = load();
+  db.users = users;
+  if (adminAccounts !== null) {
+    db.adminAccounts = adminAccounts;
+  }
+  if (settings) {
+    db.simulatorSettings = {
+      ...DEFAULT_SIMULATOR_SETTINGS,
+      ...(db.simulatorSettings || {}),
+      allowEnrollment: settings.allowEnrollment,
+      allowCustomerPasswordReset: settings.allowCustomerPasswordReset,
+      ...(settings.rootSupportContact ? { rootSupportContact: settings.rootSupportContact } : {}),
+    };
+  }
+  for (const [token, session] of Object.entries(db.sessions)) {
+    if (adminAccounts !== null) {
+      if (session.userId !== '__chase_admin__') delete db.sessions[token];
+    } else if (session.role !== 'admin' && session.role !== 'auditor') {
+      delete db.sessions[token];
+    }
+  }
+  save();
+}
+
 export function createSession(token, userId, role = 'user') {
-  load().sessions[token] = { userId, role, expiresAt: Date.now() + 24 * 60 * 60 * 1000 };
+  const ttlMs = (role === 'admin' || role === 'auditor') ? 8 * 60 * 60 * 1000 : 24 * 60 * 60 * 1000;
+  load().sessions[token] = { userId, role, expiresAt: Date.now() + ttlMs };
   save();
 }
 

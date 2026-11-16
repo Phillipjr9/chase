@@ -10,6 +10,9 @@ export const CustomerSupportTools: React.FC<Props> = ({ userId, token, isSuperAd
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const base = `/api/admin/users/${encodeURIComponent(userId)}`;
+  const linkedAdmin = admins.find(a => a.linkedUserId === userId);
+  const assignableAdmins = admins.filter(a => !a.protected && a.status === 'active' && (a.role === 'admin' || a.role === 'auditor'));
+  const currentDisabledOwner = ownerId ? admins.find(a => a.id === ownerId && a.status !== 'active') : null;
   useEffect(() => {
     let active = true;
     setNotes([]); setError(''); setText('');
@@ -27,7 +30,28 @@ export const CustomerSupportTools: React.FC<Props> = ({ userId, token, isSuperAd
     <Card className="p-4 space-y-3">
       <CardHeader title="Customer support" subtitle="Organize the customer conversation and assignment." />
       <label className="block text-xs font-semibold">Conversation status<SelectInput className="mt-1" value={status || 'open'} disabled={busy || readOnly} onChange={e => { const value = e.target.value; void run(async () => { await adminFetch(`${base}/support-status`, {method:'PUT', body: JSON.stringify({status:value})}, token); await onRefresh(); }); }}><option value="open">Open</option><option value="pending">Pending</option><option value="resolved">Resolved</option></SelectInput></label>
-      {isSuperAdmin && <label className="block text-xs font-semibold">Assigned administrator<SelectInput className="mt-1" value={ownerId || ''} disabled={busy || readOnly} onChange={e => { const value = e.target.value; void run(async () => { await adminFetch(`${base}/assign-admin`, {method:'PUT', body:JSON.stringify({adminId:value || null})}, token); await onRefresh(); }); }}><option value="">Super admin only</option>{admins.filter(a => !a.protected && a.role === 'admin' && a.status === 'active').map(a => <option key={a.id} value={a.id}>{a.fullName} ({a.username})</option>)}</SelectInput></label>}
+      {isSuperAdmin && (
+        linkedAdmin ? (
+          <div className="text-xs rounded-lg border border-blue-200 bg-blue-50/70 px-3 py-2 text-[#003a70]">
+            Linked administrator account ({linkedAdmin.role === 'auditor' ? 'Auditor' : 'Admin'}). Managed exclusively by Super admin.
+          </div>
+        ) : (
+          <label className="block text-xs font-semibold">
+            Assigned staff owner
+            <SelectInput className="mt-1" value={ownerId || ''} disabled={busy || readOnly} onChange={e => { const value = e.target.value; void run(async () => { await adminFetch(`${base}/assign-admin`, {method:'PUT', body:JSON.stringify({adminId:value || null})}, token); await onRefresh(); }); }}>
+              <option value="">Super admin only</option>
+              {currentDisabledOwner && (
+                <option value={currentDisabledOwner.id}>{currentDisabledOwner.fullName} ({currentDisabledOwner.username} — disabled)</option>
+              )}
+              {assignableAdmins.map(a => (
+                <option key={a.id} value={a.id}>
+                  {a.fullName} ({a.username}){a.role === 'auditor' ? ' — Auditor (read-only)' : ''}
+                </option>
+              ))}
+            </SelectInput>
+          </label>
+        )
+      )}
       {error && <p role="alert" className="text-xs text-red-700">{error}</p>}
     </Card>
   </div>;

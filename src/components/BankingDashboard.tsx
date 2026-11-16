@@ -85,6 +85,7 @@ interface Props {
   onToggleSpanish?: () => void;
   isImpersonating?: boolean;
   onExitImpersonation?: () => void;
+  onSwitchToAdmin?: () => void;
 }
 
 export type DashboardView =
@@ -201,6 +202,7 @@ export const BankingDashboard: React.FC<Props> = ({
   onToggleSpanish,
   isImpersonating = false,
   onExitImpersonation,
+  onSwitchToAdmin,
 }) => {
   const t = (en: string, es: string) => (spanishMode ? es : en);
   const [view, setView] = useState<View>(initialView);
@@ -610,6 +612,23 @@ export const BankingDashboard: React.FC<Props> = ({
           <div className="max-w-[1260px] mx-auto px-4 sm:px-8 min-h-[38px] flex flex-wrap items-center justify-between gap-2 text-[12px]" style={{ color: BTN_BLUE }}>
             <span><ShieldCheck className="inline w-3.5 h-3.5 mr-1" /> Admin preview · viewing simulated account for {user.fullName}</span>
             <button type="button" onClick={onExitImpersonation} className="font-semibold underline cursor-pointer">Return to admin</button>
+          </div>
+        </div>
+      )}
+      {!isImpersonating && user.linkedAdmin && onSwitchToAdmin && (
+        <div role="region" aria-label="Administrator workspace switcher" className="bg-[#0B2347] text-white border-b border-white/15">
+          <div className="max-w-[1260px] mx-auto px-4 sm:px-8 min-h-[36px] flex flex-wrap items-center justify-between gap-2 text-[12px]">
+            <span className="inline-flex items-center gap-1.5 text-blue-100">
+              <ShieldCheck className="w-3.5 h-3.5 text-blue-300" />
+              Personal Banking · Linked {user.linkedAdmin.role === 'auditor' ? 'Read-Only Auditor' : 'Limited Administrator'} access enabled
+            </span>
+            <button
+              type="button"
+              onClick={onSwitchToAdmin}
+              className="rounded bg-white/15 hover:bg-white/25 px-2.5 py-1 text-[11.5px] font-semibold text-white cursor-pointer"
+            >
+              Switch to Admin Console →
+            </button>
           </div>
         </div>
       )}

@@ -10,7 +10,9 @@ import {
   LogOut,
   Plus,
   Search,
+  Shield,
   ShieldAlert,
+  ShieldOff,
   Sparkles,
   Trash2,
   UserCheck,
@@ -33,19 +35,32 @@ import {
   fmtDateShort,
   fmtMoneyFull,
 } from './ui';
-import { AdminTab, AdminUserRow, User, inputDate } from './types';
+import {
+  AdminAccountRow,
+  AdminCapabilities,
+  AdminTab,
+  AdminUserRow,
+  User,
+  inputDate,
+} from './types';
 
 interface Props {
   users: AdminUserRow[];
+  adminAccounts: AdminAccountRow[];
   selectedUser: User | null;
   userJson: string;
   onChangeUserJson: (val: string) => void;
   isReadOnly: boolean;
   canCreateUsers: boolean;
   canGenerateActivity: boolean;
+  capabilities: AdminCapabilities;
   isSuperAdmin: boolean;
   isLinkedAdmin: boolean;
-  onPromote: () => Promise<boolean>;
+  ownerFilter: string;
+  onOwnerFilterChange: (val: string) => void;
+  onPromote: (role: 'admin' | 'auditor') => Promise<boolean>;
+  onRevokeLinkedAdmin: (adminId: string, replacementAdminId?: string | null) => Promise<boolean>;
+  onAssignOwner: (userId: string, adminId: string | null) => Promise<boolean>;
   busy: boolean;
   onSelectUser: (id: string) => void;
   onCreateUser: (payload: {
@@ -53,6 +68,7 @@ interface Props {
     fullName: string;
     email: string;
     password: string;
+    ownerAdminId?: string | null;
   }) => Promise<boolean>;
   onBulkUsers: (
     ids: string[],
@@ -77,15 +93,21 @@ interface Props {
 
 export const UsersTab: React.FC<Props> = ({
   users,
+  adminAccounts,
   selectedUser,
   userJson,
   onChangeUserJson,
   isReadOnly,
   canCreateUsers,
   canGenerateActivity,
+  capabilities,
   isSuperAdmin,
   isLinkedAdmin,
+  ownerFilter,
+  onOwnerFilterChange,
   onPromote,
+  onRevokeLinkedAdmin,
+  onAssignOwner,
   busy,
   onSelectUser,
   onCreateUser,
@@ -111,10 +133,16 @@ export const UsersTab: React.FC<Props> = ({
   const [newFullName, setNewFullName] = useState('');
   const [newEmail, setNewEmail] = useState('');
   const [newPassword, setNewPassword] = useState('');
+  const [newOwnerAdminId, setNewOwnerAdminId] = useState('');
 
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState('');
   const [deleteUserOpen, setDeleteUserOpen] = useState(false);
+
+  const [promoteOpen, setPromoteOpen] = useState(false);
+  const [promoteRole, setPromoteRole] = useState<'admin' | 'auditor'>('admin');
+  const [revokeOpen, setRevokeOpen] = useState(false);
+  const [revokeReplacementId, setRevokeReplacementId] = useState('');
 
   const [newCustomerPwd, setNewCustomerPwd] = useState('');
   const [activityStart, setActivityStart] = useState(() => inputDate(90));
@@ -129,6 +157,40 @@ export const UsersTab: React.FC<Props> = ({
   const [editUsername, setEditUsername] = useState('');
   const [editCreditScore, setEditCreditScore] = useState('742');
 
+  const canManageAccess = isSuperAdmin || (!isReadOnly && capabilities.manageCustomerAccess);
+  const canImpersonate = isSuperAdmin || (!isReadOnly && capabilities.impersonateUsers);
+
+  const staffById = useMemo(() => {
+    const map = new Map<string, AdminAccountRow>();
+    for (const a of adminAccounts) map.set(a.id, a);
+    return map;
+  }, [adminAccounts]);
+
+  const assignableOwners = useMemo(
+    () => adminAccounts.filter((a) => !a.protected && a.status === 'active' && (a.role === 'admin' || a.role === 'auditor')),
+    [adminAccounts]
+  );
+
+  const linkedAdminRecord = useMemo(
+    () => (selectedUser ? adminAccounts.find((a) => a.linkedUserId === selectedUser.id) || null : null),
+    [adminAccounts, selectedUser]
+  );
+
+  const replacementAdminOptions = useMemo(
+    () =>
+      adminAccounts.filter(
+        (a) => !a.protected && a.status === 'active' && a.role === 'admin' && a.id !== linkedAdminRecord?.id
+      ),
+    [adminAccounts, linkedAdminRecord]
+  );
+
+  const ownerLabel = (ownerId?: string | null) => {
+    if (!ownerId) return 'Super admin';
+    const found = staffById.get(ownerId);
+    if (!found) return 'Unassigned';
+    return found.status === 'disabled' ? `${found.fullName} (disabled)` : found.fullName;
+  };
+
   React.useEffect(() => {
     if (selectedUser) {
       setEditName(selectedUser.fullName || '');
@@ -140,14 +202,17 @@ export const UsersTab: React.FC<Props> = ({
 
   const filtered = useMemo(
     () =>
-      users.filter(
-        (u) =>
-          (statusFilter === 'all' || u.status === statusFilter) &&
-          `${u.fullName} ${u.username} ${u.email} ${u.status}`
-            .toLowerCase()
-            .includes(query.trim().toLowerCase())
-      ),
-    [users, query, statusFilter]
+      users.filter((u) => {
+        if (statusFilter !== 'all' && u.status !== statusFilter) return false;
+        if (isSuperAdmin && ownerFilter !== 'all') {
+          if (ownerFilter === '__root__' && u.ownerAdminId) return false;
+          if (ownerFilter !== '__root__' && u.ownerAdminId !== ownerFilter) return false;
+        }
+        return `${u.fullName} ${u.username} ${u.email} ${u.status}`
+          .toLowerCase()
+          .includes(query.trim().toLowerCase());
+      }),
+    [users, query, statusFilter, isSuperAdmin, ownerFilter]
   );
 
   const pages = Math.max(1, Math.ceil(filtered.length / pageSize));
@@ -177,6 +242,7 @@ export const UsersTab: React.FC<Props> = ({
       fullName: newFullName,
       email: newEmail,
       password: newPassword,
+      ...(isSuperAdmin ? { ownerAdminId: newOwnerAdminId || null } : {}),
     });
     if (ok) {
       setCreateOpen(false);
@@ -184,6 +250,7 @@ export const UsersTab: React.FC<Props> = ({
       setNewFullName('');
       setNewEmail('');
       setNewPassword('');
+      setNewOwnerAdminId('');
     }
   };
 
@@ -195,13 +262,15 @@ export const UsersTab: React.FC<Props> = ({
       ...selectedUser,
       fullName: editName.trim(),
       email: editEmail.trim(),
-      username: editUsername.trim(),
+      username: isLinkedAdmin ? selectedUser.username : editUsername.trim(),
       credit: selectedUser.credit
         ? { ...selectedUser.credit, score }
         : undefined,
     };
     await onSaveUserObject(next, 'Customer profile & credit score updated.');
   };
+
+  const minPasswordLength = isLinkedAdmin ? 10 : 8;
 
   return (
     <div className="grid grid-cols-1 xl:grid-cols-12 gap-5 items-start">
@@ -223,11 +292,12 @@ export const UsersTab: React.FC<Props> = ({
                 onClick={() =>
                   downloadCsv(
                     'simulator-users.csv',
-                    ['Username', 'Full Name', 'Email', 'Status', 'Created', 'Accounts', 'Deposits', 'Card Balances'],
+                    ['Username', 'Full Name', 'Email', 'Owner', 'Status', 'Created', 'Accounts', 'Deposits', 'Card Balances'],
                     filtered.map((u) => [
                       u.username,
                       u.fullName,
                       u.email,
+                      isSuperAdmin ? ownerLabel(u.ownerAdminId) : '',
                       u.status,
                       u.createdAt,
                       u.accountCount,
@@ -273,8 +343,38 @@ export const UsersTab: React.FC<Props> = ({
             </SelectInput>
           </div>
 
+          {isSuperAdmin && (
+            <div className="flex items-center gap-2">
+              <SelectInput
+                aria-label="Filter by assigned administrator"
+                value={ownerFilter}
+                onChange={(e) => {
+                  onOwnerFilterChange(e.target.value);
+                  setPage(1);
+                }}
+                className="w-full"
+              >
+                <option value="all">All owners ({users.length})</option>
+                <option value="__root__">Super admin only ({users.filter((u) => !u.ownerAdminId).length})</option>
+                {adminAccounts
+                  .filter((a) => !a.protected)
+                  .map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.fullName} (@{a.username}){a.status === 'disabled' ? ' [disabled]' : ''}{' '}
+                      ({users.filter((u) => u.ownerAdminId === a.id).length})
+                    </option>
+                  ))}
+              </SelectInput>
+              {ownerFilter !== 'all' && (
+                <Btn variant="secondary" size="xs" onClick={() => { onOwnerFilterChange('all'); setPage(1); }}>
+                  Clear
+                </Btn>
+              )}
+            </div>
+          )}
+
           {/* Bulk action bar */}
-          {selectedIds.length > 0 && !isReadOnly && (
+          {selectedIds.length > 0 && canManageAccess && (
             <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-blue-50 dark:bg-blue-500/15 border border-blue-200 dark:border-blue-500/30 px-3 py-2 text-[12px]">
               <span className="font-semibold text-[#0060F0] dark:text-blue-300">
                 {selectedIds.length} selected
@@ -322,6 +422,7 @@ export const UsersTab: React.FC<Props> = ({
             {paged.map((u) => {
               const isSelected = selectedUser?.id === u.id;
               const isChecked = selectedIds.includes(u.id);
+              const assignedStaff = u.ownerAdminId ? staffById.get(u.ownerAdminId) : null;
               return (
                 <li
                   key={u.id}
@@ -331,7 +432,7 @@ export const UsersTab: React.FC<Props> = ({
                       : 'hover:bg-gray-50 dark:hover:bg-white/[0.03]'
                   }`}
                 >
-                  {!isReadOnly && (
+                  {canManageAccess && (
                     <Checkbox
                       checked={isChecked}
                       aria-label={`Select ${u.username}`}
@@ -350,17 +451,30 @@ export const UsersTab: React.FC<Props> = ({
                     <div className="flex items-center gap-2.5 min-w-0">
                       <Avatar name={u.fullName} size={34} />
                       <div className="min-w-0">
-                        <div className="flex items-center gap-1.5">
+                        <div className="flex flex-wrap items-center gap-1.5">
                           <span className="text-[13.5px] font-semibold text-gray-900 dark:text-white truncate">
                             {u.fullName}
                           </span>
                           <Badge tone={u.status === 'active' ? 'success' : 'error'}>
                             {u.status}
                           </Badge>
+                          {isSuperAdmin && u.linkedAdminId && (
+                            <Badge tone={u.linkedAdminStatus === 'disabled' ? 'warning' : 'violet'}>
+                              Linked {u.linkedAdminRole === 'auditor' ? 'Auditor' : 'Admin'}
+                            </Badge>
+                          )}
                         </div>
                         <p className="text-[11.5px] text-gray-500 dark:text-gray-400 truncate">
                           @{u.username} · {u.email}
                         </p>
+                        {isSuperAdmin && (
+                          <p className="text-[10.5px] text-gray-400 dark:text-gray-500 truncate mt-0.5">
+                            Owner:{' '}
+                            <span className={assignedStaff?.status === 'disabled' ? 'text-amber-600 font-medium' : 'text-gray-600 dark:text-gray-300 font-medium'}>
+                              {ownerLabel(u.ownerAdminId)}
+                            </span>
+                          </p>
+                        )}
                       </div>
                     </div>
                     <div className="text-right shrink-0">
@@ -412,6 +526,11 @@ export const UsersTab: React.FC<Props> = ({
                       <Badge tone={selectedUser.status === 'suspended' ? 'error' : 'success'}>
                         {selectedUser.status || 'active'}
                       </Badge>
+                      {isSuperAdmin && linkedAdminRecord && (
+                        <Badge tone={linkedAdminRecord.status === 'disabled' ? 'warning' : 'violet'}>
+                          Linked {linkedAdminRecord.role === 'auditor' ? 'Auditor' : 'Admin'}
+                        </Badge>
+                      )}
                       {selectedUser.credit?.score && (
                         <Badge tone="primary">VantageScore {selectedUser.credit.score}</Badge>
                       )}
@@ -425,37 +544,110 @@ export const UsersTab: React.FC<Props> = ({
 
                 {!isReadOnly && (
                   <div className="flex flex-wrap items-center gap-2">
-                    {isSuperAdmin && <Btn variant="secondary" size="sm" disabled={busy || isLinkedAdmin || selectedUser.status === 'suspended'} onClick={() => { if (window.confirm(`Grant limited test administrator access to ${selectedUser.username}? Their customer account and password remain unchanged.`)) void onPromote(); }}>{isLinkedAdmin ? 'Administrator access enabled' : 'Promote to administrator'}</Btn>}
-                    <Btn variant="primary" size="sm" disabled={busy} onClick={onImpersonate}>
-                      <Eye className="w-4 h-4" />
-                      Preview as Customer
-                    </Btn>
-                    <Btn variant="secondary" size="sm" disabled={busy} onClick={onToggleUserStatus}>
-                      {selectedUser.status === 'suspended' ? (
-                        <>
-                          <UserCheck className="w-4 h-4 text-[#12B76A]" /> Reactivate
-                        </>
-                      ) : (
-                        <>
-                          <UserX className="w-4 h-4 text-[#F79009]" /> Suspend
-                        </>
-                      )}
-                    </Btn>
-                    <Btn variant="secondary" size="sm" disabled={busy} onClick={onRevokeSessions}>
-                      <LogOut className="w-3.5 h-3.5" />
-                      Revoke Sessions
-                    </Btn>
-                    <Btn
-                      variant="danger"
-                      size="sm"
-                      disabled={busy}
-                      onClick={() => setDeleteUserOpen(true)}
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </Btn>
+                    {isSuperAdmin && !isLinkedAdmin && (
+                      <Btn
+                        variant="secondary"
+                        size="sm"
+                        disabled={busy || selectedUser.status === 'suspended'}
+                        onClick={() => {
+                          setPromoteRole('admin');
+                          setPromoteOpen(true);
+                        }}
+                      >
+                        <Shield className="w-3.5 h-3.5" />
+                        Promote to Staff
+                      </Btn>
+                    )}
+                    {isSuperAdmin && isLinkedAdmin && linkedAdminRecord && (
+                      <Btn
+                        variant="secondary"
+                        size="sm"
+                        disabled={busy}
+                        onClick={() => {
+                          setRevokeReplacementId('');
+                          setRevokeOpen(true);
+                        }}
+                      >
+                        <ShieldOff className="w-3.5 h-3.5 text-amber-600" />
+                        Revoke Admin Access
+                      </Btn>
+                    )}
+                    {canImpersonate && (
+                      <Btn variant="primary" size="sm" disabled={busy} onClick={onImpersonate}>
+                        <Eye className="w-4 h-4" />
+                        Preview as Customer
+                      </Btn>
+                    )}
+                    {canManageAccess && (
+                      <>
+                        <Btn variant="secondary" size="sm" disabled={busy} onClick={onToggleUserStatus}>
+                          {selectedUser.status === 'suspended' ? (
+                            <>
+                              <UserCheck className="w-4 h-4 text-[#12B76A]" /> Reactivate
+                            </>
+                          ) : (
+                            <>
+                              <UserX className="w-4 h-4 text-[#F79009]" /> Suspend
+                            </>
+                          )}
+                        </Btn>
+                        <Btn variant="secondary" size="sm" disabled={busy} onClick={onRevokeSessions}>
+                          <LogOut className="w-3.5 h-3.5" />
+                          Revoke Sessions
+                        </Btn>
+                        <Btn
+                          variant="danger"
+                          size="sm"
+                          disabled={busy || isLinkedAdmin}
+                          title={isLinkedAdmin ? 'Revoke linked administrator access before deleting this customer' : 'Delete customer'}
+                          onClick={() => setDeleteUserOpen(true)}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </Btn>
+                      </>
+                    )}
                   </div>
                 )}
               </div>
+
+              {/* Super Admin Owner Assignment Strip */}
+              {isSuperAdmin && (
+                <div className="mt-4 pt-3.5 border-t border-gray-100 dark:border-gray-800 flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="text-[11.5px] font-semibold text-gray-700 dark:text-gray-200">
+                      Assigned Staff Owner
+                    </p>
+                    <p className="text-[11px] text-gray-500 dark:text-gray-400">
+                      {isLinkedAdmin
+                        ? 'Linked staff customer profiles stay assigned to Super admin so other limited admins cannot alter their credentials.'
+                        : 'Controls which staff administrator or auditor can view and manage this customer.'}
+                    </p>
+                  </div>
+                  {isLinkedAdmin ? (
+                    <Badge tone="primary">Super admin only</Badge>
+                  ) : (
+                    <SelectInput
+                      aria-label="Assigned staff owner"
+                      value={selectedUser.ownerAdminId || ''}
+                      disabled={busy}
+                      onChange={(e) => void onAssignOwner(selectedUser.id, e.target.value || null)}
+                      className="min-w-[230px]"
+                    >
+                      <option value="">Super admin only</option>
+                      {selectedUser.ownerAdminId && staffById.get(selectedUser.ownerAdminId)?.status === 'disabled' && (
+                        <option value={selectedUser.ownerAdminId}>
+                          {staffById.get(selectedUser.ownerAdminId)?.fullName} (disabled)
+                        </option>
+                      )}
+                      {assignableOwners.map((a) => (
+                        <option key={a.id} value={a.id}>
+                          {a.fullName} (@{a.username}){a.role === 'auditor' ? ' — Auditor' : ''}
+                        </option>
+                      ))}
+                    </SelectInput>
+                  )}
+                </div>
+              )}
 
               {/* Portfolio mini-metrics */}
               <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -510,7 +702,7 @@ export const UsersTab: React.FC<Props> = ({
               </div>
             </Card>
 
-            {/* Simulated Activity History Generator (from 8f9d1770) */}
+            {/* Simulated Activity History Generator */}
             <Card className="p-5">
               <CardHeader
                 title="Test Ledger History Generator"
@@ -639,11 +831,12 @@ export const UsersTab: React.FC<Props> = ({
                     </label>
                     <label className="block">
                       <span className="block text-[11.5px] font-medium text-gray-600 dark:text-gray-300 mb-1">
-                        Username
+                        Username {isLinkedAdmin ? '(locked — linked admin)' : ''}
                       </span>
                       <TextInput
                         value={editUsername}
                         onChange={(e) => setEditUsername(e.target.value)}
+                        disabled={isLinkedAdmin}
                         required
                       />
                     </label>
@@ -671,7 +864,7 @@ export const UsersTab: React.FC<Props> = ({
                       />
                     </label>
                     <div className="sm:col-span-2 flex justify-end">
-                      <Btn type="submit" variant="primary" disabled={busy || isReadOnly}>
+                      <Btn type="submit" variant="primary" disabled={busy || !canManageAccess}>
                         <CheckCircle2 className="w-4 h-4" />
                         Save Profile Changes
                       </Btn>
@@ -685,19 +878,21 @@ export const UsersTab: React.FC<Props> = ({
                       Reset Customer Password
                     </p>
                     <p className="text-[11.5px] text-gray-500 dark:text-gray-400 mt-0.5">
-                      Sets a new password (8+ characters) and immediately revokes active customer sessions.
+                      {isLinkedAdmin
+                        ? 'Linked staff account: requires at least 10 characters and immediately revokes both customer and administrator sessions.'
+                        : 'Sets a new password (8+ characters) and immediately revokes active customer sessions.'}
                     </p>
                     <div className="mt-2.5 flex flex-wrap gap-2">
                       <TextInput
                         type="password"
-                        placeholder="New password (8+ chars)"
+                        placeholder={`New password (${minPasswordLength}+ chars)`}
                         value={newCustomerPwd}
                         onChange={(e) => setNewCustomerPwd(e.target.value)}
                         className="max-w-[260px]"
                       />
                       <Btn
                         variant="secondary"
-                        disabled={busy || isReadOnly || newCustomerPwd.length < 8}
+                        disabled={busy || !canManageAccess || newCustomerPwd.length < minPasswordLength}
                         onClick={async () => {
                           const ok = await onResetUserPassword(newCustomerPwd);
                           if (ok) setNewCustomerPwd('');
@@ -731,7 +926,7 @@ export const UsersTab: React.FC<Props> = ({
                     <Btn
                       variant="primary"
                       size="sm"
-                      disabled={busy || isReadOnly}
+                      disabled={busy || !canManageAccess}
                       onClick={() => void onSaveRawJson()}
                     >
                       Save Full Simulator Record
@@ -762,7 +957,7 @@ export const UsersTab: React.FC<Props> = ({
       >
         <form onSubmit={handleCreateSubmit} className="space-y-3.5">
           <p className="text-[12.5px] text-gray-500 dark:text-gray-400">
-            Provisions a complete Chase household with sample checking, savings, Sapphire Preferred card, payees, investments, and credit profile.
+            Creates an empty test customer profile. Add checking, savings, cards, loans, or simulated transaction history in Accounts &amp; cards after creation.
           </p>
           <label className="block">
             <span className="block text-[12px] font-medium text-gray-700 dark:text-gray-300 mb-1">
@@ -809,7 +1004,133 @@ export const UsersTab: React.FC<Props> = ({
               required
             />
           </label>
+          {isSuperAdmin && (
+            <label className="block">
+              <span className="block text-[12px] font-medium text-gray-700 dark:text-gray-300 mb-1">
+                Assigned Staff Owner
+              </span>
+              <SelectInput
+                value={newOwnerAdminId}
+                onChange={(e) => setNewOwnerAdminId(e.target.value)}
+                className="w-full"
+              >
+                <option value="">Super admin only</option>
+                {assignableOwners.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.fullName} (@{a.username}){a.role === 'auditor' ? ' — Auditor' : ''}
+                  </option>
+                ))}
+              </SelectInput>
+            </label>
+          )}
         </form>
+      </Modal>
+
+      {/* Promote Customer to Staff Modal */}
+      <Modal
+        open={promoteOpen}
+        onClose={() => setPromoteOpen(false)}
+        title={`Grant Staff Access to ${selectedUser?.fullName || ''}`}
+        footer={
+          <>
+            <Btn variant="secondary" onClick={() => setPromoteOpen(false)}>
+              Cancel
+            </Btn>
+            <Btn
+              variant="primary"
+              disabled={busy}
+              onClick={async () => {
+                const ok = await onPromote(promoteRole);
+                if (ok) setPromoteOpen(false);
+              }}
+            >
+              Grant {promoteRole === 'auditor' ? 'Auditor' : 'Admin'} Access
+            </Btn>
+          </>
+        }
+      >
+        <div className="space-y-3.5 text-[13px] text-gray-600 dark:text-gray-300">
+          <p>
+            Link <strong>@{selectedUser?.username}</strong> to a staff console identity. Their personal customer banking profile, accounts, and password stay intact and stay synchronized.
+          </p>
+          <label className="block">
+            <span className="block text-[12px] font-medium text-gray-700 dark:text-gray-200 mb-1">
+              Staff Role
+            </span>
+            <SelectInput
+              value={promoteRole}
+              onChange={(e) => setPromoteRole(e.target.value as 'admin' | 'auditor')}
+              className="w-full"
+            >
+              <option value="admin">Limited Administrator (manage assigned customers)</option>
+              <option value="auditor">Read-only Auditor (view assigned customers)</option>
+            </SelectInput>
+          </label>
+          <p className="text-[11.5px] text-gray-500">
+            Their own customer profile will be owned by Super admin so other limited admins cannot alter it.
+          </p>
+        </div>
+      </Modal>
+
+      {/* Revoke Linked Admin Access Modal */}
+      <Modal
+        open={revokeOpen}
+        onClose={() => setRevokeOpen(false)}
+        title={`Revoke Admin Access for ${selectedUser?.fullName || ''}`}
+        footer={
+          <>
+            <Btn variant="secondary" onClick={() => setRevokeOpen(false)}>
+              Cancel
+            </Btn>
+            <Btn
+              variant="danger"
+              disabled={busy || !linkedAdminRecord}
+              onClick={async () => {
+                if (!linkedAdminRecord) return;
+                const needsReassign = (linkedAdminRecord.customerCount || 0) > 0;
+                const ok = await onRevokeLinkedAdmin(
+                  linkedAdminRecord.id,
+                  needsReassign ? (revokeReplacementId || null) : undefined
+                );
+                if (ok) setRevokeOpen(false);
+              }}
+            >
+              Revoke Admin Access
+            </Btn>
+          </>
+        }
+      >
+        <div className="space-y-3.5 text-[13px] text-gray-600 dark:text-gray-300">
+          <p>
+            This immediately revokes administrator console access and signs out all admin sessions for{' '}
+            <strong>@{selectedUser?.username}</strong>. Their personal customer banking profile, balances, and password remain intact.
+          </p>
+          {(linkedAdminRecord?.customerCount || 0) > 0 && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50/70 dark:bg-amber-500/10 dark:border-amber-500/30 p-3 space-y-2">
+              <p className="text-[12px] font-semibold text-amber-800 dark:text-amber-300">
+                This administrator currently owns {linkedAdminRecord?.customerCount} customer
+                {linkedAdminRecord?.customerCount === 1 ? '' : 's'}.
+              </p>
+              <label className="block">
+                <span className="block text-[11.5px] font-medium text-gray-700 dark:text-gray-200 mb-1">
+                  Reassign those customers to:
+                </span>
+                <SelectInput
+                  value={revokeReplacementId}
+                  onChange={(e) => setRevokeReplacementId(e.target.value)}
+                  className="w-full"
+                >
+                  <option value="">Super administrator</option>
+                  {replacementAdminOptions.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.fullName} (@{a.username})
+                    </option>
+                  ))}
+                </SelectInput>
+              </label>
+            </div>
+          )}
+        </div>
       </Modal>
 
       {/* Bulk Delete Modal */}
