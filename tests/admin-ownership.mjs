@@ -9,6 +9,9 @@ async function call(path, { token, body, method = body ? 'POST' : 'GET', status 
 const root = (await call('/api/admin/login', {body:{username:'dianasmith6525@gmail.com',password:process.env.TEST_ROOT_PASSWORD || 'Temporary-test-password-92!'}})).token;
 assert.equal((await call('/api/admin/me',{token:root})).admin.isSuperAdmin, true);
 for (const username of ['operator-a','operator-b']) await call('/api/admin/admins',{token:root,status:201,body:{username,fullName:username,password:'operatorPassword123!',role:'admin'}});
+assert.equal((await call('/api/auth/check-username?username=operator-a')).taken,true);
+await call('/api/admin/users',{token:root,status:409,body:{username:'operator-a',fullName:'Test',email:'test@example.test',password:'longPassword123!'}});
+await call('/api/auth/register',{status:400,body:{firstName:'Test',lastName:'User',email:'test@example.test',username:'operator-a',password:'longPassword123!',product:'checking'}});
 const a = (await call('/api/admin/login',{body:{username:'operator-a',password:'operatorPassword123!'}})).token;
 const b = (await call('/api/admin/login',{body:{username:'operator-b',password:'operatorPassword123!'}})).token;
 const create = async (token, username) => (await call('/api/admin/users',{token,status:201,body:{username,fullName:'Test Customer',email:`${username}@example.test`,password:'customerPassword123!'}})).user;
@@ -47,6 +50,7 @@ await call('/api/admin/replies',{token:a,method:'PUT',body:{replies}});
 assert.equal((await call('/api/admin/replies',{token:a})).replies[0].label,'Greeting');
 assert.equal((await call('/api/admin/replies',{token:b})).replies.length,0);
 await call(`/api/admin/admins/${adminA.id}`,{token:root,method:'PUT',body:{permissions:{createUsers:false,generateActivity:false,sendMessages:false}}});
+assert.deepEqual((await call('/api/admin/me',{token:a})).admin.permissions, {createUsers:false,generateActivity:false,sendMessages:false});
 await call(`/api/admin/users/${userA.id}/messages`,{token:a,status:403,body:{subject:'test',body:'no'}});
 await call(`/api/admin/users/${userA.id}/generate-transactions`,{token:a,status:403,body:activity});
 await call('/api/admin/users',{token:a,status:403,body:{username:'nobody',fullName:'No Body',email:'no@example.test',password:'customerPassword123!'}});

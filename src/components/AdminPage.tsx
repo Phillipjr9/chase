@@ -87,6 +87,7 @@ export const AdminPage: React.FC<{
   const [currentAdminRole, setCurrentAdminRole] = useState<'admin' | 'auditor'>('admin');
   const [currentAdminUsername, setCurrentAdminUsername] = useState('');
   const [isSuperAdmin, setIsSuperAdmin] = useState(false);
+  const [permissions, setPermissions] = useState({ createUsers: false, generateActivity: false, sendMessages: false });
   const [adminAccounts, setAdminAccounts] = useState<AdminAccountRow[]>([]);
 
   // Public header state (for unauthenticated sign-in view)
@@ -235,7 +236,8 @@ export const AdminPage: React.FC<{
       pending = true;
       try {
         const result = await api<{ threads: AdminMessageThread[] }>('/api/admin/messages', {}, token);
-        if (active) setMessageThreads(result.threads);
+        const me = await api<{ admin: { permissions: { createUsers: boolean; generateActivity: boolean; sendMessages: boolean } } }>('/api/admin/me', {}, token);
+        if (active) { setMessageThreads(result.threads); setPermissions(me.admin.permissions); }
       } catch { /* Retry on the next interval. */ }
       finally { pending = false; }
     };
@@ -251,7 +253,7 @@ export const AdminPage: React.FC<{
       setCheckingAuth(true);
       try {
         const me = await api<{
-          admin: { username: string; label: string; role: 'admin' | 'auditor'; isSuperAdmin?: boolean };
+          admin: { username: string; label: string; role: 'admin' | 'auditor'; isSuperAdmin?: boolean; permissions: { createUsers: boolean; generateActivity: boolean; sendMessages: boolean } };
           token?: string;
         }>('/api/admin/me', {}, token);
         if (!active) return;
@@ -261,6 +263,7 @@ export const AdminPage: React.FC<{
           writeAdminToken(resolvedTok);
         }
         setIsSuperAdmin(me.admin.isSuperAdmin === true);
+        setPermissions(me.admin.permissions);
         setAdminName(me.admin.label);
         setCurrentAdminRole(me.admin.role || 'admin');
         setCurrentAdminUsername(me.admin.username);
@@ -396,6 +399,19 @@ export const AdminPage: React.FC<{
 
   /* --------------------------- Mutation Handlers -------------------------- */
 
+
+  const handlePromote = async (): Promise<boolean> => {
+    if (!selectedUser || !isSuperAdmin) return false;
+    setBusy(true);
+    try {
+      await api(`/api/admin/users/${encodeURIComponent(selectedUser.id)}/promote`, { method: 'POST', body: JSON.stringify({ confirm: true }) });
+      const result = await api<{ admins: AdminAccountRow[] }>('/api/admin/admins');
+      setAdminAccounts(result.admins);
+      notify('success', 'Limited test administrator access enabled. Use the administrator sign-in with the existing username and password.');
+      return true;
+    } catch (err) { notify('error', err instanceof Error ? err.message : 'Could not promote customer.'); return false; }
+    finally { setBusy(false); }
+  };
 
   const handleCreateUser = async (payload: {
     username: string;
@@ -1626,11 +1642,11 @@ export const AdminPage: React.FC<{
                 <button
                   type="button"
                   onClick={() => void impersonateById(selectedUser.id, selectedUser.fullName)}
-                  className="font-semibold text-[#1A4488] hover:underline cursor-pointer"
+                  className="hidden sm:inline font-semibold text-[#1A4488] hover:underline cursor-pointer"
                 >
                   {t(`Preview ${selectedUser.fullName.split(' ')[0]}’s Banking`, `Ver banca de ${selectedUser.fullName.split(' ')[0]}`)}
                 </button>
-                <span className="text-[#C9CDD1]">|</span>
+                <span className="hidden sm:inline text-[#C9CDD1]">|</span>
               </>
             )}
             <button type="button" onClick={() => setTab('audit')} className="hover:underline cursor-pointer">
@@ -2063,6 +2079,11 @@ export const AdminPage: React.FC<{
             isReadOnly={isReadOnly}
             busy={busy}
             onSelectUser={(id) => void selectUserAndMaybeGo(id)}
+            isSuperAdmin={isSuperAdmin}
+            isLinkedAdmin={adminAccounts.some(a => a.linkedUserId === selectedUser?.id)}
+            onPromote={handlePromote}
+            canCreateUsers={permissions.createUsers}
+            canGenerateActivity={permissions.generateActivity}
             onCreateUser={handleCreateUser}
             onBulkUsers={handleBulkUsers}
             onSaveUserObject={handleSaveUserObject}
@@ -2153,6 +2174,7 @@ export const AdminPage: React.FC<{
             threads={messageThreads}
             readOnly={isReadOnly}
             onSelectUser={(id) => void selectUserAndMaybeGo(id)}
+            canSendMessages={permissions.sendMessages}
             onSendAdvisorMessage={handleSendAdvisorMessage}
             onMarkThreadRead={handleMarkThreadRead}
             onUpdateAccountNotice={handleUpdateAccountNotice}

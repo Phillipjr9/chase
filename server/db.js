@@ -241,6 +241,15 @@ export function listAdminAccounts() {
   return (load().adminAccounts || []).map(({ passwordHash, ...admin }) => admin);
 }
 
+export function promoteCustomerToAdmin(userId, admin) {
+  const db = load();
+  const index = db.users.findIndex(user => user.id === userId);
+  if (index < 0) throw new Error('Customer not found');
+  db.users[index] = { ...db.users[index], ownerAdminId: null };
+  db.adminAccounts.push(admin);
+  save();
+}
+
 export function insertAdminAccount(admin) {
   const db = load();
   db.adminAccounts.push(admin);
@@ -253,6 +262,12 @@ export function updateAdminAccount(id, patch) {
   const index = db.adminAccounts.findIndex((admin) => admin.id === id);
   if (index < 0) return null;
   const oldUsername = db.adminAccounts[index].username;
+  if (patch.passwordHash && db.adminAccounts[index].linkedUserId) {
+    const user = db.users.find(u => u.id === db.adminAccounts[index].linkedUserId);
+    if (!user) throw new Error('Linked customer not found');
+    user.passwordHash = patch.passwordHash;
+    for (const [token, session] of Object.entries(db.sessions)) if (session.userId === user.id) delete db.sessions[token];
+  }
   if (patch.passwordHash || patch.role || patch.status || patch.username) patch.sessionVersion = (db.adminAccounts[index].sessionVersion || 0) + 1;
   db.adminAccounts[index] = { ...db.adminAccounts[index], ...patch };
   if (patch.passwordHash || patch.role || patch.status || patch.username) {
@@ -293,6 +308,15 @@ export function updateUser(user) {
   const db = load();
   const idx = db.users.findIndex((u) => u.id === user.id);
   if (idx >= 0) {
+    const previous = db.users[idx];
+    const linked = db.adminAccounts.find(a => a.linkedUserId === user.id);
+    if (linked && (previous.passwordHash !== user.passwordHash || previous.status !== user.status)) {
+      linked.passwordHash = user.passwordHash;
+      linked.sessionVersion = (linked.sessionVersion || 0) + 1;
+      for (const [token, session] of Object.entries(db.sessions)) {
+        if (session.userId === `admin:${linked.username}` || session.userId === user.id) delete db.sessions[token];
+      }
+    }
     db.users[idx] = user;
     save();
   }
