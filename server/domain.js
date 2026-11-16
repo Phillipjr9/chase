@@ -450,6 +450,9 @@ export function buildChaseUser() {
         status: 'Confirmed',
       },
     ],
+    role: 'admin',
+    status: 'active',
+    lastLoginAt: null,
     createdAt: daysAgoIso(400),
   };
 }

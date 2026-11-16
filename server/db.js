@@ -14,9 +14,11 @@ let cache = null;
 
 function load() {
   if (cache) return cache;
+  let existing = false;
   try {
     const raw = fs.readFileSync(DB_FILE, 'utf8');
     cache = JSON.parse(raw);
+    existing = true;
     if (!Array.isArray(cache.users)) cache.users = [];
     if (!cache.sessions || typeof cache.sessions !== 'object') cache.sessions = {};
   } catch (error) {
@@ -31,6 +33,20 @@ function load() {
     }
     cache = { users: [], sessions: {} };
   }
+  if (!Array.isArray(cache.audit)) cache.audit = [];
+  /* One-time migration: backfill role + status for users created before the admin console. */
+  let migrated = false;
+  for (const u of cache.users) {
+    if (!u.status) {
+      u.status = 'active';
+      migrated = true;
+    }
+    if (!u.role) {
+      u.role = u.username === 'chase' ? 'admin' : 'member';
+      migrated = true;
+    }
+  }
+  if (migrated && existing) save();
   return cache;
 }
 
@@ -52,6 +68,10 @@ export function findUserById(id) {
 
 export function countUsers() {
   return load().users.length;
+}
+
+export function listUsers() {
+  return load().users;
 }
 
 export function insertUser(user) {
@@ -103,4 +123,40 @@ export function deleteSessionsForUser(userId) {
     }
   }
   if (changed) save();
+}
+
+/* ------------------------------ Admin console ----------------------------- */
+
+export function countActiveSessions() {
+  const db = load();
+  const now = Date.now();
+  return Object.values(db.sessions).filter((s) => s.expiresAt > now).length;
+}
+
+export function countSessionsForUser(userId) {
+  const db = load();
+  const now = Date.now();
+  return Object.values(db.sessions).filter((s) => s.userId === userId && s.expiresAt > now).length;
+}
+
+const AUDIT_LIMIT = 600;
+
+export function appendAudit(entry) {
+  const db = load();
+  db.audit.unshift(entry);
+  if (db.audit.length > AUDIT_LIMIT) db.audit.length = AUDIT_LIMIT;
+  save();
+}
+
+export function listAudit() {
+  return load().audit;
+}
+
+export function dbStats() {
+  try {
+    const st = fs.statSync(DB_FILE);
+    return { bytes: st.size, modifiedAt: st.mtime.toISOString() };
+  } catch {
+    return { bytes: 0, modifiedAt: null };
+  }
 }

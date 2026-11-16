@@ -25,7 +25,9 @@ node server/index.js  # start API + static server (PORT env, default 3000)
 ```
 
 **Sample Chase credentials:** username `chase` · password `chase123`
-(or enroll a brand-new account through the sign-up wizard).
+(or enroll a brand-new account through the sign-up wizard). That sample user
+is also the seeded **administrator** — the Admin Console opens from the
+banking dashboard's profile menu. See [Admin Console](#admin-console).
 
 The frontend also works **standalone** (static preview only): if the API is
 unreachable, the app automatically falls back to browser-local storage with
@@ -103,9 +105,53 @@ All endpoints are JSON. Authenticated routes require
 | POST | `/api/cards/replace` | ✓ | Order a replacement and lock the old card |
 | POST | `/api/cards/dispute` | ✓ | Dispute a posted card purchase |
 | POST | `/api/credit/simulate` | ✓ | Estimate a score range for a scenario |
+| GET | `/api/admin/overview` | ⛨ | Bank-wide KPIs, sparklines, cashflow, account mix, activity |
+| GET | `/api/admin/customers` | ⛨ | Searchable/sortable/paged customer table with balances & risk counts |
+| GET | `/api/admin/customers/detail?id=` | ⛨ | Full customer profile: accounts, recent transactions, disputes, sessions |
+| POST | `/api/admin/customers/status` | ⛨ | Freeze or reactivate a customer (frozen users lose API access instantly) |
+| POST | `/api/admin/customers/role` | ⛨ | Promote/demote admin role (last-admin and self-demotion guards) |
+| POST | `/api/admin/customers/adjust` | ⛨ | Post a balance adjustment with a required reason (audited) |
+| POST | `/api/admin/customers/sign-out` | ⛨ | Revoke every active session for a customer |
+| GET | `/api/admin/transactions` | ⛨ | Cross-customer ledger with search, filters, sorting, paging |
+| POST | `/api/admin/transactions/flag` | ⛨ | Flag/clear a transaction for fraud review with a note |
+| GET | `/api/admin/disputes` | ⛨ | All cardholder disputes with status counts |
+| POST | `/api/admin/disputes/resolve` | ⛨ | Resolve (refund) or deny a dispute with a note — refunds post instantly |
+| GET | `/api/admin/audit` | ⛨ | Immutable audit trail (auth, mutations, admin actions) |
+| GET | `/api/admin/system` | ⛨ | Runtime health: uptime, memory, DB size, session & endpoint counters |
 
 Every mutation validates ownership, amounts, and sufficient funds
 server-side and returns the updated user object.
+
+⛨ = requires a session whose user has `role: 'admin'` (403 otherwise).
+The sample user `chase` / `chase123` is the seeded administrator.
+
+---
+
+## Admin Console
+
+A full operations & risk back-office for the bank, styled after professional
+admin templates (TailAdmin, shadcn-admin, AdminLTE): a fixed dark sidebar with
+sectioned navigation and live badges, a sticky topbar with breadcrumb, ⌘K
+global search across customers and transactions, a notifications bell driven
+by real risk counts, dark/light theming, and a collapsible layout that stays
+usable on mobile.
+
+Sign in as `chase` / `chase123` and open **Admin Console** from the banking
+dashboard's profile menu (or the shield button in the header).
+
+| Page | What it does |
+| --- | --- |
+| **Overview** | KPI cards (customers, deposits, 30-day volume, open risk) with sparklines and period deltas; 12-week cashflow area chart; monthly inflow target gauge; 14-day volume bars; account-mix donut; top customers; bank-wide activity feed |
+| **Customers** | Data table with debounced search, role/status filters, column sorting, pagination, CSV export, and a detail drawer (accounts, balances, recent ledger, disputes, active sessions) plus freeze/reactivate, role changes, session revocation, and audited balance adjustments behind confirm modals |
+| **Transactions** | Cross-customer ledger monitor: search, account-type/status/flag filters, date range, sorting, paging, CSV export, and flag/clear-for-review actions with notes |
+| **Disputes** | Cardholder dispute queue with status tabs and counts, evidence detail, and resolve-with-refund or deny workflows — resolutions post the credit instantly and are audited |
+| **Audit Log** | Immutable, filterable trail of every auth event, money movement, and admin action with actor, target, timestamp, and CSV export |
+| **System Status** | Live runtime health: uptime, Node/platform, memory/heap, DB size and last write, user/session/admin counters, and the API surface inventory |
+
+All charts are dependency-free SVG (area, bar, donut, radial gauge,
+sparklines) with hover tooltips. Every sensitive admin action is written to
+the audit log server-side. When the API is unreachable the console falls back
+to the same browser-local mode as the banking app, so it never dead-ends.
 
 ---
 
@@ -160,6 +206,9 @@ server-side and returns the updated user object.
   actions, utility bar and sign-out, with an Español/English switch
 - Global dashboard search across accounts, transactions, payees, settings
   sections, Chase Offers, credit tools and shortcuts
+- Admin Console (role-gated): analytics overview with SVG charts, customer
+  management drawer, fraud-flag ledger, dispute resolution, audit trail, and
+  live system health — see the [Admin Console](#admin-console) section
 - Committed end-to-end test (`tests/e2e.mjs`) covering sign in → transfer →
   card payment → persistence, asserting balances through the API
 - Session persistence across refreshes; sign-out invalidates the token
@@ -173,7 +222,8 @@ server-side and returns the updated user object.
 ├── start.sh                    # Build + launch the fullstack server
 ├── server/
 │   ├── index.js                # HTTP server: REST API + static hosting
-│   ├── db.js                   # JSON database (users + sessions)
+│   ├── admin.js                # Admin Console API (/api/admin/*, role-gated)
+│   ├── db.js                   # JSON database (users, sessions, audit log)
 │   └── domain.js               # Products, account factory, sample data
 ├── src/
 │   ├── banking/store.ts        # API client (+ local fallback mode)
@@ -185,6 +235,16 @@ server-side and returns the updated user object.
 │   │   ├── EditorialSections.tsx
 │   │   ├── SignUpWizard.tsx    # Enrollment flow
 │   │   ├── BankingDashboard.tsx# Online Banking
+│   │   ├── AdminConsole.tsx    # Admin shell: sidebar, topbar, ⌘K search
+│   │   ├── admin/              # Console pages + SVG charts + UI kit
+│   │   │   ├── OverviewPage.tsx
+│   │   │   ├── CustomersPage.tsx
+│   │   │   ├── TransactionsPage.tsx
+│   │   │   ├── DisputesPage.tsx
+│   │   │   ├── AuditPage.tsx
+│   │   │   ├── SystemPage.tsx
+│   │   │   ├── charts.tsx      # Area/bar/donut/gauge/sparkline (no deps)
+│   │   │   └── ui.tsx          # Cards, tables, drawer, modal, toasts, CSV
 │   │   ├── Modals.tsx          # Offers, mortgage, scheduler, auto loan
 │   │   ├── Footer.tsx
 │   │   └── ChaseLogo.tsx       # Octagon logo + card artwork (SVG)

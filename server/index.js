@@ -56,7 +56,9 @@ import {
   deleteSession,
   deleteSessionsForUser,
   countUsers,
+  appendAudit,
 } from './db.js';
+import { handleAdmin } from './admin.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
@@ -135,7 +137,10 @@ function getAuthUser(req) {
   if (!token) return null;
   const session = getSession(token);
   if (!session) return null;
-  return findUserById(session.userId);
+  const user = findUserById(session.userId);
+  // Frozen accounts lose API access immediately, even with a still-valid token.
+  if (user && user.status === 'frozen') return null;
+  return user;
 }
 
 function newToken() {
@@ -316,11 +321,23 @@ async function handleApi(req, res, url) {
       disputes: [],
       travelNotices: [],
       travelBookings: [],
+      role: 'member',
+      status: 'active',
+      lastLoginAt: new Date().toISOString(),
       createdAt: new Date().toISOString(),
     };
     insertUser(user);
     const token = newToken();
     createSession(token, user.id);
+    appendAudit({
+      id: uid(),
+      at: user.createdAt,
+      actorId: user.id,
+      actorName: user.fullName,
+      action: 'user.registered',
+      target: user.username,
+      detail: `Enrolled with ${product.name}`,
+    });
     return sendJson(res, 201, { user: publicUser(user), token });
   }
 
@@ -339,7 +356,34 @@ async function handleApi(req, res, url) {
         { error: 'The username or password you entered is incorrect. Please try again.' }
       );
     }
+    if (user.status === 'frozen') {
+      appendAudit({
+        id: uid(),
+        at: new Date().toISOString(),
+        actorId: user.id,
+        actorName: user.fullName,
+        action: 'auth.login.blocked',
+        target: user.username,
+        detail: 'Sign-in attempted on a frozen account',
+      });
+      return sendJson(
+        res,
+        403,
+        { error: 'This account has been frozen by an administrator. Please contact support.' }
+      );
+    }
     clearFailures(req, bucket);
+    user.lastLoginAt = new Date().toISOString();
+    updateUser(user);
+    appendAudit({
+      id: uid(),
+      at: user.lastLoginAt,
+      actorId: user.id,
+      actorName: user.fullName,
+      action: 'auth.login',
+      target: user.username,
+      detail: `Signed in from ${clientKey(req)}`,
+    });
     const token = newToken();
     createSession(token, user.id);
     return sendJson(res, 200, { user: publicUser(user), token });
@@ -377,6 +421,14 @@ async function handleApi(req, res, url) {
   /* ------------------------- Authenticated routes ------------------------- */
   const user = getAuthUser(req);
   if (!user) return sendJson(res, 401, { error: 'Not signed in' });
+
+  /* ------------------------ Admin console routes ------------------------- */
+  if (pathname.startsWith('/api/admin')) {
+    if (user.role !== 'admin') {
+      return sendJson(res, 403, { error: 'Administrator access required' });
+    }
+    return handleAdmin(req, res, url, user);
+  }
 
   if (pathname === '/api/auth/me' && method === 'GET') {
     return sendJson(res, 200, { user: publicUser(user) });

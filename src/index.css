@@ -1,5 +1,36 @@
 @import "tailwindcss";
 
+/* Class-based dark mode for the Admin Console (Tailwind v4 custom variant) */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Semantic palette for the admin console (TailAdmin-style tokens) */
+@theme {
+  --color-success-50: #ecfdf3;
+  --color-success-100: #d1fadf;
+  --color-success-200: #a6f4c5;
+  --color-success-300: #6ce9a6;
+  --color-success-400: #32d583;
+  --color-success-500: #12b76a;
+  --color-success-600: #039855;
+  --color-success-700: #027a48;
+  --color-error-50: #fef3f2;
+  --color-error-100: #fee4e2;
+  --color-error-200: #fecaca;
+  --color-error-300: #fda29b;
+  --color-error-400: #f97066;
+  --color-error-500: #f04438;
+  --color-error-600: #d92d20;
+  --color-error-700: #b42318;
+  --color-warning-50: #fffaeb;
+  --color-warning-100: #fef0c7;
+  --color-warning-200: #fedf89;
+  --color-warning-300: #fec84b;
+  --color-warning-400: #fdb022;
+  --color-warning-500: #f79009;
+  --color-warning-600: #dc6803;
+  --color-warning-700: #b54708;
+}
+
 @layer base {
   :root {
     --chase-blue: #005EB8;
@@ -131,4 +162,36 @@ input[type='range'].chase-slider::-moz-range-thumb {
     animation: none;
     background: transparent;
   }
+}
+
+/* ---------------------------- Admin console ---------------------------- */
+@keyframes admin-fade-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+.admin-fade-up { animation: admin-fade-up 0.3s ease both; }
+
+@keyframes admin-slide-in {
+  from { transform: translateX(100%); }
+  to { transform: none; }
+}
+.admin-slide-in { animation: admin-slide-in 0.28s cubic-bezier(0.32, 0.72, 0.28, 1) both; }
+
+@keyframes admin-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.admin-fade { animation: admin-fade 0.2s ease both; }
+
+.admin-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
+.admin-scroll::-webkit-scrollbar-thumb {
+  background: rgba(120, 130, 150, 0.4);
+  border-radius: 99px;
+}
+.admin-scroll::-webkit-scrollbar-track { background: transparent; }
+
+@media (prefers-reduced-motion: reduce) {
+  .admin-fade-up,
+  .admin-slide-in,
+  .admin-fade { animation: none; }
 }

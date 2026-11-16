@@ -75,6 +75,7 @@ interface Props {
   onSignOut: () => void;
   onBackHome: () => void;
   onOpenAccount: (product?: ProductId) => void;
+  onOpenAdmin?: () => void;
   initialView?: DashboardView;
   spanishMode?: boolean;
   onToggleSpanish?: () => void;
@@ -188,6 +189,7 @@ export const BankingDashboard: React.FC<Props> = ({
   onSignOut,
   onBackHome,
   onOpenAccount,
+  onOpenAdmin,
   initialView = 'accounts',
   spanishMode = false,
   onToggleSpanish,
@@ -672,6 +674,17 @@ export const BankingDashboard: React.FC<Props> = ({
               <span className="hidden md:inline text-[12.5px] text-white/80">
                 {t('Welcome', 'Bienvenido')}, {firstName}
               </span>
+              {user.role === 'admin' && onOpenAdmin && (
+                <button
+                  type="button"
+                  onClick={onOpenAdmin}
+                  title="Open the Admin Console"
+                  className="inline-flex items-center gap-1.5 border border-white/45 hover:bg-white/10 text-white text-[12.5px] font-semibold px-2.5 sm:px-3.5 py-1.5 rounded-[4px] cursor-pointer"
+                >
+                  <ShieldCheck className="w-[15px] h-[15px]" />
+                  <span className="hidden sm:inline">{t('Admin', 'Admin')}</span>
+                </button>
+              )}
               <button
                 type="button"
                 onClick={onSignOut}

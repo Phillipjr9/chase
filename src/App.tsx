@@ -13,6 +13,7 @@ import {
 } from './components/Modals';
 import { SignUpWizard } from './components/SignUpWizard';
 import { BankingDashboard } from './components/BankingDashboard';
+import { AdminConsole } from './components/AdminConsole';
 import ProductsPage from './components/ProductsPage';
 import { ChasePageLoader } from './components/Loading';
 import type { DashboardView } from './components/BankingDashboard';
@@ -28,7 +29,7 @@ import {
   seedSampleUserIfNeeded,
 } from './banking/store';
 
-type View = 'home' | 'wizard' | 'dashboard' | 'products';
+type View = 'home' | 'wizard' | 'dashboard' | 'products' | 'admin';
 
 export function App() {
   const [view, setView] = useState<View>('home');
@@ -227,9 +228,21 @@ export function App() {
         onSignOut={handleSignOut}
         onBackHome={goHome}
         onOpenAccount={(product?: ProductId) => openWizard(product ?? null)}
+        onOpenAdmin={() => setView('admin')}
         initialView={dashboardStart}
         spanishMode={spanishMode}
         onToggleSpanish={() => setSpanishMode((v) => !v)}
+      />
+    );
+  }
+
+  /* --------------------------- Admin console view --------------------------- */
+  if (view === 'admin' && currentUser) {
+    return (
+      <AdminConsole
+        user={currentUser}
+        onExitToBanking={() => setView('dashboard')}
+        onSignOut={handleSignOut}
       />
     );
   }
