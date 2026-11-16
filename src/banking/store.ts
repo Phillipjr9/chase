@@ -219,6 +219,38 @@ export interface TravelBooking {
   status: string;
 }
 
+export type SecureMessageCategory = 'general' | 'wire' | 'dispute' | 'security' | 'account';
+
+export interface SecureMessage {
+  id: string;
+  subject: string;
+  category: SecureMessageCategory;
+  sender: 'customer' | 'advisor';
+  senderName: string;
+  body: string;
+  createdAt: string;
+  readByCustomer: boolean;
+  readByAdmin: boolean;
+}
+
+export interface AccountNotice {
+  id: string;
+  tone: 'info' | 'warning' | 'urgent' | 'success';
+  title: string;
+  message: string;
+  dismissible: boolean;
+  createdAt: string;
+}
+
+export interface CustomChaseOffer {
+  id: string;
+  merchant: string;
+  cashback: string;
+  detail: string;
+  expires: string;
+  activated?: boolean;
+}
+
 export interface User {
   id: string;
   username: string;
@@ -239,6 +271,9 @@ export interface User {
   disputes?: CardDispute[];
   home?: HomeProperty | null;
   budgets?: Record<string, number>;
+  messages?: SecureMessage[];
+  accountNotice?: AccountNotice | null;
+  customOffers?: CustomChaseOffer[];
   status?: 'active' | 'suspended';
   adminCreated?: boolean;
   createdAt: string;
@@ -1998,4 +2033,75 @@ export async function changePasswordApi(
   const updated: User = JSON.parse(JSON.stringify(user));
   updated.password = newPassword;
   persistUser(updated);
+}
+
+export async function sendSecureMessage(
+  subject: string,
+  category: SecureMessageCategory,
+  body: string
+): Promise<User> {
+  if (await detectApi()) {
+    const data = await apiFetch('/api/messages', {
+      method: 'POST',
+      body: JSON.stringify({ subject, category, body }),
+    });
+    return hydrateDefaults(data.user as User);
+  }
+  const updated: User = JSON.parse(JSON.stringify(requireLocalUser()));
+  if (!Array.isArray(updated.messages)) updated.messages = [];
+  updated.messages.unshift({
+    id: `msg-${Date.now()}`,
+    subject,
+    category,
+    sender: 'customer',
+    senderName: updated.fullName,
+    body,
+    createdAt: new Date().toISOString(),
+    readByCustomer: true,
+    readByAdmin: false,
+  });
+  persistUser(updated);
+  return updated;
+}
+
+export async function markSecureMessagesRead(): Promise<User> {
+  if (await detectApi()) {
+    const data = await apiFetch('/api/messages/read', { method: 'POST' });
+    return hydrateDefaults(data.user as User);
+  }
+  const updated: User = JSON.parse(JSON.stringify(requireLocalUser()));
+  if (Array.isArray(updated.messages)) {
+    updated.messages = updated.messages.map((m) => ({ ...m, readByCustomer: true }));
+    persistUser(updated);
+  }
+  return updated;
+}
+
+export async function dismissAccountNotice(): Promise<User> {
+  if (await detectApi()) {
+    const data = await apiFetch('/api/notice/dismiss', { method: 'POST' });
+    return hydrateDefaults(data.user as User);
+  }
+  const updated: User = JSON.parse(JSON.stringify(requireLocalUser()));
+  updated.accountNotice = null;
+  persistUser(updated);
+  return updated;
+}
+
+export async function toggleCustomOffer(offerId: string): Promise<User> {
+  if (await detectApi()) {
+    const data = await apiFetch('/api/offers/toggle', {
+      method: 'POST',
+      body: JSON.stringify({ offerId }),
+    });
+    return hydrateDefaults(data.user as User);
+  }
+  const updated: User = JSON.parse(JSON.stringify(requireLocalUser()));
+  if (Array.isArray(updated.customOffers)) {
+    updated.customOffers = updated.customOffers.map((o) =>
+      o.id === offerId ? { ...o, activated: !o.activated } : o
+    );
+    persistUser(updated);
+  }
+  return updated;
 }

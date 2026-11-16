@@ -11,6 +11,7 @@ import {
   Lock,
   Pencil,
   Plus,
+  Printer,
   RefreshCw,
   Search,
   Trash2,
@@ -18,6 +19,7 @@ import {
   WalletCards,
 } from 'lucide-react';
 import type { AccountType, User } from '../../banking/store';
+import { StatementModal } from '../StatementModal';
 import {
   ChaseCardImage,
   ChaseIcon,
@@ -223,6 +225,11 @@ export const AccountsTab: React.FC<AccountsProps> = ({
     }
   };
 
+  const [statementModal, setStatementModal] = useState<{
+    accountId?: string;
+    tab?: 'statement' | 'tax-1099' | 'tax-1098';
+  } | null>(null);
+
   return (
     <div className="space-y-5">
       {/* Customer selector + Create Account */}
@@ -231,6 +238,26 @@ export const AccountsTab: React.FC<AccountsProps> = ({
           <CardHeader
             title="Active Customer Portfolio"
             subtitle="Choose whose simulated accounts to inspect or reconcile"
+            action={
+              selectedUser ? (
+                <div className="flex items-center gap-1">
+                  <Btn
+                    variant="secondary"
+                    size="xs"
+                    onClick={() => setStatementModal({ tab: 'tax-1099' })}
+                  >
+                    1099-INT
+                  </Btn>
+                  <Btn
+                    variant="secondary"
+                    size="xs"
+                    onClick={() => setStatementModal({ tab: 'tax-1098' })}
+                  >
+                    1098
+                  </Btn>
+                </div>
+              ) : undefined
+            }
           />
           <div className="mt-3">
             <SelectInput
@@ -554,6 +581,13 @@ export const AccountsTab: React.FC<AccountsProps> = ({
                       )}
                     </>
                   )}
+                  <Btn
+                    variant="ghost"
+                    size="xs"
+                    onClick={() => setStatementModal({ accountId: account.id, tab: 'statement' })}
+                  >
+                    <Printer className="w-3.5 h-3.5" /> Printable Statement
+                  </Btn>
                   <Btn variant="ghost" size="xs" onClick={exportStatement}>
                     <Download className="w-3.5 h-3.5" /> Statement CSV
                   </Btn>
@@ -964,6 +998,14 @@ export const AccountsTab: React.FC<AccountsProps> = ({
           Delete this simulated account and all of its attached ledger entries?
         </p>
       </Modal>
+      {statementModal && selectedUser && (
+        <StatementModal
+          user={selectedUser}
+          initialAccountId={statementModal.accountId}
+          initialTab={statementModal.tab}
+          onClose={() => setStatementModal(null)}
+        />
+      )}
     </div>
   );
 };

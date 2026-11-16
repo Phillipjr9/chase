@@ -48,6 +48,10 @@ import {
   updateCardControls,
   defaultBudgets,
   saveBudgets,
+  sendSecureMessage,
+  markSecureMessagesRead,
+  toggleCustomOffer,
+  SecureMessageCategory,
 } from '../banking/store';
 
 /* Real Chase tokens */
@@ -1298,11 +1302,24 @@ export const InkView: React.FC<{ onApplyProduct: (productId: ProductId) => void 
   </div>
 );
 
-/* ================================ 9. CHASE OFFERS (100% REAL LOGOS) ================================ */
-export const OffersView: React.FC = () => {
+/* ================================ 9. CHASE OFFERS (100% REAL LOGOS + TARGETED ADMIN OFFERS) ================================ */
+export const OffersView: React.FC<{ user?: User; onUpdateUser?: (user: User) => void }> = ({ user, onUpdateUser }) => {
   const [added, setAdded] = useState<string[]>([]);
   const toggle = (id: string) =>
     setAdded((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+
+  const customOffers = user?.customOffers || [];
+  const totalAdded = added.length + customOffers.filter((c) => c.activated).length;
+  const totalCount = OFFERS.length + customOffers.length;
+
+  const handleToggleCustom = async (offerId: string) => {
+    try {
+      const next = await toggleCustomOffer(offerId);
+      if (onUpdateUser) onUpdateUser(next);
+    } catch {
+      /* ignore */
+    }
+  };
 
   return (
     <div className="max-w-[1240px] mx-auto px-4 sm:px-8 py-6">
@@ -1314,12 +1331,43 @@ export const OffersView: React.FC = () => {
           </p>
         </div>
         <span className="inline-flex items-center gap-2 text-[12.5px] font-semibold" style={{ color: MUT }}>
-          <span className="px-2.5 py-0.5 rounded-full bg-[#1A4488] text-white">{added.length}</span>
-          of {OFFERS.length} added
+          <span className="px-2.5 py-0.5 rounded-full bg-[#1A4488] text-white">{totalAdded}</span>
+          of {totalCount} added
         </span>
       </div>
 
       <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        {customOffers.map((co) => {
+          const isAdded = Boolean(co.activated);
+          return (
+            <Panel key={co.id} className="overflow-hidden flex flex-col ring-1 ring-[#117ACA]/30">
+              <div className="flex items-center justify-between gap-2 px-4 py-3 border-b bg-[#F0F7FD]" style={{ borderColor: LINE }}>
+                <div className="min-w-0">
+                  <span className="inline-block text-[10px] font-bold uppercase tracking-wider text-[#0B5FA5]">
+                    Targeted for you
+                  </span>
+                  <p className="text-[14px] font-semibold truncate" style={{ color: INK }}>{co.merchant}</p>
+                </div>
+                <span className="text-[11px] shrink-0" style={{ color: FAINT }}>Exp {co.expires}</span>
+              </div>
+              <div className="p-4 flex-1 flex flex-col">
+                <p className="text-[18px] font-semibold leading-tight" style={{ color: INK }}>{co.cashback}</p>
+                <p className="mt-1.5 text-[11.5px] leading-relaxed flex-1" style={{ color: MUT }}>{co.detail}</p>
+                <button
+                  type="button"
+                  onClick={() => handleToggleCustom(co.id)}
+                  className={`mt-4 inline-flex items-center justify-center gap-1.5 border text-[13px] font-semibold py-2 rounded-[4px] cursor-pointer ${
+                    isAdded ? 'text-white' : 'bg-white hover:bg-[#F2F6FB]'
+                  }`}
+                  style={isAdded ? { backgroundColor: BLUE, borderColor: BLUE } : { borderColor: BLUE, color: BLUE }}
+                >
+                  {isAdded ? <CheckCircle2 className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
+                  {isAdded ? 'Added to card' : 'Add to card'}
+                </button>
+              </div>
+            </Panel>
+          );
+        })}
         {OFFERS.map((o: ChaseOffer) => {
           const isAdded = added.includes(o.id);
           return (
@@ -1349,6 +1397,197 @@ export const OffersView: React.FC = () => {
             </Panel>
           );
         })}
+      </div>
+    </div>
+  );
+};
+
+/* ================================ 10. SECURE MESSAGE CENTER ================================ */
+export const SecureMessagesView: React.FC<{ user: User; onUpdateUser: (user: User) => void }> = ({
+  user,
+  onUpdateUser,
+}) => {
+  const [subject, setSubject] = useState('');
+  const [category, setCategory] = useState<SecureMessageCategory>('general');
+  const [body, setBody] = useState('');
+  const [sending, setSending] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const messages = user.messages || [];
+
+  useEffect(() => {
+    if (messages.some((m) => m.sender === 'advisor' && !m.readByCustomer)) {
+      markSecureMessagesRead()
+        .then((u) => onUpdateUser(u))
+        .catch(() => undefined);
+    }
+  }, [messages.length]);
+
+  const submitMessage = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!body.trim()) return;
+    setSending(true);
+    setNotice(null);
+    try {
+      const updated = await sendSecureMessage(
+        subject.trim() || 'Client Operations Inquiry',
+        category,
+        body.trim()
+      );
+      onUpdateUser(updated);
+      setSubject('');
+      setBody('');
+      setNotice('Your secure message was delivered to the Chase Client Operations Desk.');
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : 'Unable to send secure message.');
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <div className="max-w-[1240px] mx-auto px-4 sm:px-8 py-6">
+      <div className="flex flex-wrap items-end justify-between gap-3 mb-6">
+        <div>
+          <H1>Secure Message Center</H1>
+          <p className="mt-1 text-[13px]" style={{ color: MUT }}>
+            Encrypted correspondence with Chase Client Services, Wire Operations, and Card Dispute Specialists.
+          </p>
+        </div>
+        <span className="inline-flex items-center gap-1.5 text-[12px] font-semibold px-3 py-1 rounded-full bg-[#EAF3FB] text-[#0B5FA5]">
+          <ShieldCheck className="w-4 h-4" /> 256-bit TLS · Authenticated Session
+        </span>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        <div className="lg:col-span-5">
+          <Panel className="p-5">
+            <h2 className="text-[16px] font-bold" style={{ color: INK }}>
+              Send a new inquiry
+            </h2>
+            <p className="mt-1 text-[12px]" style={{ color: MUT }}>
+              Messages appear immediately in the Chase Admin Console for advisor response.
+            </p>
+            <form onSubmit={submitMessage} className="mt-4 space-y-3.5">
+              <div>
+                <label className="block text-[12px] font-semibold mb-1" style={{ color: INK }}>
+                  Topic
+                </label>
+                <select
+                  value={category}
+                  onChange={(e) => setCategory(e.target.value as SecureMessageCategory)}
+                  className="w-full rounded-[4px] border px-3 py-2 text-[13px] bg-white"
+                  style={{ borderColor: LINE, color: INK }}
+                >
+                  <option value="general">General account inquiry</option>
+                  <option value="wire">Wire transfer & limits</option>
+                  <option value="dispute">Card billing dispute</option>
+                  <option value="security">Security & fraud protection</option>
+                  <option value="account">Statements & tax documents</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-[12px] font-semibold mb-1" style={{ color: INK }}>
+                  Subject
+                </label>
+                <input
+                  value={subject}
+                  onChange={(e) => setSubject(e.target.value)}
+                  placeholder="e.g., Domestic wire limit increase request"
+                  className="w-full rounded-[4px] border px-3 py-2 text-[13px]"
+                  style={{ borderColor: LINE, color: INK }}
+                />
+              </div>
+              <div>
+                <label className="block text-[12px] font-semibold mb-1" style={{ color: INK }}>
+                  Message
+                </label>
+                <textarea
+                  rows={4}
+                  required
+                  value={body}
+                  onChange={(e) => setBody(e.target.value)}
+                  placeholder="Write your message for a Chase specialist..."
+                  className="w-full rounded-[4px] border px-3 py-2 text-[13px]"
+                  style={{ borderColor: LINE, color: INK }}
+                />
+              </div>
+              {notice && (
+                <div className="rounded-[4px] bg-[#EAF7EE] border border-[#B5DFC4] px-3 py-2 text-[12px] text-[#138842]">
+                  {notice}
+                </div>
+              )}
+              <button
+                type="submit"
+                disabled={sending}
+                className="inline-flex items-center justify-center rounded-[4px] px-4 py-2.5 text-[13px] font-semibold text-white cursor-pointer disabled:opacity-50"
+                style={{ backgroundColor: BLUE }}
+              >
+                {sending ? 'Sending...' : 'Send secure message'}
+              </button>
+            </form>
+          </Panel>
+        </div>
+
+        <div className="lg:col-span-7">
+          <Panel className="p-5">
+            <div className="flex items-center justify-between pb-3 border-b" style={{ borderColor: LINE }}>
+              <h2 className="text-[16px] font-bold" style={{ color: INK }}>
+                Inbox & Advisor Correspondence ({messages.length})
+              </h2>
+            </div>
+            {messages.length === 0 ? (
+              <div className="py-12 text-center">
+                <p className="text-[14px] font-semibold" style={{ color: INK }}>
+                  No secure messages yet
+                </p>
+                <p className="mt-1 text-[12.5px]" style={{ color: MUT }}>
+                  Official notices from your Chase Private Client or Operations specialist will appear here.
+                </p>
+              </div>
+            ) : (
+              <div className="mt-4 space-y-3">
+                {messages.map((m) => {
+                  const isAdvisor = m.sender === 'advisor';
+                  return (
+                    <div
+                      key={m.id}
+                      className={`rounded-[6px] border p-4 ${
+                        isAdvisor ? 'bg-[#F5F9FE] border-[#117ACA]/35' : 'bg-white border-slate-200'
+                      }`}
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={`text-[10.5px] font-bold uppercase tracking-wider px-2 py-0.5 rounded ${
+                              isAdvisor
+                                ? 'bg-[#117ACA] text-white'
+                                : 'bg-slate-200 text-slate-700'
+                            }`}
+                          >
+                            {isAdvisor ? 'Chase Specialist' : 'You'}
+                          </span>
+                          <span className="text-[13px] font-bold" style={{ color: INK }}>
+                            {m.subject}
+                          </span>
+                        </div>
+                        <span className="text-[11px]" style={{ color: FAINT }}>
+                          {new Date(m.createdAt).toLocaleString()}
+                        </span>
+                      </div>
+                      <p className="mt-2 text-[13px] whitespace-pre-line leading-relaxed" style={{ color: INK }}>
+                        {m.body}
+                      </p>
+                      <p className="mt-2 text-[11px]" style={{ color: MUT }}>
+                        From: {m.senderName} · Topic: <span className="capitalize">{m.category}</span>
+                      </p>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </Panel>
+        </div>
       </div>
     </div>
   );

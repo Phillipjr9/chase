@@ -10,6 +10,7 @@ export type AdminTab =
   | 'transactions'
   | 'operations'
   | 'wealth'
+  | 'messages'
   | 'audit'
   | 'settings';
 
@@ -100,7 +101,9 @@ export interface OverviewAnalytics {
   monthlyOutflow: number;
   monthlyTarget: number;
   disputes: GlobalDispute[];
+  unreadMessagesCount?: number;
   system: {
+    storageBackend?: string;
     nodeVersion: string;
     platform: string;
     uptimeSeconds: number;

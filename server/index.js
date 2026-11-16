@@ -72,6 +72,9 @@ import {
   deleteAdminAccount,
   countUsers,
   getDbStats,
+  ensureDbReady,
+  flushRemoteSave,
+  isSupabaseEnabled,
 } from './db.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -131,6 +134,13 @@ function publicUser(user) {
 }
 
 function readBody(req, maxBytes = 1_000_000) {
+  // Vercel may consume and parse the request stream before invoking the handler.
+  if (req.body !== undefined) {
+    const raw = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
+    if (Buffer.byteLength(raw) > maxBytes) return Promise.reject(new Error('Request body too large'));
+    try { return Promise.resolve(typeof req.body === 'string' ? JSON.parse(req.body) : req.body || {}); }
+    catch { return Promise.reject(new Error('Invalid JSON body')); }
+  }
   return new Promise((resolve, reject) => {
     let size = 0;
     const chunks = [];
@@ -324,6 +334,14 @@ function cleanText(value, max = 120) {
 }
 
 async function handleApi(req, res, url) {
+  await ensureDbReady();
+  if (countUsers() === 0) {
+    const seeded = buildChaseUser();
+    seeded.passwordHash = hashPassword('chase123');
+    seeded.username = 'chase';
+    seeded.status = 'active';
+    insertUser(seeded);
+  }
   const method = req.method;
   const pathname = url.pathname;
 
@@ -332,7 +350,8 @@ async function handleApi(req, res, url) {
       status: 'ok',
       uptime: Math.round(process.uptime()),
       users: countUsers(),
-      version: '1.0.0',
+      storage: isSupabaseEnabled() ? 'supabase-postgres' : 'local-json',
+      version: '1.1.0',
     });
   }
 
@@ -781,6 +800,10 @@ async function handleApi(req, res, url) {
           monthlyOutflow: round2(monthlyOutflow),
           monthlyTarget: 75000,
           disputes: allDisputes,
+          unreadMessagesCount: users.reduce(
+            (sum, u) => sum + ((u.messages || []).filter((m) => m.sender === 'customer' && !m.readByAdmin).length),
+            0
+          ),
           system: {
             nodeVersion: process.version,
             platform: `${os.platform()} (${os.arch()})`,
@@ -943,6 +966,281 @@ async function handleApi(req, res, url) {
       const saved = updateSimulatorSettings({ allowEnrollment: settings.allowEnrollment, allowCustomerPasswordReset: settings.allowCustomerPasswordReset });
       recordAdminAudit('Updated simulator access settings', saved);
       return sendJson(res, 200, { settings: saved });
+    }
+
+    if (pathname === '/api/admin/process-scheduled' && method === 'POST') {
+      const body = await readBody(req);
+      const targetUserId = body.userId ? String(body.userId) : null;
+      const singlePaymentId = body.paymentId ? String(body.paymentId) : null;
+      const forceAll = body.forceAll === true;
+      const asOfDate = /^\d{4}-\d{2}-\d{2}$/.test(String(body.asOfDate || ''))
+        ? String(body.asOfDate)
+        : new Date().toISOString().slice(0, 10);
+
+      const candidates = targetUserId
+        ? [findUserById(targetUserId)].filter(Boolean)
+        : findAllUsers().filter((u) => u.status !== 'suspended');
+
+      let processedCount = 0;
+      let totalAmount = 0;
+      const executed = [];
+      let updatedTargetUser = null;
+
+      for (const rawUser of candidates) {
+        const u = JSON.parse(JSON.stringify(rawUser));
+        let userChanged = false;
+        for (const p of u.scheduledPayments || []) {
+          if (p.status !== 'scheduled') continue;
+          if (singlePaymentId && p.id !== singlePaymentId) continue;
+          const dueDay = String(p.date || '').slice(0, 10);
+          if (!singlePaymentId && !forceAll && dueDay > asOfDate) continue;
+
+          const fromAcct = (u.accounts || []).find((a) => a.id === p.fromAccountId);
+          if (!fromAcct || fromAcct.locked) continue;
+          const amt = round2(Math.abs(Number(p.amount || 0)));
+          if (!Number.isFinite(amt) || amt <= 0 || Number(fromAcct.balance || 0) < amt) continue;
+          if (p.toAccountId && (!u.accounts.some((a) => a.id === p.toAccountId && a.id !== fromAcct.id))) continue;
+
+          const nowIso = new Date().toISOString();
+          fromAcct.balance = round2(Number(fromAcct.balance || 0) - amt);
+          fromAcct.transactions = [
+            {
+              id: uid(),
+              date: nowIso,
+              description: `Scheduled ${p.kind}: ${p.label}`,
+              amount: -amt,
+              category: p.kind === 'transfer' ? 'Transfer' : p.kind === 'bill' ? 'Bills' : 'Payment',
+              status: 'posted',
+            },
+            ...(fromAcct.transactions || []),
+          ];
+
+          if (p.toAccountId) {
+            const toAcct = (u.accounts || []).find((a) => a.id === p.toAccountId);
+            if (toAcct) {
+              const isDebt = ['credit-card', 'auto-loan', 'mortgage'].includes(toAcct.type);
+              toAcct.balance = round2(Number(toAcct.balance || 0) + (isDebt ? -amt : amt));
+              if (toAcct.type === 'credit-card') toAcct.statementBalance = round2(Math.max(0, toAcct.balance));
+              toAcct.transactions = [
+                {
+                  id: uid(),
+                  date: nowIso,
+                  description: isDebt ? `Payment — ${p.label}` : `Scheduled transfer from ${fromAcct.name}`,
+                  amount: isDebt ? -amt : amt,
+                  category: isDebt ? 'Payment' : 'Transfer',
+                  status: 'posted',
+                },
+                ...(toAcct.transactions || []),
+              ];
+            }
+          }
+
+          if (p.frequency === 'monthly') {
+            const nextD = new Date(p.date || nowIso);
+            const day = nextD.getUTCDate();
+            nextD.setUTCDate(1);
+            nextD.setUTCMonth(nextD.getUTCMonth() + 1);
+            const lastDay = new Date(Date.UTC(nextD.getUTCFullYear(), nextD.getUTCMonth() + 1, 0)).getUTCDate();
+            nextD.setUTCDate(Math.min(day, lastDay));
+            p.date = nextD.toISOString();
+          } else {
+            p.status = 'paid';
+          }
+          processedCount += 1;
+          totalAmount = round2(totalAmount + amt);
+          executed.push({ username: u.username, label: p.label, amount: amt, kind: p.kind });
+          userChanged = true;
+        }
+        if (userChanged) {
+          updateUser(u);
+          if (targetUserId && u.id === targetUserId) updatedTargetUser = publicUser(u);
+        } else if (targetUserId && u.id === targetUserId) {
+          updatedTargetUser = publicUser(u);
+        }
+      }
+
+      recordAdminAudit('Executed scheduled simulator payments', {
+        processedCount,
+        totalAmount,
+        asOfDate,
+        forceAll,
+        ...(targetUserId ? { userId: targetUserId } : {}),
+      });
+
+      return sendJson(res, 200, {
+        ok: true,
+        processedCount,
+        totalAmount,
+        executed,
+        ...(updatedTargetUser ? { user: updatedTargetUser } : {}),
+      });
+    }
+
+    if (pathname === '/api/admin/month-end-close' && method === 'POST') {
+      const body = await readBody(req);
+      const targetUserId = body.userId ? String(body.userId) : null;
+      const candidates = targetUserId
+        ? [findUserById(targetUserId)].filter(Boolean)
+        : findAllUsers().filter((u) => u.status !== 'suspended');
+
+      let interestCredited = 0;
+      let statementsCut = 0;
+      let accountsProcessed = 0;
+      let pointsAwarded = 0;
+      let updatedTargetUser = null;
+      const nowIso = new Date().toISOString();
+
+      for (const rawUser of candidates) {
+        const u = JSON.parse(JSON.stringify(rawUser));
+        let changed = false;
+        for (const a of u.accounts || []) {
+          const cycle = nowIso.slice(0, 7);
+          if (a.lastSimulatorCloseCycle === cycle) continue;
+          if (a.type === 'savings' || a.type === 'cd') {
+            const bal = Number(a.balance || 0);
+            if (bal > 0) {
+              const ratePct = Number(a.apr) > 0 ? Number(a.apr) : a.type === 'cd' ? 4.25 : 2.15;
+              const interest = round2(Math.max(0.01, bal * (ratePct / 100 / 12)));
+              a.balance = round2(bal + interest);
+              a.transactions = [
+                {
+                  id: uid(),
+                  date: nowIso,
+                  description: `Monthly Interest Payment (${ratePct.toFixed(2)}% APY)`,
+                  amount: interest,
+                  category: 'Income',
+                  status: 'posted',
+                },
+                ...(a.transactions || []),
+              ];
+              interestCredited = round2(interestCredited + interest);
+              a.lastSimulatorCloseCycle = cycle;
+              accountsProcessed += 1;
+              changed = true;
+            }
+          } else if (a.type === 'credit-card') {
+            a.statementBalance = round2(Math.max(0, Number(a.balance || 0)));
+            const earnedPts = Math.max(0, Math.round(Number(a.balance || 0)));
+            if (earnedPts > 0) {
+              a.rewardsPoints = Math.round(Number(a.rewardsPoints || 0) + Math.min(5000, Math.round(earnedPts * 0.2)));
+              pointsAwarded += Math.min(5000, Math.round(earnedPts * 0.2));
+            }
+            a.lastSimulatorCloseCycle = cycle;
+            statementsCut += 1;
+            accountsProcessed += 1;
+            changed = true;
+          }
+        }
+        if (changed) updateUser(u);
+        if (targetUserId && u.id === targetUserId) updatedTargetUser = publicUser(u);
+      }
+
+      recordAdminAudit('Executed month-end interest & statement close', {
+        interestCredited,
+        statementsCut,
+        pointsAwarded,
+        accountsProcessed,
+        ...(targetUserId ? { userId: targetUserId } : {}),
+      });
+
+      return sendJson(res, 200, {
+        ok: true,
+        interestCredited,
+        statementsCut,
+        pointsAwarded,
+        accountsProcessed,
+        ...(updatedTargetUser ? { user: updatedTargetUser } : {}),
+      });
+    }
+
+    if (pathname === '/api/admin/messages' && method === 'GET') {
+      const threads = findAllUsers().map((u) => {
+        const msgs = Array.isArray(u.messages) ? u.messages : [];
+        const unreadForAdmin = msgs.filter((m) => m.sender === 'customer' && !m.readByAdmin).length;
+        return {
+          userId: u.id,
+          username: u.username,
+          fullName: u.fullName,
+          email: u.email,
+          status: u.status || 'active',
+          unreadForAdmin,
+          accountNotice: u.accountNotice || null,
+          lastMessageAt: msgs[0]?.createdAt || u.createdAt,
+          messages: msgs,
+        };
+      }).sort((a, b) => {
+        if (b.unreadForAdmin !== a.unreadForAdmin) return b.unreadForAdmin - a.unreadForAdmin;
+        return String(b.lastMessageAt).localeCompare(String(a.lastMessageAt));
+      });
+      return sendJson(res, 200, { threads });
+    }
+
+    const msgAdminRoute = pathname.match(/^\/api\/admin\/users\/([^/]+)\/(messages|messages\/read|notice)$/);
+    if (msgAdminRoute) {
+      const userId = decodeURIComponent(msgAdminRoute[1]);
+      const sub = msgAdminRoute[2];
+      const target = findUserById(userId);
+      if (!target) return sendJson(res, 404, { error: 'Simulator user not found.' });
+      const updated = JSON.parse(JSON.stringify(target));
+      if (!Array.isArray(updated.messages)) updated.messages = [];
+
+      if (sub === 'messages' && method === 'POST') {
+        const body = await readBody(req);
+        const subject = cleanText(body.subject || 'Chase Client Operations Update', 120);
+        const text = cleanText(body.body, 2000);
+        const category = ['general', 'wire', 'dispute', 'security', 'account'].includes(body.category)
+          ? body.category
+          : 'general';
+        if (!text) return sendJson(res, 400, { error: 'Enter a message body.' });
+        updated.messages = updated.messages.map((m) => ({ ...m, readByAdmin: true }));
+        const msg = {
+          id: uid(),
+          subject,
+          category,
+          sender: 'advisor',
+          senderName: `${auditActor} · Chase Client Desk`,
+          body: text,
+          createdAt: new Date().toISOString(),
+          readByCustomer: false,
+          readByAdmin: true,
+        };
+        updated.messages.unshift(msg);
+        updateUser(updated);
+        recordAdminAudit('Sent secure message to customer', { userId, username: target.username, subject, category });
+        return sendJson(res, 201, { user: publicUser(updated), message: msg });
+      }
+
+      if (sub === 'messages/read' && method === 'POST') {
+        updated.messages = updated.messages.map((m) => ({ ...m, readByAdmin: true }));
+        updateUser(updated);
+        return sendJson(res, 200, { user: publicUser(updated) });
+      }
+
+      if (sub === 'notice' && method === 'PUT') {
+        const body = await readBody(req);
+        if (!body.notice) {
+          updated.accountNotice = null;
+          updateUser(updated);
+          recordAdminAudit('Cleared custom customer dashboard banner', { userId, username: target.username });
+          return sendJson(res, 200, { user: publicUser(updated) });
+        }
+        const n = body.notice;
+        const tone = ['info', 'warning', 'urgent', 'success'].includes(n.tone) ? n.tone : 'info';
+        const title = cleanText(n.title, 100);
+        const message = cleanText(n.message, 500);
+        if (!title || !message) return sendJson(res, 400, { error: 'Provide a banner title and message.' });
+        updated.accountNotice = {
+          id: uid(),
+          tone,
+          title,
+          message,
+          dismissible: n.dismissible !== false,
+          createdAt: new Date().toISOString(),
+        };
+        updateUser(updated);
+        recordAdminAudit('Published custom customer dashboard banner', { userId, username: target.username, tone, title });
+        return sendJson(res, 200, { user: publicUser(updated) });
+      }
     }
 
     if (pathname === '/api/admin/backup' && adminSession.role !== 'admin') return sendJson(res, 403, { error: 'Only admin-role accounts may export or restore backups.' });
@@ -2490,6 +2788,62 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, { user: publicUser(updated) });
   }
 
+  if (pathname === '/api/messages' && method === 'POST') {
+    const body = await readBody(req);
+    const subject = cleanText(body.subject || 'Account Inquiry', 120);
+    const text = cleanText(body.body, 2000);
+    const category = ['general', 'wire', 'dispute', 'security', 'account'].includes(body.category)
+      ? body.category
+      : 'general';
+    if (!text) return sendJson(res, 400, { error: 'Please enter a message before sending.' });
+    const updated = JSON.parse(JSON.stringify(user));
+    if (!Array.isArray(updated.messages)) updated.messages = [];
+    updated.messages.unshift({
+      id: uid(),
+      subject,
+      category,
+      sender: 'customer',
+      senderName: updated.fullName,
+      body: text,
+      createdAt: new Date().toISOString(),
+      readByCustomer: true,
+      readByAdmin: false,
+    });
+    updateUser(updated);
+    return sendJson(res, 201, { user: publicUser(updated) });
+  }
+
+  if (pathname === '/api/messages/read' && method === 'POST') {
+    const updated = JSON.parse(JSON.stringify(user));
+    if (Array.isArray(updated.messages)) {
+      updated.messages = updated.messages.map((m) => ({ ...m, readByCustomer: true }));
+      updateUser(updated);
+    }
+    return sendJson(res, 200, { user: publicUser(updated) });
+  }
+
+  if (pathname === '/api/notice/dismiss' && method === 'POST') {
+    const updated = JSON.parse(JSON.stringify(user));
+    if (updated.accountNotice && updated.accountNotice.dismissible !== false) {
+      updated.accountNotice = null;
+      updateUser(updated);
+    }
+    return sendJson(res, 200, { user: publicUser(updated) });
+  }
+
+  if (pathname === '/api/offers/toggle' && method === 'POST') {
+    const body = await readBody(req);
+    const offerId = String(body.offerId || '');
+    const updated = JSON.parse(JSON.stringify(user));
+    if (Array.isArray(updated.customOffers)) {
+      updated.customOffers = updated.customOffers.map((o) =>
+        o.id === offerId ? { ...o, activated: !o.activated } : o
+      );
+      updateUser(updated);
+    }
+    return sendJson(res, 200, { user: publicUser(updated) });
+  }
+
   return sendJson(res, 404, { error: 'Not found' });
 }
 
@@ -2520,11 +2874,39 @@ function serveStatic(req, res, url) {
   });
 }
 
+export async function handleVercelRequest(req, res) {
+  const origEnd = res.end.bind(res);
+  let bufferedArgs = null;
+  res.end = (...args) => {
+    bufferedArgs = args;
+    return res;
+  };
+  const url = new URL(req.url || '/', `https://${req.headers.host || 'localhost'}`);
+  try {
+    await handleApi(req, res, url);
+  } catch (err) {
+    console.error(err);
+    if (!res.headersSent) sendJson(res, 500, { error: 'Internal server error' });
+  }
+  await flushRemoteSave();
+  if (bufferedArgs) {
+    origEnd(...bufferedArgs);
+  }
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   try {
     if (url.pathname.startsWith('/api/')) {
+      const origEnd = res.end.bind(res);
+      let bufferedArgs = null;
+      res.end = (...args) => {
+        bufferedArgs = args;
+        return res;
+      };
       await handleApi(req, res, url);
+      await flushRemoteSave();
+      if (bufferedArgs) origEnd(...bufferedArgs);
     } else {
       serveStatic(req, res, url);
     }
@@ -2535,7 +2917,9 @@ const server = http.createServer(async (req, res) => {
 });
 
 const HOST = process.env.HOST || '0.0.0.0';
-server.listen(PORT, HOST, () => {
-  console.log(`Chase clone fullstack server running at http://${HOST}:${PORT}`);
-  console.log(`API health: http://${HOST}:${PORT}/api/health`);
-});
+if (process.env.VERCEL !== '1') {
+  server.listen(PORT, HOST, () => {
+    console.log(`Chase clone fullstack server running at http://${HOST}:${PORT}`);
+    console.log(`API health: http://${HOST}:${PORT}/api/health`);
+  });
+}

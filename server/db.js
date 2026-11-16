@@ -8,11 +8,46 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = path.join(__dirname, 'data');
-const DB_FILE = path.join(DATA_DIR, 'db.json');
+const DEFAULT_DATA_DIR = process.env.VERCEL === '1' ? '/tmp' : path.join(__dirname, 'data');
+const DB_FILE = process.env.CHASE_DB_PATH || path.join(DEFAULT_DATA_DIR, 'db.json');
+const DATA_DIR = path.dirname(DB_FILE);
+
+const SUPABASE_URL = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '').replace(/\/+$/, '');
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY || '';
+const SUPABASE_ROW_ID = process.env.CHASE_SUPABASE_ROW_ID || 'primary';
+
+export function isSupabaseEnabled() {
+  return Boolean(SUPABASE_URL && SUPABASE_KEY && !process.env.CHASE_DB_PATH);
+}
 
 let cache = null;
 let cacheMtimeMs = -1;
+let remoteHydratedAt = 0;
+let pendingRemoteSave = null;
+let dirtySeq = 0;
+let flushedSeq = 0;
+
+function sanitizeLoadedDb(parsed) {
+  const next = parsed && typeof parsed === 'object' ? parsed : {};
+  if (!Array.isArray(next.users)) next.users = [];
+  if (!next.sessions || typeof next.sessions !== 'object') next.sessions = {};
+  if (!Array.isArray(next.revokedSessions)) next.revokedSessions = [];
+  if (!Array.isArray(next.auditLog)) {
+    next.auditLog = Array.isArray(next.audit) ? next.audit.map(normalizeAuditEntry) : [];
+  } else {
+    next.auditLog = next.auditLog.map(normalizeAuditEntry);
+  }
+  if (!next.simulatorSettings || typeof next.simulatorSettings !== 'object') next.simulatorSettings = {};
+  if (!Array.isArray(next.adminAccounts)) next.adminAccounts = [];
+  for (const u of next.users) {
+    if (u.status === 'frozen') u.status = 'suspended';
+    if (!u.status) u.status = 'active';
+    if (u.username === 'chase' && u.role === 'admin') {
+      delete u.role;
+    }
+  }
+  return next;
+}
 
 function diskMtimeMs() {
   try {
@@ -51,28 +86,12 @@ function normalizeAuditEntry(entry, index = 0) {
 }
 
 function load() {
+  if (isSupabaseEnabled() && cache) return cache;
   const currentMtime = diskMtimeMs();
   if (cache && currentMtime === cacheMtimeMs) return cache;
   try {
     const raw = fs.readFileSync(DB_FILE, 'utf8');
-    cache = JSON.parse(raw);
-    if (!Array.isArray(cache.users)) cache.users = [];
-    if (!cache.sessions || typeof cache.sessions !== 'object') cache.sessions = {};
-    if (!Array.isArray(cache.revokedSessions)) cache.revokedSessions = [];
-    if (!Array.isArray(cache.auditLog)) {
-      cache.auditLog = Array.isArray(cache.audit) ? cache.audit.map(normalizeAuditEntry) : [];
-    } else {
-      cache.auditLog = cache.auditLog.map(normalizeAuditEntry);
-    }
-    if (!cache.simulatorSettings || typeof cache.simulatorSettings !== 'object') cache.simulatorSettings = {};
-    if (!Array.isArray(cache.adminAccounts)) cache.adminAccounts = [];
-    for (const u of cache.users) {
-      if (u.status === 'frozen') u.status = 'suspended';
-      if (!u.status) u.status = 'active';
-      if (u.username === 'chase' && u.role === 'admin') {
-        delete u.role;
-      }
-    }
+    cache = sanitizeLoadedDb(JSON.parse(raw));
     cacheMtimeMs = currentMtime;
   } catch (error) {
     if (error?.code !== 'ENOENT') {
@@ -83,25 +102,102 @@ function load() {
       }
       console.error('Database file was corrupt; a backup copy was preserved.');
     }
-    cache = {
-      users: [],
-      sessions: {},
-      revokedSessions: [],
-      auditLog: [],
-      simulatorSettings: {},
-      adminAccounts: [],
-    };
+    cache = sanitizeLoadedDb({});
     cacheMtimeMs = -1;
   }
   return cache;
 }
 
+async function pushToSupabase(snapshot, seq) {
+  if (!isSupabaseEnabled()) return;
+  try {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/chase_simulator_state?on_conflict=id`, {
+      method: 'POST',
+      headers: {
+        apikey: SUPABASE_KEY,
+        Authorization: `Bearer ${SUPABASE_KEY}`,
+        'Content-Type': 'application/json',
+        Prefer: 'resolution=merge-duplicates,return=minimal',
+      },
+      body: JSON.stringify({
+        id: SUPABASE_ROW_ID,
+        state: snapshot,
+        updated_at: new Date().toISOString(),
+      }),
+    });
+    if (res.ok && seq > flushedSeq) {
+      flushedSeq = seq;
+      remoteHydratedAt = Date.now();
+    }
+  } catch (err) {
+    console.error('Supabase state sync warning:', err?.message || err);
+  }
+}
+
 function save() {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  const tempFile = `${DB_FILE}.${process.pid}.tmp`;
-  fs.writeFileSync(tempFile, JSON.stringify(cache, null, 2));
-  fs.renameSync(tempFile, DB_FILE);
-  cacheMtimeMs = diskMtimeMs();
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    const tempFile = `${DB_FILE}.${process.pid}.tmp`;
+    fs.writeFileSync(tempFile, JSON.stringify(cache, null, 2));
+    fs.renameSync(tempFile, DB_FILE);
+    cacheMtimeMs = diskMtimeMs();
+  } catch {
+    /* Read-only serverless filesystem fallback */
+  }
+  if (isSupabaseEnabled() && cache) {
+    dirtySeq += 1;
+    const seq = dirtySeq;
+    const snapshot = JSON.parse(JSON.stringify(cache));
+    pendingRemoteSave = (pendingRemoteSave || Promise.resolve()).then(() => pushToSupabase(snapshot, seq));
+  }
+}
+
+export async function ensureDbReady() {
+  if (!isSupabaseEnabled()) {
+    load();
+    return;
+  }
+  if (dirtySeq > flushedSeq && pendingRemoteSave) {
+    await pendingRemoteSave;
+  }
+  if (cache && Date.now() - remoteHydratedAt < 2000) return;
+  try {
+    const res = await fetch(
+      `${SUPABASE_URL}/rest/v1/chase_simulator_state?id=eq.${encodeURIComponent(SUPABASE_ROW_ID)}&select=state`,
+      {
+        headers: {
+          apikey: SUPABASE_KEY,
+          Authorization: `Bearer ${SUPABASE_KEY}`,
+          Accept: 'application/json',
+        },
+      }
+    );
+    if (res.ok) {
+      const rows = await res.json();
+      if (Array.isArray(rows) && rows[0]?.state) {
+        cache = sanitizeLoadedDb(rows[0].state);
+        remoteHydratedAt = Date.now();
+        try {
+          fs.mkdirSync(DATA_DIR, { recursive: true });
+          fs.writeFileSync(DB_FILE, JSON.stringify(cache, null, 2));
+          cacheMtimeMs = diskMtimeMs();
+        } catch {
+          /* ignore */
+        }
+        return;
+      }
+    }
+  } catch (err) {
+    console.error('Supabase load warning:', err?.message || err);
+  }
+  load();
+  remoteHydratedAt = Date.now();
+}
+
+export async function flushRemoteSave() {
+  if (pendingRemoteSave) {
+    await pendingRemoteSave;
+  }
 }
 
 export function findUserByUsername(username) {
@@ -303,9 +399,10 @@ export function getDbStats() {
     dbSizeBytes = st.size;
     dbMtimeMs = st.mtimeMs;
   } catch {
-    dbSizeBytes = 0;
+    dbSizeBytes = Buffer.byteLength(JSON.stringify(db), 'utf8');
   }
   return {
+    storageBackend: isSupabaseEnabled() ? 'supabase-postgres' : 'local-json',
     activeCustomerSessions,
     activeUserSessions: activeCustomerSessions,
     activeAdminSessions,
@@ -313,7 +410,7 @@ export function getDbStats() {
     auditCount: db.auditLog.length,
     dbSizeBytes,
     db: {
-      path: DB_FILE,
+      path: isSupabaseEnabled() ? `supabase://chase_simulator_state/${SUPABASE_ROW_ID}` : DB_FILE,
       sizeBytes: dbSizeBytes,
       mtimeMs: dbMtimeMs,
     },

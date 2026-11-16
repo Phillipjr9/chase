@@ -21,12 +21,19 @@ import {
   UserRound,
   X,
 } from 'lucide-react';
-import { readAdminToken, writeAdminToken, type AccountType, type User } from '../banking/store';
+import {
+  readAdminToken,
+  writeAdminToken,
+  type AccountType,
+  type SecureMessageCategory,
+  type User,
+} from '../banking/store';
 import { ChaseLogo } from './ChaseLogo';
 import { Footer } from './Footer';
 import { Header } from './Header';
 import { Spinner } from './Loading';
 import { AccountPatchPayload, AccountsTab, LedgerTab } from './admin/AccountsLedgerTab';
+import { AdminMessageThread, MessagesSupportTab } from './admin/MessagesSupportTab';
 import { AuditTab, OperationsTab, SettingsTab } from './admin/OperationsSettingsTab';
 import { OverviewTab } from './admin/OverviewTab';
 import { UsersTab } from './admin/UsersTab';
@@ -114,6 +121,7 @@ export const AdminPage: React.FC<{
   const [users, setUsers] = useState<AdminUserRow[]>([]);
   const [audit, setAudit] = useState<AuditEntry[]>([]);
   const [globalTransactions, setGlobalTransactions] = useState<GlobalTransaction[]>([]);
+  const [messageThreads, setMessageThreads] = useState<AdminMessageThread[]>([]);
   const [simulatorSettings, setSimulatorSettings] = useState<SimulatorSettings>({
     allowEnrollment: true,
     allowCustomerPasswordReset: true,
@@ -175,7 +183,7 @@ export const AdminPage: React.FC<{
 
   const loadData = useCallback(
     async (activeToken = token, activeRange = range) => {
-      const [overviewRes, userRes, auditRes, txRes] = await Promise.all([
+      const [overviewRes, userRes, auditRes, txRes, msgRes] = await Promise.all([
         api<{ metrics: AdminMetrics; recentAudit: AuditEntry[]; analytics?: OverviewAnalytics }>(
           `/api/admin/overview?range=${activeRange}`,
           {},
@@ -188,12 +196,16 @@ export const AdminPage: React.FC<{
           {},
           activeToken
         ),
+        api<{ threads: AdminMessageThread[] }>('/api/admin/messages', {}, activeToken).catch(
+          () => ({ threads: [] })
+        ),
       ]);
       setMetrics(overviewRes.metrics);
       if (overviewRes.analytics) setAnalytics(overviewRes.analytics);
       setUsers(userRes.users);
       setAudit(auditRes.audit);
       setGlobalTransactions(txRes.transactions);
+      setMessageThreads(msgRes.threads || []);
       return userRes.users;
     },
     [api, range, token]
@@ -959,6 +971,145 @@ export const AdminPage: React.FC<{
     }
   };
 
+  // Batch Scheduled Payments & Month-End Statement Close Engine
+  const handleProcessScheduled = async (opts: {
+    userId?: string;
+    paymentId?: string;
+    forceAll?: boolean;
+  }) => {
+    setBusy(true);
+    try {
+      const res = await api<{
+        processedCount: number;
+        totalAmount: number;
+        user?: User;
+      }>('/api/admin/process-scheduled', {
+        method: 'POST',
+        body: JSON.stringify(opts),
+      });
+      if (res.user && selectedUser?.id === res.user.id) {
+        setSelectedUser(res.user);
+        setUserJson(JSON.stringify(res.user, null, 2));
+      } else if (selectedUser) {
+        await loadSelectedUser(selectedUser.id).catch(() => undefined);
+      }
+      await loadData();
+      notify(
+        'success',
+        res.processedCount > 0
+          ? `Executed ${res.processedCount} scheduled payment(s) totaling ${fmtMoneyFull(res.totalAmount)}.`
+          : 'No scheduled payments were eligible to execute.'
+      );
+    } catch (err) {
+      notify('error', err instanceof Error ? err.message : 'Could not process scheduled payments.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleRunMonthEndClose = async (opts: { userId?: string }) => {
+    setBusy(true);
+    try {
+      const res = await api<{
+        interestCredited: number;
+        statementsCut: number;
+        pointsAwarded: number;
+        user?: User;
+      }>('/api/admin/month-end-close', {
+        method: 'POST',
+        body: JSON.stringify(opts),
+      });
+      if (res.user && selectedUser?.id === res.user.id) {
+        setSelectedUser(res.user);
+        setUserJson(JSON.stringify(res.user, null, 2));
+      } else if (selectedUser) {
+        await loadSelectedUser(selectedUser.id).catch(() => undefined);
+      }
+      await loadData();
+      notify(
+        'success',
+        `Month-end close complete: ${fmtMoneyFull(res.interestCredited)} APY interest credited, ${res.statementsCut} card statement(s) cut, +${res.pointsAwarded.toLocaleString()} pts.`
+      );
+    } catch (err) {
+      notify('error', err instanceof Error ? err.message : 'Could not run month-end close.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Secure Client Messaging & Custom Dashboard Banner Handlers
+  const handleSendAdvisorMessage = async (
+    userId: string,
+    payload: { subject: string; category: SecureMessageCategory; body: string }
+  ) => {
+    setBusy(true);
+    try {
+      const res = await api<{ user: User }>(
+        `/api/admin/users/${encodeURIComponent(userId)}/messages`,
+        { method: 'POST', body: JSON.stringify(payload) }
+      );
+      if (selectedUser?.id === userId) {
+        setSelectedUser(res.user);
+        setUserJson(JSON.stringify(res.user, null, 2));
+      }
+      await loadData();
+      notify('success', 'Secure advisor message delivered to customer inbox.');
+    } catch (err) {
+      notify('error', err instanceof Error ? err.message : 'Could not send message.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleMarkThreadRead = async (userId: string) => {
+    try {
+      const res = await api<{ user: User }>(
+        `/api/admin/users/${encodeURIComponent(userId)}/messages/read`,
+        { method: 'POST' }
+      );
+      if (selectedUser?.id === userId) {
+        setSelectedUser(res.user);
+        setUserJson(JSON.stringify(res.user, null, 2));
+      }
+      await loadData();
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const handleUpdateAccountNotice = async (
+    userId: string,
+    notice: {
+      tone: 'info' | 'warning' | 'urgent' | 'success';
+      title: string;
+      message: string;
+      dismissible: boolean;
+    } | null
+  ) => {
+    setBusy(true);
+    try {
+      const res = await api<{ user: User }>(
+        `/api/admin/users/${encodeURIComponent(userId)}/notice`,
+        { method: 'PUT', body: JSON.stringify({ notice }) }
+      );
+      if (selectedUser?.id === userId) {
+        setSelectedUser(res.user);
+        setUserJson(JSON.stringify(res.user, null, 2));
+      }
+      await loadData();
+      notify(
+        'success',
+        notice
+          ? 'Published custom banner onto customer online banking dashboard.'
+          : 'Cleared custom dashboard banner.'
+      );
+    } catch (err) {
+      notify('error', err instanceof Error ? err.message : 'Could not update customer banner.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   // Settings, Staff, Backup & Reset
   const handleSaveSettings = async () => {
     setBusy(true);
@@ -1132,6 +1283,14 @@ export const AdminPage: React.FC<{
     [analytics]
   );
 
+  const unreadMessagesCount = useMemo(
+    () =>
+      messageThreads.reduce((sum, t) => sum + (t.unreadForAdmin || 0), 0) ||
+      analytics?.unreadMessagesCount ||
+      0,
+    [messageThreads, analytics]
+  );
+
   const navItems: {
     id: AdminTab;
     label: string;
@@ -1149,6 +1308,12 @@ export const AdminPage: React.FC<{
       badge: openDisputesCount > 0 ? openDisputesCount : undefined,
     },
     { id: 'wealth', label: 'Wealth, rewards & credit', esLabel: 'Inversiones, puntos y crédito' },
+    {
+      id: 'messages',
+      label: 'Messages & notices',
+      esLabel: 'Mensajes y avisos',
+      badge: unreadMessagesCount > 0 ? unreadMessagesCount : undefined,
+    },
     { id: 'audit', label: 'Audit log', esLabel: 'Auditoría' },
     { id: 'settings', label: 'Settings & backup', esLabel: 'Configuración y respaldo' },
   ];
@@ -1978,6 +2143,8 @@ export const AdminPage: React.FC<{
             onSetDisputeStatus={handleSetDisputeStatus}
             onIssueRefund={handleIssueRefund}
             onCreateLedgerEntry={handleCreateLedgerEntry}
+            onProcessScheduled={handleProcessScheduled}
+            onRunMonthEndClose={handleRunMonthEndClose}
           />
         )}
 
@@ -1989,6 +2156,19 @@ export const AdminPage: React.FC<{
             busy={busy}
             onSelectUser={(id) => void selectUserAndMaybeGo(id)}
             onSaveUserObject={handleSaveUserObject}
+          />
+        )}
+
+        {tab === 'messages' && (
+          <MessagesSupportTab
+            users={users}
+            selectedUser={selectedUser}
+            threads={messageThreads}
+            readOnly={isReadOnly}
+            onSelectUser={(id) => void selectUserAndMaybeGo(id)}
+            onSendAdvisorMessage={handleSendAdvisorMessage}
+            onMarkThreadRead={handleMarkThreadRead}
+            onUpdateAccountNotice={handleUpdateAccountNotice}
           />
         )}
 

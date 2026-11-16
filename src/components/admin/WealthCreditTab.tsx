@@ -18,11 +18,15 @@ import {
 } from 'lucide-react';
 import type {
   CreditFactorStatus,
+  CreditInquiry,
+  CreditReportAccount,
+  CustomChaseOffer,
   Holding,
   TravelBooking,
   TravelNotice,
   User,
 } from '../../banking/store';
+import { defaultBudgets, defaultCredit } from '../../banking/store';
 import { ChaseIcon, JpmwmLogo } from '../ChaseAssets';
 import { RadialGauge } from './charts';
 import { AdminUserRow, inputDate } from './types';
@@ -97,6 +101,22 @@ export const WealthCreditTab: React.FC<WealthCreditProps> = ({
   const [phone, setPhone] = useState('');
   const [address, setAddress] = useState('');
 
+  // Experian Credit Bureau Tradeline & Hard Inquiry editor state
+  const [tlName, setTlName] = useState('American Express® Gold');
+  const [tlType, setTlType] = useState('Credit card');
+  const [tlStatus, setTlStatus] = useState('Open');
+  const [tlBalance, setTlBalance] = useState('640');
+  const [tlLimit, setTlLimit] = useState('15000');
+  const [inqName, setInqName] = useState('JPMorgan Chase Auto');
+  const [inqDate, setInqDate] = useState(() => inputDate(0));
+
+  // Monthly Category Budgets & Targeted Chase Offers state
+  const [budgetsDraft, setBudgetsDraft] = useState<Record<string, number>>(() => defaultBudgets());
+  const [offerMerchant, setOfferMerchant] = useState('Four Seasons Hotels & Resorts');
+  const [offerCashback, setOfferCashback] = useState('15% cash back');
+  const [offerDetail, setOfferDetail] = useState('Earn up to $150 back when you spend $500+ on your Chase card.');
+  const [offerExpires, setOfferExpires] = useState('12/31');
+
   useEffect(() => {
     if (!selectedUser) return;
     setCash(String(selectedUser.investments?.cash ?? 12500));
@@ -110,6 +130,7 @@ export const WealthCreditTab: React.FC<WealthCreditProps> = ({
     setHomeEscrow(String(selectedUser.home?.monthlyEscrow ?? 740));
     setPhone(selectedUser.phone || '(212) 555-0148');
     setAddress(selectedUser.address || '245 Park Ave, New York, NY 10167');
+    setBudgetsDraft({ ...defaultBudgets(), ...(selectedUser.budgets || {}) });
   }, [selectedUser]);
 
   const portfolioStats = useMemo(() => {
@@ -1078,6 +1099,385 @@ export const WealthCreditTab: React.FC<WealthCreditProps> = ({
                 </label>
               ))}
             </div>
+          </div>
+        </Card>
+      </div>
+
+      {/* Row 3: Experian® Credit Bureau Tradelines & Hard Inquiries + Budgets & Targeted Chase Offers */}
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
+        {/* 5. Experian® Credit Bureau Tradelines & Inquiries Visual Editor */}
+        <Card className="p-5 space-y-4">
+          <CardHeader
+            title="Experian® Credit Bureau Tradelines &amp; Hard Inquiries"
+            subtitle="Visually edit reported bureau accounts and inquiries displayed in Customer Credit Journey® → Credit Report"
+          />
+
+          <div className="space-y-2">
+            <p className="text-[11px] font-bold uppercase tracking-wider text-gray-500">
+              Reported Bureau Tradelines ({(selectedUser.credit?.report?.accounts || []).length})
+            </p>
+            {(selectedUser.credit?.report?.accounts || []).length === 0 ? (
+              <p className="text-xs text-gray-400">No bureau tradelines recorded yet.</p>
+            ) : (
+              <div className="divide-y divide-gray-100 rounded-lg border border-gray-200">
+                {(selectedUser.credit?.report?.accounts || []).map((acct, idx) => (
+                  <div key={`${acct.name}-${idx}`} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-xs">
+                    <div>
+                      <span className="font-semibold text-gray-900">{acct.name}</span>{' '}
+                      <Badge tone={acct.status === 'Open' ? 'success' : acct.status.includes('late') ? 'error' : 'neutral'}>
+                        {acct.status}
+                      </Badge>
+                      <div className="text-[11px] text-gray-500">
+                        {acct.type} · Balance {fmtMoneyFull(acct.balance)} / Limit {fmtMoneyFull(acct.limit)}
+                      </div>
+                    </div>
+                    {!isReadOnly && (
+                      <Btn
+                        variant="ghost"
+                        size="xs"
+                        disabled={busy}
+                        onClick={async () => {
+                          const baseCredit = selectedUser.credit || defaultCredit();
+                          const nextAccounts = (baseCredit.report?.accounts || []).filter((_, i) => i !== idx);
+                          await onSaveUserObject(
+                            {
+                              ...selectedUser,
+                              credit: {
+                                ...baseCredit,
+                                report: {
+                                  ...(baseCredit.report || defaultCredit().report),
+                                  accounts: nextAccounts,
+                                },
+                              },
+                            },
+                            'Removed Experian® tradeline'
+                          );
+                        }}
+                      >
+                        <Trash2 className="w-3.5 h-3.5 text-rose-500" />
+                      </Btn>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {!isReadOnly && (
+              <form
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  const baseCredit = selectedUser.credit || defaultCredit();
+                  const entry: CreditReportAccount = {
+                    name: tlName.trim() || 'Reported Credit Account',
+                    type: tlType,
+                    status: tlStatus,
+                    balance: Math.max(0, Number(tlBalance) || 0),
+                    limit: Math.max(0, Number(tlLimit) || 0),
+                    opened: new Date().toISOString(),
+                  };
+                  await onSaveUserObject(
+                    {
+                      ...selectedUser,
+                      credit: {
+                        ...baseCredit,
+                        report: {
+                          ...(baseCredit.report || defaultCredit().report),
+                          pulledAt: new Date().toISOString(),
+                          accounts: [entry, ...(baseCredit.report?.accounts || [])],
+                        },
+                      },
+                    },
+                    `Added tradeline "${entry.name}" to Experian® file`
+                  );
+                }}
+                className="grid grid-cols-2 sm:grid-cols-6 gap-2 pt-1 items-end"
+              >
+                <label className="col-span-2">
+                  <span className="block text-[10px] font-semibold text-gray-500 mb-1">Creditor / Product</span>
+                  <TextInput value={tlName} onChange={(e) => setTlName(e.target.value)} required />
+                </label>
+                <label>
+                  <span className="block text-[10px] font-semibold text-gray-500 mb-1">Type</span>
+                  <SelectInput value={tlType} onChange={(e) => setTlType(e.target.value)}>
+                    <option value="Credit card">Credit card</option>
+                    <option value="Installment">Installment</option>
+                    <option value="Auto loan">Auto loan</option>
+                    <option value="Mortgage">Mortgage</option>
+                  </SelectInput>
+                </label>
+                <label>
+                  <span className="block text-[10px] font-semibold text-gray-500 mb-1">Status</span>
+                  <SelectInput value={tlStatus} onChange={(e) => setTlStatus(e.target.value)}>
+                    <option value="Open">Open</option>
+                    <option value="Paid as agreed">Paid as agreed</option>
+                    <option value="30 days late">30 days late</option>
+                    <option value="Closed">Closed</option>
+                  </SelectInput>
+                </label>
+                <label>
+                  <span className="block text-[10px] font-semibold text-gray-500 mb-1">Balance ($)</span>
+                  <TextInput type="number" value={tlBalance} onChange={(e) => setTlBalance(e.target.value)} />
+                </label>
+                <div className="flex gap-1 items-end">
+                  <TextInput
+                    type="number"
+                    aria-label="Tradeline credit limit"
+                    placeholder="Limit"
+                    value={tlLimit}
+                    onChange={(e) => setTlLimit(e.target.value)}
+                  />
+                  <Btn type="submit" variant="primary" size="xs" disabled={busy}>
+                    <Plus className="w-3.5 h-3.5" />
+                  </Btn>
+                </div>
+              </form>
+            )}
+          </div>
+
+          <div className="pt-3 border-t border-gray-100 space-y-2">
+            <p className="text-[11px] font-bold uppercase tracking-wider text-gray-500">
+              Hard Inquiries ({(selectedUser.credit?.report?.inquiries || []).length})
+            </p>
+            <div className="divide-y divide-gray-100 rounded-lg border border-gray-200">
+              {(selectedUser.credit?.report?.inquiries || []).map((inq, idx) => (
+                <div key={`${inq.name}-${idx}`} className="flex items-center justify-between gap-2 px-3 py-2 text-xs">
+                  <div>
+                    <span className="font-semibold text-gray-900">{inq.name}</span>{' '}
+                    <Badge tone={inq.removed ? 'neutral' : 'warning'}>
+                      {inq.removed ? 'Removed' : inq.type || 'Hard inquiry'}
+                    </Badge>
+                    <span className="ml-2 text-gray-500">{String(inq.date).slice(0, 10)}</span>
+                  </div>
+                  {!isReadOnly && (
+                    <div className="flex items-center gap-1">
+                      <Btn
+                        variant="secondary"
+                        size="xs"
+                        disabled={busy}
+                        onClick={async () => {
+                          const baseCredit = selectedUser.credit || defaultCredit();
+                          const nextInq = (baseCredit.report?.inquiries || []).map((item, i) =>
+                            i === idx
+                              ? { ...item, removed: !item.removed, type: !item.removed ? 'Removed' : 'Hard inquiry' }
+                              : item
+                          );
+                          await onSaveUserObject(
+                            {
+                              ...selectedUser,
+                              credit: {
+                                ...baseCredit,
+                                report: { ...(baseCredit.report || defaultCredit().report), inquiries: nextInq },
+                              },
+                            },
+                            'Updated inquiry status'
+                          );
+                        }}
+                      >
+                        {inq.removed ? 'Restore' : 'Suppress'}
+                      </Btn>
+                      <Btn
+                        variant="ghost"
+                        size="xs"
+                        disabled={busy}
+                        onClick={async () => {
+                          const baseCredit = selectedUser.credit || defaultCredit();
+                          const nextInq = (baseCredit.report?.inquiries || []).filter((_, i) => i !== idx);
+                          await onSaveUserObject(
+                            {
+                              ...selectedUser,
+                              credit: {
+                                ...baseCredit,
+                                report: { ...(baseCredit.report || defaultCredit().report), inquiries: nextInq },
+                              },
+                            },
+                            'Deleted hard inquiry'
+                          );
+                        }}
+                      >
+                        <Trash2 className="w-3.5 h-3.5 text-rose-500" />
+                      </Btn>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            {!isReadOnly && (
+              <form
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  const baseCredit = selectedUser.credit || defaultCredit();
+                  const entry: CreditInquiry = {
+                    name: inqName.trim() || 'Chase Card Services',
+                    date: new Date(`${inqDate}T12:00:00Z`).toISOString(),
+                    type: 'Hard inquiry',
+                  };
+                  await onSaveUserObject(
+                    {
+                      ...selectedUser,
+                      credit: {
+                        ...baseCredit,
+                        report: {
+                          ...(baseCredit.report || defaultCredit().report),
+                          inquiries: [entry, ...(baseCredit.report?.inquiries || [])],
+                        },
+                      },
+                    },
+                    `Recorded hard inquiry from ${entry.name}`
+                  );
+                }}
+                className="flex flex-wrap gap-2 pt-1 items-end"
+              >
+                <div className="flex-1 min-w-[160px]">
+                  <span className="block text-[10px] font-semibold text-gray-500 mb-1">Inquiring Institution</span>
+                  <TextInput value={inqName} onChange={(e) => setInqName(e.target.value)} required />
+                </div>
+                <div>
+                  <span className="block text-[10px] font-semibold text-gray-500 mb-1">Inquiry Date</span>
+                  <TextInput type="date" value={inqDate} onChange={(e) => setInqDate(e.target.value)} required />
+                </div>
+                <Btn type="submit" variant="secondary" size="xs" disabled={busy}>
+                  <Plus className="w-3.5 h-3.5" /> Add Inquiry
+                </Btn>
+              </form>
+            )}
+          </div>
+        </Card>
+
+        {/* 6. Monthly Category Spending Budgets & Targeted Chase Offers Studio */}
+        <Card className="p-5 space-y-4">
+          <CardHeader
+            title="Spending Budgets &amp; Targeted Chase Offers Studio"
+            subtitle="Configure monthly category budgets (Plan &amp; Track) and push custom cash-back offers to Customer Chase Offers"
+          />
+
+          {/* Monthly Budgets */}
+          <form
+            onSubmit={async (e) => {
+              e.preventDefault();
+              await onSaveUserObject(
+                { ...selectedUser, budgets: budgetsDraft },
+                'Saved customer monthly category budgets'
+              );
+            }}
+            className="space-y-2.5"
+          >
+            <div className="flex items-center justify-between">
+              <p className="text-[11px] font-bold uppercase tracking-wider text-gray-500">
+                Monthly Category Budgets (USD)
+              </p>
+              {!isReadOnly && (
+                <Btn type="submit" variant="primary" size="xs" disabled={busy}>
+                  <Check className="w-3.5 h-3.5" /> Save Budgets
+                </Btn>
+              )}
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+              {Object.entries(budgetsDraft).map(([cat, amt]) => (
+                <label key={cat} className="block">
+                  <span className="block text-[10.5px] font-semibold text-gray-600 truncate mb-0.5">
+                    {cat}
+                  </span>
+                  <TextInput
+                    type="number"
+                    min="0"
+                    step="10"
+                    disabled={isReadOnly}
+                    value={String(amt)}
+                    onChange={(e) =>
+                      setBudgetsDraft((prev) => ({
+                        ...prev,
+                        [cat]: Math.max(0, Number(e.target.value) || 0),
+                      }))
+                    }
+                  />
+                </label>
+              ))}
+            </div>
+          </form>
+
+          {/* Targeted Chase Offers */}
+          <div className="pt-3 border-t border-gray-100 space-y-2.5">
+            <p className="text-[11px] font-bold uppercase tracking-wider text-gray-500 flex items-center gap-1.5">
+              <Sparkles className="w-3.5 h-3.5 text-[#117ACA]" />
+              Targeted Chase Offers ({(selectedUser.customOffers || []).length})
+            </p>
+            {(selectedUser.customOffers || []).length > 0 && (
+              <div className="divide-y divide-gray-100 rounded-lg border border-gray-200">
+                {(selectedUser.customOffers || []).map((offer) => (
+                  <div key={offer.id} className="flex items-center justify-between gap-2 px-3 py-2 text-xs">
+                    <div className="min-w-0">
+                      <span className="font-semibold text-gray-900">{offer.merchant}</span>{' '}
+                      <Badge tone="info">{offer.cashback}</Badge>{' '}
+                      {offer.activated && <Badge tone="success">Added by Customer</Badge>}
+                      <p className="text-[11px] text-gray-500 truncate">{offer.detail}</p>
+                    </div>
+                    {!isReadOnly && (
+                      <Btn
+                        variant="ghost"
+                        size="xs"
+                        disabled={busy}
+                        onClick={async () => {
+                          const nextOffers = (selectedUser.customOffers || []).filter(
+                            (o) => o.id !== offer.id
+                          );
+                          await onSaveUserObject(
+                            { ...selectedUser, customOffers: nextOffers },
+                            'Removed targeted Chase Offer'
+                          );
+                        }}
+                      >
+                        <Trash2 className="w-3.5 h-3.5 text-rose-500" />
+                      </Btn>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {!isReadOnly && (
+              <form
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  const created: CustomChaseOffer = {
+                    id: `offer-${uidLocal()}`,
+                    merchant: offerMerchant.trim() || 'Chase Partner Merchant',
+                    cashback: offerCashback.trim() || '10% cash back',
+                    detail: offerDetail.trim() || 'Statement credit automatically applied within 7 business days.',
+                    expires: offerExpires.trim() || '12/31',
+                    activated: false,
+                  };
+                  await onSaveUserObject(
+                    {
+                      ...selectedUser,
+                      customOffers: [created, ...(selectedUser.customOffers || [])],
+                    },
+                    `Published "${created.merchant}" offer to customer`
+                  );
+                }}
+                className="grid grid-cols-1 sm:grid-cols-4 gap-2 items-end"
+              >
+                <label className="sm:col-span-2">
+                  <span className="block text-[10px] font-semibold text-gray-500 mb-1">Merchant</span>
+                  <TextInput value={offerMerchant} onChange={(e) => setOfferMerchant(e.target.value)} required />
+                </label>
+                <label>
+                  <span className="block text-[10px] font-semibold text-gray-500 mb-1">Reward Value</span>
+                  <TextInput value={offerCashback} onChange={(e) => setOfferCashback(e.target.value)} required />
+                </label>
+                <label>
+                  <span className="block text-[10px] font-semibold text-gray-500 mb-1">Expires</span>
+                  <TextInput value={offerExpires} onChange={(e) => setOfferExpires(e.target.value)} required />
+                </label>
+                <label className="sm:col-span-3">
+                  <span className="block text-[10px] font-semibold text-gray-500 mb-1">Offer Terms</span>
+                  <TextInput value={offerDetail} onChange={(e) => setOfferDetail(e.target.value)} required />
+                </label>
+                <Btn type="submit" variant="primary" size="xs" disabled={busy}>
+                  <Plus className="w-3.5 h-3.5" /> Push Offer
+                </Btn>
+              </form>
+            )}
           </div>
         </Card>
       </div>

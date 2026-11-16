@@ -1,0 +1,40 @@
+// Run against an isolated server: CHASE_DB_PATH=/tmp/chase-feature-test.json PORT=3001 node server/index.js
+import assert from 'node:assert/strict';
+const base = process.env.BASE_URL || 'http://127.0.0.1:3001';
+async function api(path, token, body, expected = 200, method = body === undefined ? 'GET' : 'POST') {
+  const response = await fetch(base + path, { method, headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+  const data = await response.json();
+  assert.equal(response.status, expected, `${path}: ${JSON.stringify(data)}`);
+  return data;
+}
+const admin = (await api('/api/admin/login', null, { username: 'admin', password: 'chaseadmin123' })).token;
+const login = await api('/api/auth/login', null, { username: 'chase', password: 'chase123' });
+const token = login.token;
+const id = login.user.id;
+const route = `/api/admin/users/${encodeURIComponent(id)}`;
+await api('/api/messages', token, { subject: 'Test', body: 'Hello support', category: 'general' }, 201);
+let threads = (await api('/api/admin/messages', admin)).threads;
+assert.equal(threads.find(t => t.userId === id).unreadForAdmin, 1);
+await api(`${route}/messages/read`, admin, {});
+threads = (await api('/api/admin/messages', admin)).threads;
+assert.equal(threads.find(t => t.userId === id).unreadForAdmin, 0);
+await api(`${route}/messages`, admin, { subject: 'Reply', body: 'Hello customer' }, 201);
+let me = (await api('/api/auth/me', token)).user;
+assert(me.messages.some(m => m.sender === 'advisor' && !m.readByCustomer));
+await api('/api/messages/read', token, {});
+await api(`${route}/notice`, admin, { notice: { title: 'Test notice', message: 'Hello', tone: 'info', dismissible: true } }, 200, 'PUT');
+me = (await api('/api/auth/me', token)).user;
+assert.equal(me.accountNotice.title, 'Test notice');
+me = (await api('/api/notice/dismiss', token, {})).user;
+assert.equal(me.accountNotice, null);
+const close = await api('/api/admin/month-end-close', admin, { userId: id });
+assert(close.accountsProcessed > 0);
+const second = await api('/api/admin/month-end-close', admin, { userId: id });
+assert.equal(second.accountsProcessed, 0, 'close is idempotent within a cycle');
+const checking = me.accounts.find(a => a.type === 'checking');
+const savings = me.accounts.find(a => a.type === 'savings');
+const scheduled = await api(`${route}/scheduled`, admin, { payment: { kind: 'transfer', label: 'Test transfer', fromAccountId: checking.id, toAccountId: savings.id, amount: 1, date: '2020-01-31', frequency: 'monthly' } }, 201);
+const run = await api('/api/admin/process-scheduled', admin, { userId: id, paymentId: scheduled.payment.id });
+assert.equal(run.processedCount, 1);
+assert.equal(run.user.scheduledPayments.find(p => p.id === scheduled.payment.id).date.slice(0, 10), '2020-02-29');
+console.log('New feature API tests passed.');

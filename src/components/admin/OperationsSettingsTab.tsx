@@ -131,6 +131,12 @@ interface OperationsProps {
     date: string;
     status: 'posted' | 'pending';
   }) => Promise<boolean>;
+  onProcessScheduled?: (opts: {
+    userId?: string;
+    paymentId?: string;
+    forceAll?: boolean;
+  }) => Promise<void>;
+  onRunMonthEndClose?: (opts: { userId?: string }) => Promise<void>;
 }
 
 export const OperationsTab: React.FC<OperationsProps> = ({
@@ -151,6 +157,8 @@ export const OperationsTab: React.FC<OperationsProps> = ({
   onSetDisputeStatus,
   onIssueRefund,
   onCreateLedgerEntry,
+  onProcessScheduled,
+  onRunMonthEndClose,
 }) => {
   // Zelle / Wire / QuickDeposit simulator rail state
   const [railMode, setRailMode] = useState<'zelle' | 'wire' | 'deposit'>('zelle');
@@ -264,6 +272,59 @@ export const OperationsTab: React.FC<OperationsProps> = ({
             </option>
           ))}
         </SelectInput>
+      </Card>
+
+      {/* Batch Engine: Executable Scheduled Payments & Month-End Statement Close */}
+      <Card className="p-5 border-t-[3px] border-t-[#117ACA]">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2">
+              <h3 className="text-[15.5px] font-semibold text-gray-900 dark:text-white">
+                Batch Scheduled Processing &amp; Month-End Statement Close Engine
+              </h3>
+              <Badge tone="primary">Live Core Engine</Badge>
+            </div>
+            <p className="mt-0.5 text-[12px] text-gray-500 dark:text-gray-400">
+              Execute due or upcoming scheduled bills/transfers onto account ledgers, credit monthly Savings &amp; CD APY interest, cut credit-card statement balances, and award Ultimate Rewards® points.
+            </p>
+          </div>
+          {!isReadOnly && (
+            <div className="flex flex-wrap items-center gap-2">
+              {selectedUser && onProcessScheduled && (
+                <Btn
+                  variant="secondary"
+                  size="sm"
+                  disabled={busy}
+                  onClick={() =>
+                    void onProcessScheduled({ userId: selectedUser.id, forceAll: true })
+                  }
+                >
+                  <Play className="w-3.5 h-3.5 text-[#12B76A]" /> Execute {selectedUser.fullName.split(' ')[0]}&apos;s Schedules
+                </Btn>
+              )}
+              {selectedUser && onRunMonthEndClose && (
+                <Btn
+                  variant="secondary"
+                  size="sm"
+                  disabled={busy}
+                  onClick={() => void onRunMonthEndClose({ userId: selectedUser.id })}
+                >
+                  <RefreshCw className="w-3.5 h-3.5 text-[#117ACA]" /> Month-End Close ({selectedUser.fullName.split(' ')[0]})
+                </Btn>
+              )}
+              {onRunMonthEndClose && (
+                <Btn
+                  variant="primary"
+                  size="sm"
+                  disabled={busy}
+                  onClick={() => void onRunMonthEndClose({})}
+                >
+                  <RefreshCw className="w-3.5 h-3.5" /> Bank-Wide Month-End Close
+                </Btn>
+              )}
+            </div>
+          )}
+        </div>
       </Card>
 
       {/* Row 0: Zelle®, Wire Transfers & QuickDeposit℠ Check Deposit (matching Customer Pay & Transfer) */}
@@ -823,6 +884,23 @@ export const OperationsTab: React.FC<OperationsProps> = ({
                     {!isReadOnly && (
                       <Td className="text-right">
                         <div className="inline-flex items-center gap-1">
+                          {sp.status === 'scheduled' && onProcessScheduled && selectedUser && (
+                            <Btn
+                              variant="secondary"
+                              size="xs"
+                              disabled={busy}
+                              onClick={() =>
+                                void onProcessScheduled({
+                                  userId: selectedUser.id,
+                                  paymentId: sp.id,
+                                  forceAll: true,
+                                })
+                              }
+                              title="Execute this scheduled payment immediately"
+                            >
+                              Run Now
+                            </Btn>
+                          )}
                           <Btn variant="ghost" size="xs" onClick={() => setEditingSched(sp)}>
                             <Pencil className="w-3.5 h-3.5" />
                           </Btn>
@@ -1472,12 +1550,17 @@ export const SettingsTab: React.FC<SettingsProps> = ({
             </div>
             <div className="rounded-xl bg-gray-50 dark:bg-white/[0.04] p-3">
               <p className="text-gray-500 flex items-center gap-1.5">
-                <Database className="w-3.5 h-3.5 text-[#F79009]" /> DB File
+                <Database className="w-3.5 h-3.5 text-[#F79009]" />{' '}
+                {system?.storageBackend === 'supabase-postgres' ? 'Supabase DB' : 'DB Store'}
               </p>
               <p className="mt-1 font-bold text-gray-900 dark:text-white">
                 {fmtBytes(system?.dbSizeBytes ?? 0)}
               </p>
-              <p className="text-[11px] text-gray-400">{system?.auditCount ?? 0} audit rows</p>
+              <p className="text-[11px] text-gray-400">
+                {system?.storageBackend === 'supabase-postgres'
+                  ? 'Postgres 17 synced'
+                  : `${system?.auditCount ?? 0} audit rows`}
+              </p>
             </div>
             <div className="rounded-xl bg-gray-50 dark:bg-white/[0.04] p-3">
               <p className="text-gray-500 flex items-center gap-1.5">
