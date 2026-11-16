@@ -3,17 +3,27 @@
 /* -------------------------------------------------------------------------- */
 import React, { useMemo, useState } from 'react';
 import {
+  ArrowDownLeft,
+  ArrowUpRight,
   Check,
+  CreditCard,
+  Download,
   Lock,
   Pencil,
   Plus,
+  RefreshCw,
   Search,
   Trash2,
   Unlock,
   WalletCards,
 } from 'lucide-react';
-import type { AccountType } from '../../banking/store';
-import { ACCOUNT_TYPE_COLORS } from './charts';
+import type { AccountType, User } from '../../banking/store';
+import {
+  ChaseCardImage,
+  ChaseIcon,
+  cardProductFor,
+  iconForAccountType,
+} from '../ChaseAssets';
 import {
   Badge,
   Btn,
@@ -34,9 +44,27 @@ import {
   fmtMoneyFull,
   fmtSignedMoney,
 } from './ui';
-import { AdminUserRow, GlobalTransaction, User, inputDate } from './types';
+import { AdminUserRow, GlobalTransaction, inputDate } from './types';
 
 /* ============================== 1. ACCOUNTS TAB ============================ */
+
+export interface AccountPatchPayload {
+  name: string;
+  nickname?: string;
+  mask?: string;
+  balance: number;
+  creditLimit: number | null;
+  statementBalance?: number | null;
+  apr?: number;
+  monthlyPayment?: number;
+  rewardsPoints?: number;
+  replacedAt?: string;
+  locked: boolean;
+  autopay: boolean;
+  isPrimary?: boolean;
+  favorite?: boolean;
+  hidden?: boolean;
+}
 
 interface AccountsProps {
   users: AdminUserRow[];
@@ -50,22 +78,39 @@ interface AccountsProps {
     balance: number;
     creditLimit?: number;
   }) => Promise<boolean>;
-  onSaveAccount: (
-    accountId: string,
-    patch: {
-      name: string;
-      balance: number;
-      creditLimit: number | null;
-      locked: boolean;
-      autopay: boolean;
-    }
-  ) => Promise<void>;
+  onSaveAccount: (accountId: string, patch: AccountPatchPayload) => Promise<void>;
   onDeleteAccount: (accountId: string) => Promise<void>;
   onBulkAccounts: (
     accountIds: string[],
     action: 'lock' | 'unlock' | 'delete',
     confirmText?: string
   ) => Promise<boolean>;
+  onCreateLedgerEntry: (payload: {
+    userId: string;
+    accountId: string;
+    description: string;
+    amount: number;
+    category: string;
+    date: string;
+    status: 'posted' | 'pending';
+  }) => Promise<boolean>;
+}
+
+interface AccountDraft {
+  name: string;
+  nickname: string;
+  mask: string;
+  balance: string;
+  creditLimit: string;
+  statementBalance: string;
+  apr: string;
+  monthlyPayment: string;
+  rewardsPoints: string;
+  locked: boolean;
+  autopay: boolean;
+  isPrimary: boolean;
+  favorite: boolean;
+  hidden: boolean;
 }
 
 export const AccountsTab: React.FC<AccountsProps> = ({
@@ -78,6 +123,7 @@ export const AccountsTab: React.FC<AccountsProps> = ({
   onSaveAccount,
   onDeleteAccount,
   onBulkAccounts,
+  onCreateLedgerEntry,
 }) => {
   const [newType, setNewType] = useState<AccountType>('checking');
   const [newName, setNewName] = useState('');
@@ -88,12 +134,14 @@ export const AccountsTab: React.FC<AccountsProps> = ({
   const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState('');
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
 
-  const [drafts, setDrafts] = useState<
-    Record<
-      string,
-      { name: string; balance: string; creditLimit: string; locked: boolean; autopay: boolean }
-    >
-  >({});
+  // Quick Deposit / Credit / Debit modal
+  const [adjustAcctId, setAdjustAcctId] = useState<string | null>(null);
+  const [adjustDirection, setAdjustDirection] = useState<'credit' | 'debit'>('credit');
+  const [adjustAmount, setAdjustAmount] = useState('500');
+  const [adjustMemo, setAdjustMemo] = useState('Direct Deposit — Payroll Credit');
+  const [adjustCategory, setAdjustCategory] = useState('Income');
+
+  const [drafts, setDrafts] = useState<Record<string, AccountDraft>>({});
 
   React.useEffect(() => {
     setSelectedAccountIds([]);
@@ -107,10 +155,19 @@ export const AccountsTab: React.FC<AccountsProps> = ({
           a.id,
           {
             name: a.name,
+            nickname: a.nickname || '',
+            mask: a.mask || '0000',
             balance: String(a.balance),
             creditLimit: a.creditLimit == null ? '' : String(a.creditLimit),
+            statementBalance: a.statementBalance == null ? '' : String(a.statementBalance),
+            apr: a.apr == null ? '' : String(a.apr),
+            monthlyPayment: a.monthlyPayment == null ? '' : String(a.monthlyPayment),
+            rewardsPoints: a.rewardsPoints == null ? '' : String(a.rewardsPoints),
             locked: !!a.locked,
             autopay: !!a.autopay,
+            isPrimary: !!a.isPrimary,
+            favorite: !!a.favorite,
+            hidden: !!a.hidden,
           },
         ])
       )
@@ -129,6 +186,40 @@ export const AccountsTab: React.FC<AccountsProps> = ({
       setNewName('');
       setNewBalance('0');
       setNewLimit('');
+    }
+  };
+
+  const handleQuickAdjustSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedUser || !adjustAcctId) return;
+    const acct = selectedUser.accounts.find((a) => a.id === adjustAcctId);
+    if (!acct) return;
+    const rawAmt = Math.abs(Number(adjustAmount) || 0);
+    if (rawAmt <= 0) return;
+
+    // On deposit accounts: credit = +amount, debit = -amount
+    // On credit cards & loans: credit/payment reduces balance (-amount), charge/debit increases balance (+amount)
+    const isDebt = acct.type === 'credit-card' || acct.type === 'auto-loan' || acct.type === 'mortgage';
+    const signedAmount = isDebt
+      ? adjustDirection === 'credit'
+        ? -rawAmt
+        : rawAmt
+      : adjustDirection === 'credit'
+        ? rawAmt
+        : -rawAmt;
+
+    const ok = await onCreateLedgerEntry({
+      userId: selectedUser.id,
+      accountId: acct.id,
+      description: adjustMemo.trim() || 'Admin balance adjustment',
+      amount: signedAmount,
+      category: adjustCategory,
+      date: inputDate(0),
+      status: 'posted',
+    });
+    if (ok) {
+      setAdjustAcctId(null);
+      setAdjustAmount('500');
     }
   };
 
@@ -298,18 +389,70 @@ export const AccountsTab: React.FC<AccountsProps> = ({
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           {selectedUser.accounts.map((account) => {
-            const draft = drafts[account.id] || {
+            const draft: AccountDraft = drafts[account.id] || {
               name: account.name,
+              nickname: account.nickname || '',
+              mask: account.mask || '0000',
               balance: String(account.balance),
               creditLimit: account.creditLimit == null ? '' : String(account.creditLimit),
+              statementBalance: account.statementBalance == null ? '' : String(account.statementBalance),
+              apr: account.apr == null ? '' : String(account.apr),
+              monthlyPayment: account.monthlyPayment == null ? '' : String(account.monthlyPayment),
+              rewardsPoints: account.rewardsPoints == null ? '' : String(account.rewardsPoints),
               locked: !!account.locked,
-              autopay: !!account.autopay,
+              autopay: !!aBool(account.autopay),
+              isPrimary: !!account.isPrimary,
+              favorite: !!account.favorite,
+              hidden: !!account.hidden,
             };
-            const dotColor = ACCOUNT_TYPE_COLORS[account.type] || '#0060F0';
+            const hasCardArt = account.type === 'checking' || account.type === 'credit-card';
+            const isCard = account.type === 'credit-card';
+            const isLoan = account.type === 'auto-loan' || account.type === 'mortgage';
+
+            function aBool(v?: boolean) {
+              return !!v;
+            }
+
+            const exportStatement = () => {
+              downloadCsv(
+                `${selectedUser.username}-${account.type}-${account.mask}-statement.csv`,
+                ['Date', 'Description', 'Category', 'Status', 'Amount'],
+                (account.transactions || []).map((t) => [
+                  t.date.slice(0, 10),
+                  t.description,
+                  t.category,
+                  t.status,
+                  t.amount,
+                ])
+              );
+            };
+
+            const replaceCard = async () => {
+              const newMask = String(Math.floor(1000 + Math.random() * 9000));
+              await onSaveAccount(account.id, {
+                name: draft.name,
+                nickname: draft.nickname,
+                mask: newMask,
+                balance: Number(draft.balance),
+                creditLimit: draft.creditLimit === '' ? null : Number(draft.creditLimit),
+                statementBalance: draft.statementBalance === '' ? null : Number(draft.statementBalance),
+                apr: draft.apr === '' ? undefined : Number(draft.apr),
+                monthlyPayment: draft.monthlyPayment === '' ? undefined : Number(draft.monthlyPayment),
+                rewardsPoints: draft.rewardsPoints === '' ? undefined : Number(draft.rewardsPoints),
+                replacedAt: new Date().toISOString(),
+                locked: false,
+                autopay: draft.autopay,
+                isPrimary: draft.isPrimary,
+                favorite: draft.favorite,
+                hidden: draft.hidden,
+              });
+            };
+
             return (
-              <Card key={account.id} className="p-5">
+              <Card key={account.id} className="p-5 border-t-[3px] border-t-[#1A4488]">
+                {/* Authentic Chase Account Header with Card Art / Icon */}
                 <div className="flex items-start justify-between gap-3">
-                  <div className="flex items-start gap-2.5">
+                  <div className="flex items-start gap-3 min-w-0">
                     {!isReadOnly && (
                       <Checkbox
                         checked={selectedAccountIds.includes(account.id)}
@@ -320,34 +463,107 @@ export const AccountsTab: React.FC<AccountsProps> = ({
                               : prev.filter((id) => id !== account.id)
                           )
                         }
-                        className="mt-1"
+                        className="mt-1.5"
                       />
                     )}
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span
-                          className="w-2.5 h-2.5 rounded-full shrink-0"
-                          style={{ backgroundColor: dotColor }}
-                        />
-                        <h4 className="text-[14.5px] font-semibold text-gray-900 dark:text-white">
-                          {account.name}
+                    {hasCardArt ? (
+                      <div className="w-[68px] shrink-0 rounded-[4px] overflow-hidden shadow-sm border border-gray-200">
+                        <ChaseCardImage product={cardProductFor(account.name, account.type)} />
+                      </div>
+                    ) : (
+                      <div className="w-11 h-11 rounded-lg bg-[#F2F6FB] border border-[#CFE0F0] flex items-center justify-center shrink-0">
+                        <ChaseIcon name={iconForAccountType(account.type)} size={24} />
+                      </div>
+                    )}
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <h4 className="text-[15px] font-semibold text-[#1A4488] dark:text-blue-300 truncate">
+                          {account.nickname ? `${account.nickname} (${account.name})` : account.name}
                         </h4>
                       </div>
-                      <p className="text-[11.5px] text-gray-500 dark:text-gray-400 mt-0.5">
-                        •••• {account.mask} · {(account.transactions || []).length} ledger entries
+                      <p className="text-[12px] text-gray-500 dark:text-gray-400 mt-0.5">
+                        •••• {account.mask} · {(account.transactions || []).length} transactions
+                        {account.rewardsPoints ? ` · ${account.rewardsPoints.toLocaleString()} pts` : ''}
+                      </p>
+                      <p className="text-[20px] font-light tracking-tight text-gray-900 dark:text-white mt-1 tabular-nums">
+                        {fmtMoneyFull(account.balance)}
+                        <span className="ml-2 text-[11px] font-normal text-gray-500">
+                          {isCard ? 'Current balance' : isLoan ? 'Principal balance' : 'Available balance'}
+                        </span>
                       </p>
                     </div>
                   </div>
-                  <div className="flex items-center gap-1.5">
-                    {account.locked && <Badge tone="warning">Locked</Badge>}
-                    <Badge tone="primary">{account.type}</Badge>
+                  <div className="flex flex-col items-end gap-1.5 shrink-0">
+                    <div className="flex items-center gap-1">
+                      {account.isPrimary && <Badge tone="info">Primary</Badge>}
+                      {account.locked && <Badge tone="warning">Locked</Badge>}
+                      {account.hidden && <Badge tone="neutral">Hidden</Badge>}
+                      <Badge tone="primary">{account.type}</Badge>
+                    </div>
                   </div>
                 </div>
 
-                <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                  <label className="block">
-                    <span className="block text-[11px] font-medium text-gray-500 dark:text-gray-400 mb-1">
-                      Account Name
+                {/* Quick Money Actions Row (Credit/Deposit, Debit/Charge, Statement CSV, Replace Card) */}
+                <div className="mt-3.5 pt-3 border-t border-gray-100 dark:border-gray-800 flex flex-wrap items-center gap-2">
+                  {!isReadOnly && (
+                    <>
+                      <Btn
+                        variant="secondary"
+                        size="xs"
+                        disabled={busy}
+                        onClick={() => {
+                          setAdjustAcctId(account.id);
+                          setAdjustDirection('credit');
+                          setAdjustMemo(
+                            isCard
+                              ? 'Payment Thank You — Mobile'
+                              : isLoan
+                              ? 'Principal Reduction Payment'
+                              : 'Direct Deposit — Payroll Credit'
+                          );
+                          setAdjustCategory(isCard || isLoan ? 'Payment' : 'Income');
+                        }}
+                      >
+                        <ArrowDownLeft className="w-3.5 h-3.5 text-emerald-600" />
+                        {isCard || isLoan ? 'Post Credit / Payment' : 'Deposit / Credit Funds'}
+                      </Btn>
+                      <Btn
+                        variant="secondary"
+                        size="xs"
+                        disabled={busy}
+                        onClick={() => {
+                          setAdjustAcctId(account.id);
+                          setAdjustDirection('debit');
+                          setAdjustMemo(isCard ? 'Card Purchase Adjustment' : 'Account Debit Adjustment');
+                          setAdjustCategory(isCard ? 'Shopping' : 'Bills');
+                        }}
+                      >
+                        <ArrowUpRight className="w-3.5 h-3.5 text-rose-600" />
+                        {isCard ? 'Post Purchase / Charge' : 'Debit / Withdraw'}
+                      </Btn>
+                      {hasCardArt && (
+                        <Btn
+                          variant="ghost"
+                          size="xs"
+                          disabled={busy}
+                          onClick={() => void replaceCard()}
+                          title="Issue replacement card with new 4-digit mask"
+                        >
+                          <CreditCard className="w-3.5 h-3.5" /> Replace Card
+                        </Btn>
+                      )}
+                    </>
+                  )}
+                  <Btn variant="ghost" size="xs" onClick={exportStatement}>
+                    <Download className="w-3.5 h-3.5" /> Statement CSV
+                  </Btn>
+                </div>
+
+                {/* Editable Account Parameters */}
+                <div className="mt-3.5 grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+                  <label className="block col-span-2 sm:col-span-1">
+                    <span className="block text-[10.5px] font-semibold text-gray-500 dark:text-gray-400 mb-1">
+                      Product Name
                     </span>
                     <TextInput
                       value={draft.name}
@@ -360,7 +576,37 @@ export const AccountsTab: React.FC<AccountsProps> = ({
                     />
                   </label>
                   <label className="block">
-                    <span className="block text-[11px] font-medium text-gray-500 dark:text-gray-400 mb-1">
+                    <span className="block text-[10.5px] font-semibold text-gray-500 dark:text-gray-400 mb-1">
+                      Dashboard Nickname
+                    </span>
+                    <TextInput
+                      placeholder="Optional nickname"
+                      value={draft.nickname}
+                      onChange={(e) =>
+                        setDrafts((prev) => ({
+                          ...prev,
+                          [account.id]: { ...draft, nickname: e.target.value },
+                        }))
+                      }
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="block text-[10.5px] font-semibold text-gray-500 dark:text-gray-400 mb-1">
+                      Last 4 Digits
+                    </span>
+                    <TextInput
+                      maxLength={4}
+                      value={draft.mask}
+                      onChange={(e) =>
+                        setDrafts((prev) => ({
+                          ...prev,
+                          [account.id]: { ...draft, mask: e.target.value.replace(/\D/g, '').slice(0, 4) },
+                        }))
+                      }
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="block text-[10.5px] font-semibold text-gray-500 dark:text-gray-400 mb-1">
                       Balance ($)
                     </span>
                     <TextInput
@@ -376,27 +622,92 @@ export const AccountsTab: React.FC<AccountsProps> = ({
                     />
                   </label>
                   <label className="block">
-                    <span className="block text-[11px] font-medium text-gray-500 dark:text-gray-400 mb-1">
-                      Credit Limit ($)
+                    <span className="block text-[10.5px] font-semibold text-gray-500 dark:text-gray-400 mb-1">
+                      {isCard ? 'Credit Limit ($)' : isLoan ? 'Monthly Payment ($)' : 'APR / APY (%)'}
                     </span>
-                    <TextInput
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      placeholder="N/A"
-                      value={draft.creditLimit}
-                      onChange={(e) =>
-                        setDrafts((prev) => ({
-                          ...prev,
-                          [account.id]: { ...draft, creditLimit: e.target.value },
-                        }))
-                      }
-                    />
+                    {isCard ? (
+                      <TextInput
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        placeholder="15000"
+                        value={draft.creditLimit}
+                        onChange={(e) =>
+                          setDrafts((prev) => ({
+                            ...prev,
+                            [account.id]: { ...draft, creditLimit: e.target.value },
+                          }))
+                        }
+                      />
+                    ) : isLoan ? (
+                      <TextInput
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        placeholder="1850"
+                        value={draft.monthlyPayment}
+                        onChange={(e) =>
+                          setDrafts((prev) => ({
+                            ...prev,
+                            [account.id]: { ...draft, monthlyPayment: e.target.value },
+                          }))
+                        }
+                      />
+                    ) : (
+                      <TextInput
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        placeholder="4.10"
+                        value={draft.apr}
+                        onChange={(e) =>
+                          setDrafts((prev) => ({
+                            ...prev,
+                            [account.id]: { ...draft, apr: e.target.value },
+                          }))
+                        }
+                      />
+                    )}
+                  </label>
+                  <label className="block">
+                    <span className="block text-[10.5px] font-semibold text-gray-500 dark:text-gray-400 mb-1">
+                      {isCard ? 'Ultimate Rewards® Pts' : 'APR (%)'}
+                    </span>
+                    {isCard ? (
+                      <TextInput
+                        type="number"
+                        min="0"
+                        step="1"
+                        placeholder="65000"
+                        value={draft.rewardsPoints}
+                        onChange={(e) =>
+                          setDrafts((prev) => ({
+                            ...prev,
+                            [account.id]: { ...draft, rewardsPoints: e.target.value },
+                          }))
+                        }
+                      />
+                    ) : (
+                      <TextInput
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        placeholder="5.25"
+                        value={draft.apr}
+                        onChange={(e) =>
+                          setDrafts((prev) => ({
+                            ...prev,
+                            [account.id]: { ...draft, apr: e.target.value },
+                          }))
+                        }
+                      />
+                    )}
                   </label>
                 </div>
 
+                {/* Account Flags & Save Footer */}
                 <div className="mt-4 pt-3 border-t border-gray-100 dark:border-gray-800 flex flex-wrap items-center justify-between gap-3">
-                  <div className="flex items-center gap-4 text-[12.5px] text-gray-600 dark:text-gray-300">
+                  <div className="flex flex-wrap items-center gap-3.5 text-[12px] text-gray-600 dark:text-gray-300">
                     <label className="inline-flex items-center gap-1.5 cursor-pointer">
                       <Checkbox
                         checked={draft.locked}
@@ -407,7 +718,7 @@ export const AccountsTab: React.FC<AccountsProps> = ({
                           }))
                         }
                       />
-                      Card / Acct Locked
+                      Locked
                     </label>
                     <label className="inline-flex items-center gap-1.5 cursor-pointer">
                       <Checkbox
@@ -419,7 +730,43 @@ export const AccountsTab: React.FC<AccountsProps> = ({
                           }))
                         }
                       />
-                      Autopay On
+                      Autopay
+                    </label>
+                    <label className="inline-flex items-center gap-1.5 cursor-pointer">
+                      <Checkbox
+                        checked={draft.isPrimary}
+                        onChange={(e) =>
+                          setDrafts((prev) => ({
+                            ...prev,
+                            [account.id]: { ...draft, isPrimary: e.target.checked },
+                          }))
+                        }
+                      />
+                      Primary
+                    </label>
+                    <label className="inline-flex items-center gap-1.5 cursor-pointer">
+                      <Checkbox
+                        checked={draft.favorite}
+                        onChange={(e) =>
+                          setDrafts((prev) => ({
+                            ...prev,
+                            [account.id]: { ...draft, favorite: e.target.checked },
+                          }))
+                        }
+                      />
+                      Favorite
+                    </label>
+                    <label className="inline-flex items-center gap-1.5 cursor-pointer">
+                      <Checkbox
+                        checked={draft.hidden}
+                        onChange={(e) =>
+                          setDrafts((prev) => ({
+                            ...prev,
+                            [account.id]: { ...draft, hidden: e.target.checked },
+                          }))
+                        }
+                      />
+                      Hidden
                     </label>
                   </div>
                   {!isReadOnly && (
@@ -431,15 +778,27 @@ export const AccountsTab: React.FC<AccountsProps> = ({
                         onClick={() =>
                           void onSaveAccount(account.id, {
                             name: draft.name,
+                            nickname: draft.nickname,
+                            mask: draft.mask.length === 4 ? draft.mask : account.mask,
                             balance: Number(draft.balance),
                             creditLimit:
                               draft.creditLimit === '' ? null : Number(draft.creditLimit),
+                            statementBalance:
+                              isCard ? Number(draft.balance) : undefined,
+                            apr: draft.apr === '' ? undefined : Number(draft.apr),
+                            monthlyPayment:
+                              draft.monthlyPayment === '' ? undefined : Number(draft.monthlyPayment),
+                            rewardsPoints:
+                              draft.rewardsPoints === '' ? undefined : Number(draft.rewardsPoints),
                             locked: draft.locked,
                             autopay: draft.autopay,
+                            isPrimary: draft.isPrimary,
+                            favorite: draft.favorite,
+                            hidden: draft.hidden,
                           })
                         }
                       >
-                        <Check className="w-3.5 h-3.5" /> Save
+                        <Check className="w-3.5 h-3.5" /> Save Account
                       </Btn>
                       <Btn
                         variant="danger"
@@ -457,6 +816,81 @@ export const AccountsTab: React.FC<AccountsProps> = ({
           })}
         </div>
       )}
+
+      {/* Quick Deposit / Credit / Debit Modal */}
+      <Modal
+        open={!!adjustAcctId}
+        onClose={() => setAdjustAcctId(null)}
+        title={
+          adjustDirection === 'credit'
+            ? 'Post Deposit / Credit & Reconcile Balance'
+            : 'Post Debit / Charge & Reconcile Balance'
+        }
+        footer={
+          <>
+            <Btn variant="secondary" onClick={() => setAdjustAcctId(null)}>
+              Cancel
+            </Btn>
+            <Btn type="submit" form="quick-adjust-form" variant="primary" disabled={busy}>
+              {busy ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+              Post to Ledger &amp; Update Balance
+            </Btn>
+          </>
+        }
+      >
+        <form id="quick-adjust-form" onSubmit={handleQuickAdjustSubmit} className="space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <label className="block">
+              <span className="block text-[11.5px] font-semibold text-gray-700 mb-1">Direction</span>
+              <SelectInput
+                value={adjustDirection}
+                onChange={(e) => setAdjustDirection(e.target.value as 'credit' | 'debit')}
+                className="w-full"
+              >
+                <option value="credit">Credit / Deposit / Payment</option>
+                <option value="debit">Debit / Withdrawal / Charge</option>
+              </SelectInput>
+            </label>
+            <label className="block">
+              <span className="block text-[11.5px] font-semibold text-gray-700 mb-1">Amount ($)</span>
+              <TextInput
+                type="number"
+                min="0.01"
+                step="0.01"
+                value={adjustAmount}
+                onChange={(e) => setAdjustAmount(e.target.value)}
+                required
+              />
+            </label>
+          </div>
+          <label className="block">
+            <span className="block text-[11.5px] font-semibold text-gray-700 mb-1">
+              Statement Description / Memo
+            </span>
+            <TextInput
+              value={adjustMemo}
+              onChange={(e) => setAdjustMemo(e.target.value)}
+              required
+            />
+          </label>
+          <label className="block">
+            <span className="block text-[11.5px] font-semibold text-gray-700 mb-1">Category</span>
+            <SelectInput
+              value={adjustCategory}
+              onChange={(e) => setAdjustCategory(e.target.value)}
+              className="w-full"
+            >
+              {['Income', 'Payment', 'Deposit', 'Transfer', 'Zelle', 'Wire', 'Shopping', 'Dining', 'Travel', 'Bills', 'Other'].map(
+                (c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                )
+              )}
+            </SelectInput>
+          </label>
+        </form>
+      </Modal>
 
       {/* Bulk Delete Accounts Modal */}
       <Modal

@@ -9,6 +9,7 @@ export type AdminTab =
   | 'accounts'
   | 'transactions'
   | 'operations'
+  | 'wealth'
   | 'audit'
   | 'settings';
 
@@ -20,10 +21,13 @@ export interface AdminUserRow {
   fullName: string;
   email: string;
   status: 'active' | 'suspended';
+  creditScore?: number;
   createdAt: string;
   accountCount: number;
+  transactionCount?: number;
   depositBalance: number;
   cardBalance: number;
+  loanBalance?: number;
 }
 
 export interface AdminMetrics {
@@ -72,6 +76,7 @@ export interface GlobalDispute {
   fullName: string;
   transactionId: string;
   accountId: string;
+  accountName?: string;
   description: string;
   amount: number;
   reason: string;
@@ -83,8 +88,14 @@ export interface GlobalDispute {
 export interface OverviewAnalytics {
   range: CashflowRange;
   cashflow: { label: string; inflow: number; outflow: number }[];
-  accountMix: { type: string; label: string; count: number; balance: number }[];
+  accountMix: { type: string; label: string; count: number; balance: number; totalBalance?: number }[];
   categorySpend: { category: string; amount: number; count: number }[];
+  categories?: { category: string; total: number; count: number }[];
+  credit?: {
+    totalCreditBalance: number;
+    totalCreditLimit: number;
+    utilizationPct: number;
+  };
   monthlyInflow: number;
   monthlyOutflow: number;
   monthlyTarget: number;
@@ -95,10 +106,14 @@ export interface OverviewAnalytics {
     uptimeSeconds: number;
     rssMb: number;
     heapUsedMb: number;
+    memoryMb?: { rss: number; heapUsed: number; heapTotal: number };
     activeCustomerSessions: number;
+    activeUserSessions?: number;
     activeAdminSessions: number;
+    revokedSessionCount?: number;
     auditCount: number;
     dbSizeBytes: number;
+    db?: { path: string; sizeBytes: number; mtimeMs: number };
   };
 }
 

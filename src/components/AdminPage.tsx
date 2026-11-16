@@ -1,42 +1,36 @@
 /* -------------------------------------------------------------------------- */
-/* Chase Online — Executive Simulator Admin Console (/admin)                  */
-/* Combines full simulator operations (users, accounts, ledger, history       */
-/* generator, transfers, payees, schedules, disputes/refunds, impersonation,  */
-/* staff RBAC, backup/restore) with TailAdmin/Stripe-style analytics & shell. */
+/* Chase Online — Banking Administration & Simulator Console (/admin)         */
+/* Matches the authentic Chase Online user pages (utility strip, #081427      */
+/* dark navy header with ChaseLogo, global search drawer, alerts bell,        */
+/* horizontal underlined nav tabs, and <Footer variant="dashboard" />)        */
+/* while providing full administrative control over every customer feature.   */
 /* -------------------------------------------------------------------------- */
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ArrowDownLeft,
   ArrowLeft,
-  ArrowRightLeft,
-  BarChart3,
-  BookOpenCheck,
-  Command,
+  Bell,
+  Check,
   Eye,
-  FileText,
   LockKeyhole,
-  LogOut,
   Menu,
-  Moon,
-  PanelLeftClose,
-  PanelLeftOpen,
   RefreshCw,
   Search,
-  Settings,
   ShieldCheck,
-  Sparkles,
-  Sun,
+  UserPlus,
   UserRound,
-  Users,
-  WalletCards,
   X,
 } from 'lucide-react';
 import { readAdminToken, writeAdminToken, type AccountType, type User } from '../banking/store';
-import { ChaseOctagon } from './ChaseLogo';
+import { ChaseLogo } from './ChaseLogo';
+import { Footer } from './Footer';
+import { Header } from './Header';
 import { Spinner } from './Loading';
-import { AccountsTab, LedgerTab } from './admin/AccountsLedgerTab';
+import { AccountPatchPayload, AccountsTab, LedgerTab } from './admin/AccountsLedgerTab';
 import { AuditTab, OperationsTab, SettingsTab } from './admin/OperationsSettingsTab';
 import { OverviewTab } from './admin/OverviewTab';
 import { UsersTab } from './admin/UsersTab';
+import { WealthCreditTab } from './admin/WealthCreditTab';
 import {
   AdminAccountRow,
   AdminApiError,
@@ -49,10 +43,28 @@ import {
   OverviewAnalytics,
   SimulatorSettings,
   adminFetch,
+  inputDate,
 } from './admin/types';
-import { Avatar, Badge, Btn, Modal, ToastStack, fmtMoneyFull, pushToast } from './admin/ui';
+import {
+  Avatar,
+  Badge,
+  Btn,
+  Modal,
+  SelectInput,
+  TextInput,
+  ToastStack,
+  fmtMoneyFull,
+  pushToast,
+} from './admin/ui';
+import type { SegmentKey } from '../data/chaseData';
 
-const THEME_KEY = 'chase_admin_dark_v1';
+/* Authentic Chase Online colors sampled from secure.chase.com (same as BankingDashboard) */
+const NAVY = '#081427';
+const BTN_BLUE = '#1A4488';
+const BTN_BLUE_HOVER = '#143669';
+const INK = '#131313';
+const MUTED = '#5C5C5C';
+const LINE = '#E4E6E8';
 
 export const AdminPage: React.FC<{
   initialToken?: string;
@@ -69,24 +81,31 @@ export const AdminPage: React.FC<{
   const [currentAdminUsername, setCurrentAdminUsername] = useState('admin');
   const [adminAccounts, setAdminAccounts] = useState<AdminAccountRow[]>([]);
 
+  // Public header state (for unauthenticated sign-in view)
+  const [publicSegment, setPublicSegment] = useState<SegmentKey>('personal');
+  const [spanishMode, setSpanishMode] = useState(false);
+
   // Sign-in form
   const [loginUser, setLoginUser] = useState('admin');
   const [loginPass, setLoginPass] = useState('chaseadmin123');
+  const [showPass, setShowPass] = useState(false);
   const [loginError, setLoginError] = useState('');
 
-  // Shell UI state
+  // Chase Online shell state (matching BankingDashboard.tsx)
   const [tab, setTab] = useState<AdminTab>('overview');
-  const [collapsed, setCollapsed] = useState(false);
-  const [mobileNavOpen, setMobileNavOpen] = useState(false);
-  const [cmdOpen, setCmdOpen] = useState(false);
-  const [cmdQuery, setCmdQuery] = useState('');
-  const [dark, setDark] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem(THEME_KEY) === '1';
-    } catch {
-      return false;
-    }
-  });
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [alertsOpen, setAlertsOpen] = useState(false);
+  const [alertsRead, setAlertsRead] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // Quick Global Balance Adjustment modal (accessible from sub-bar on any tab)
+  const [quickAdjustOpen, setQuickAdjustOpen] = useState(false);
+  const [quickAcctId, setQuickAcctId] = useState('');
+  const [quickDir, setQuickDir] = useState<'credit' | 'debit'>('credit');
+  const [quickAmt, setQuickAmt] = useState('1000');
+  const [quickMemo, setQuickMemo] = useState('Direct Deposit — Payroll Credit');
 
   // Simulator datasets
   const [range, setRange] = useState<CashflowRange>('12w');
@@ -100,32 +119,32 @@ export const AdminPage: React.FC<{
     allowCustomerPasswordReset: true,
   });
 
-  // Active selected customer for deep inspection across tabs
+  // Active selected customer for deep inspection across all customer tabs
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [userJson, setUserJson] = useState('');
   const [busy, setBusy] = useState(false);
 
   const isReadOnly = currentAdminRole === 'auditor';
+  const t = (en: string, es: string) => (spanishMode ? es : en);
 
-  useEffect(() => {
-    try {
-      localStorage.setItem(THEME_KEY, dark ? '1' : '0');
-    } catch {
-      /* ignore */
-    }
-  }, [dark]);
-
-  // ⌘K / Ctrl+K shortcut
+  // ⌘K / Ctrl+K opens Chase Online global search bar
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
-        setCmdOpen((v) => !v);
+        setSearchOpen((v) => !v);
+        setAlertsOpen(false);
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
+
+  useEffect(() => {
+    if (searchOpen) {
+      window.setTimeout(() => searchInputRef.current?.focus(), 40);
+    }
+  }, [searchOpen]);
 
   const notify = useCallback((kind: 'success' | 'error' | 'info', text: string) => {
     pushToast(kind, text);
@@ -148,6 +167,7 @@ export const AdminPage: React.FC<{
       );
       setSelectedUser(result.user);
       setUserJson(JSON.stringify(result.user, null, 2));
+      setQuickAcctId(result.user.accounts?.[0]?.id || '');
       return result.user;
     },
     [api, token]
@@ -179,7 +199,6 @@ export const AdminPage: React.FC<{
     [api, range, token]
   );
 
-  // Sync initialToken changes from parent App.tsx
   useEffect(() => {
     if (initialToken && initialToken !== token) {
       setToken(initialToken);
@@ -187,7 +206,7 @@ export const AdminPage: React.FC<{
     }
   }, [initialToken, token]);
 
-  // Verify session on mount / token change (also works via HttpOnly cookie when token === '')
+  // Verify session on mount / token change
   useEffect(() => {
     let active = true;
     (async () => {
@@ -217,7 +236,6 @@ export const AdminPage: React.FC<{
         setSimulatorSettings(settingsRes.settings);
         setAdminAccounts(adminsRes.admins);
 
-        // Auto-select Alex Rivera ('chase') or first customer so every tab opens rich & populated
         if (loadedUsers.length > 0) {
           const preferred =
             loadedUsers.find((u) => u.username === 'chase') || loadedUsers[0];
@@ -563,16 +581,7 @@ export const AdminPage: React.FC<{
     }
   };
 
-  const handleSaveAccount = async (
-    accountId: string,
-    patch: {
-      name: string;
-      balance: number;
-      creditLimit: number | null;
-      locked: boolean;
-      autopay: boolean;
-    }
-  ) => {
+  const handleSaveAccount = async (accountId: string, patch: AccountPatchPayload) => {
     if (!selectedUser) return;
     setBusy(true);
     try {
@@ -1116,7 +1125,7 @@ export const AdminPage: React.FC<{
     }
   };
 
-  /* --------------------------- Navigation Config -------------------------- */
+  /* ------------------- Navigation, Search & Alerts Model ------------------ */
 
   const openDisputesCount = useMemo(
     () => (analytics?.disputes || []).filter((d) => d.status === 'open').length,
@@ -1126,675 +1135,1009 @@ export const AdminPage: React.FC<{
   const navItems: {
     id: AdminTab;
     label: string;
-    subtitle: string;
-    icon: React.ReactNode;
-    badge?: string | number;
-    badgeTone?: 'primary' | 'warning' | 'neutral';
+    esLabel: string;
+    badge?: number;
   }[] = [
-    {
-      id: 'overview',
-      label: 'Executive Overview',
-      subtitle: 'KPIs, cashflow velocity, portfolio mix & date-range ledger reports',
-      icon: <BarChart3 className="w-[18px] h-[18px]" />,
-    },
-    {
-      id: 'users',
-      label: 'Users & Simulator',
-      subtitle: 'Customer directory, impersonation, history generator & JSON studio',
-      icon: <Users className="w-[18px] h-[18px]" />,
-      badge: metrics?.users ?? users.length,
-    },
-    {
-      id: 'accounts',
-      label: 'Accounts Portfolio',
-      subtitle: 'Provision, lock/unlock, edit balances & reconcile credit limits',
-      icon: <WalletCards className="w-[18px] h-[18px]" />,
-      badge: metrics?.accounts,
-    },
-    {
-      id: 'transactions',
-      label: 'Ledger Activity',
-      subtitle: 'Global ledger explorer & balance-reconciled entry studio',
-      icon: <FileText className="w-[18px] h-[18px]" />,
-      badge: metrics?.transactions,
-    },
+    { id: 'overview', label: 'Overview', esLabel: 'Resumen' },
+    { id: 'users', label: 'Customers', esLabel: 'Clientes', badge: metrics?.users ?? users.length },
+    { id: 'accounts', label: 'Accounts & cards', esLabel: 'Cuentas y tarjetas', badge: metrics?.accounts },
+    { id: 'transactions', label: 'Ledger & statements', esLabel: 'Movimientos y estados' },
     {
       id: 'operations',
-      label: 'Payments & Disputes',
-      subtitle: 'Transfers, payees, recurring schedules & card chargeback refunds',
-      icon: <ArrowRightLeft className="w-[18px] h-[18px]" />,
+      label: 'Pay, Zelle® & disputes',
+      esLabel: 'Pagos, Zelle® y disputas',
       badge: openDisputesCount > 0 ? openDisputesCount : undefined,
-      badgeTone: 'warning',
     },
-    {
-      id: 'audit',
-      label: 'Admin Audit Log',
-      subtitle: 'Immutable 5,000-entry compliance & operator audit trail',
-      icon: <BookOpenCheck className="w-[18px] h-[18px]" />,
-    },
-    {
-      id: 'settings',
-      label: 'Settings & Backup',
-      subtitle: 'Access guardrails, RBAC staff, JSON backup/restore & telemetry',
-      icon: <Settings className="w-[18px] h-[18px]" />,
-    },
+    { id: 'wealth', label: 'Wealth, rewards & credit', esLabel: 'Inversiones, puntos y crédito' },
+    { id: 'audit', label: 'Audit log', esLabel: 'Auditoría' },
+    { id: 'settings', label: 'Settings & backup', esLabel: 'Configuración y respaldo' },
   ];
 
-  const activeNav = navItems.find((n) => n.id === tab) || navItems[0];
+  // Live Alerts (identical pattern to BankingDashboard.tsx)
+  const adminAlerts = useMemo(() => {
+    const list: { id: string; title: string; detail: string; action: () => void }[] = [];
+    for (const d of (analytics?.disputes || []).filter((x) => x.status === 'open').slice(0, 4)) {
+      list.push({
+        id: `disp-${d.id}`,
+        title: `Open card dispute · ${fmtMoneyFull(d.amount)}`,
+        detail: `${d.fullName} (@${d.username}) — ${d.description}: ${d.reason}`,
+        action: () => {
+          void selectUserAndMaybeGo(d.userId, 'operations');
+        },
+      });
+    }
+    for (const u of users.filter((x) => x.status === 'suspended')) {
+      list.push({
+        id: `susp-${u.id}`,
+        title: `Suspended profile · ${u.fullName}`,
+        detail: `@${u.username} currently has API sign-in suspended.`,
+        action: () => {
+          void selectUserAndMaybeGo(u.id, 'users');
+        },
+      });
+    }
+    const pendingCount = globalTransactions.filter((tx) => tx.status === 'pending').length;
+    if (pendingCount > 0) {
+      list.push({
+        id: 'pending-tx',
+        title: `${pendingCount} pending ledger authorization${pendingCount === 1 ? '' : 's'}`,
+        detail: 'Review or settle pending transactions in Ledger & statements.',
+        action: () => setTab('transactions'),
+      });
+    }
+    return list;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [analytics, users, globalTransactions]);
+
+  const unreadAlerts = alertsRead ? 0 : adminAlerts.length;
+
+  // Global Chase Online search results across sections, customers, disputes, and transactions
+  const searchResults = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return [];
+    const results: {
+      key: string;
+      type: string;
+      label: string;
+      detail: string;
+      action: () => void;
+    }[] = [];
+
+    for (const item of navItems) {
+      if (item.label.toLowerCase().includes(q)) {
+        results.push({
+          key: `nav-${item.id}`,
+          type: 'Section',
+          label: item.label,
+          detail: 'Admin Console tab',
+          action: () => setTab(item.id),
+        });
+      }
+    }
+
+    for (const u of users) {
+      if (`${u.fullName} ${u.username} ${u.email}`.toLowerCase().includes(q)) {
+        results.push({
+          key: `u-${u.id}`,
+          type: 'Customer',
+          label: `${u.fullName} (@${u.username})`,
+          detail: `${u.accountCount} accounts · Deposits ${fmtMoneyFull(u.depositBalance)} · Credit ${u.creditScore ?? 750}`,
+          action: () => void selectUserAndMaybeGo(u.id, 'users'),
+        });
+      }
+      if (results.length >= 8) break;
+    }
+
+    for (const tx of globalTransactions) {
+      if (`${tx.description} ${tx.category} ${tx.username} ${tx.accountName}`.toLowerCase().includes(q)) {
+        results.push({
+          key: `tx-${tx.id}`,
+          type: 'Transaction',
+          label: tx.description,
+          detail: `${tx.fullName} · ${tx.accountName} · ${fmtMoneyFull(tx.amount)}`,
+          action: () => void selectUserAndMaybeGo(tx.userId, 'transactions'),
+        });
+      }
+      if (results.length >= 12) break;
+    }
+
+    return results.slice(0, 10);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchQuery, users, globalTransactions]);
+
+  const handleFooterAction = (actionId: string) => {
+    const map: Record<string, AdminTab> = {
+      'footer-accounts': 'accounts',
+      'footer-pay': 'operations',
+      'footer-statements': 'transactions',
+      'footer-security': 'wealth',
+      'footer-budgeting': 'overview',
+      'footer-offers': 'wealth',
+      'footer-advisors': 'wealth',
+      'footer-locations': 'overview',
+    };
+    if (map[actionId]) {
+      setTab(map[actionId]);
+      return;
+    }
+    if (actionId === 'admin-login') return;
+    onExit();
+  };
 
   /* ------------------------- Unauthenticated Gate ------------------------- */
 
   if (checkingAuth && !authenticated) {
     return (
-      <div className="min-h-screen bg-[#071A3A] text-white flex flex-col items-center justify-center gap-3">
+      <div className="min-h-screen flex flex-col items-center justify-center gap-3 text-white" style={{ backgroundColor: NAVY }}>
         <Spinner size="md" tone="white" />
-        <p className="text-[13.5px] text-blue-100/80">Verifying Chase Administrator session…</p>
+        <p className="text-[13.5px] text-white/80">Verifying Chase Online Administrator session…</p>
       </div>
     );
   }
 
   if (!authenticated) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-[#061531] via-[#0B234E] to-[#113674] flex items-center justify-center px-4 py-10">
-        <div className="w-full max-w-[460px] rounded-2xl bg-white shadow-[0_28px_80px_rgba(0,10,30,0.45)] border border-white/20 p-7 sm:p-8">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2.5">
-              <ChaseOctagon size={28} color="#005EB8" />
-              <div>
-                <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-[#005EB8]">
-                  Chase Online
-                </p>
-                <p className="text-[12px] text-gray-500">Operations Control Center</p>
+      <div className="min-h-screen flex flex-col bg-white text-[#131313]">
+        {/* Authentic Chase.com 3-Row Public Header */}
+        <Header
+          activeSegment={publicSegment}
+          onSegmentChange={setPublicSegment}
+          onAction={(actionId) => {
+            if (actionId === 'admin-login') return;
+            onExit();
+          }}
+          spanishMode={spanishMode}
+          onToggleSpanish={() => setSpanishMode((s) => !s)}
+          onFocusSignIn={() => undefined}
+          user={null}
+          onGoToDashboard={onExit}
+          onSignOut={onExit}
+        />
+
+        {/* Authentic Chase Blue Sign-In Hero matching HeroSection.tsx */}
+        <main className="flex-1 bg-gradient-to-r from-[#00468B] via-[#005EB8] to-[#08306B] py-12 px-4 sm:px-8">
+          <div className="max-w-[1180px] mx-auto grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
+            {/* Left Copy */}
+            <div className="lg:col-span-7 text-white space-y-4">
+              <p className="inline-flex items-center gap-2 rounded-full bg-white/15 px-3.5 py-1 text-[11.5px] font-bold uppercase tracking-wider">
+                <ShieldCheck className="w-4 h-4" />
+                Chase Online · Operations &amp; Simulator Control
+              </p>
+              <h1 className="text-[32px] sm:text-[42px] font-light leading-tight tracking-tight">
+                {t(
+                  'Complete banking administration in one Chase Online workspace.',
+                  'Administración bancaria completa en un solo espacio de Chase Online.'
+                )}
+              </h1>
+              <p className="text-[15.5px] text-blue-100 max-w-[600px] leading-relaxed">
+                {t(
+                  'Manage customer profiles, checking & Sapphire cards, balance-reconciled ledgers, Zelle® & wire transfers, J.P. Morgan investments, Credit Journey®, and card dispute refunds — or preview any account live as the customer.',
+                  'Administre perfiles de clientes, cuentas y tarjetas Sapphire, libros contables, transferencias Zelle® y cables, inversiones J.P. Morgan y Credit Journey®.'
+                )}
+              </p>
+              <div className="pt-2 flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  onClick={onExit}
+                  className="inline-flex items-center gap-2 rounded-[4px] border border-white/60 bg-white/10 hover:bg-white/20 px-4 py-2.5 text-[13.5px] font-semibold text-white cursor-pointer"
+                >
+                  <ArrowLeft className="w-4 h-4" />
+                  {t('Back to Personal Banking Sign In', 'Volver a Banca Personal')}
+                </button>
               </div>
             </div>
-            <button
-              type="button"
-              onClick={onExit}
-              className="inline-flex items-center gap-1 text-[12.5px] font-semibold text-[#005EB8] hover:underline cursor-pointer"
-            >
-              <ArrowLeft className="w-3.5 h-3.5" />
-              Chase.com
-            </button>
-          </div>
 
-          <h1 className="mt-6 text-[24px] font-bold tracking-tight text-gray-900">
-            Administrator Sign In
-          </h1>
-          <p className="mt-1 text-[13px] text-gray-500">
-            Role-protected console for managing simulated customers, ledgers, disputes, and environment controls.
-          </p>
+            {/* Right Authentic Chase Sign-In Card */}
+            <div className="lg:col-span-5">
+              <div className="bg-white rounded-[8px] shadow-[0_14px_40px_rgba(0,18,50,0.32)] p-6 sm:p-7 text-[#131313] max-w-[420px] lg:ml-auto">
+                <div className="flex items-center justify-between border-b pb-3" style={{ borderColor: LINE }}>
+                  <div className="flex items-center gap-2">
+                    <LockKeyhole className="w-4 h-4" style={{ color: BTN_BLUE }} />
+                    <h2 className="text-[18px] font-semibold" style={{ color: INK }}>
+                      {t('Administrator Sign In', 'Acceso de Administrador')}
+                    </h2>
+                  </div>
+                  <span className="text-[11px] font-semibold px-2 py-0.5 rounded bg-[#EAF2FA]" style={{ color: BTN_BLUE }}>
+                    /admin
+                  </span>
+                </div>
 
-          {loginError && (
-            <p
-              role="alert"
-              className="mt-4 rounded-xl bg-[#FEF2F2] border border-[#F5C2C7] px-3.5 py-2.5 text-[12.5px] text-[#B42318]"
-            >
-              {loginError}
-            </p>
-          )}
+                {loginError && (
+                  <p
+                    role="alert"
+                    className="mt-4 rounded-[4px] bg-[#FEF2F2] border border-[#F5C2C7] px-3 py-2 text-[12.5px] text-[#B42318]"
+                  >
+                    {loginError}
+                  </p>
+                )}
 
-          <form className="mt-5 space-y-4" onSubmit={signIn}>
-            <label className="block">
-              <span className="block text-[12px] font-semibold text-gray-700 mb-1.5">
-                Administrator Username
-              </span>
-              <input
-                autoComplete="username"
-                value={loginUser}
-                onChange={(e) => setLoginUser(e.target.value)}
-                required
-                className="w-full h-10 px-3.5 rounded-lg border border-gray-300 text-[14px] text-gray-900 outline-none focus:border-[#0060F0] focus:ring-2 focus:ring-[#0060F0]/20"
-              />
-            </label>
-            <label className="block">
-              <span className="block text-[12px] font-semibold text-gray-700 mb-1.5">
-                Password
-              </span>
-              <input
-                type="password"
-                autoComplete="current-password"
-                value={loginPass}
-                onChange={(e) => setLoginPass(e.target.value)}
-                required
-                className="w-full h-10 px-3.5 rounded-lg border border-gray-300 text-[14px] text-gray-900 outline-none focus:border-[#0060F0] focus:ring-2 focus:ring-[#0060F0]/20"
-              />
-            </label>
-            <button
-              type="submit"
-              disabled={busy}
-              className="w-full h-10 rounded-lg bg-[#0060F0] hover:bg-[#004EC4] disabled:opacity-60 text-white font-semibold text-[13.5px] inline-flex items-center justify-center gap-2 cursor-pointer shadow-sm"
-            >
-              {busy && <Spinner size="sm" tone="white" />}
-              {busy ? 'Signing in…' : 'Sign in to Admin Console'}
-            </button>
-          </form>
+                <form className="mt-4 space-y-4" onSubmit={signIn}>
+                  <label className="block">
+                    <span className="block text-[12px] font-semibold mb-1" style={{ color: MUTED }}>
+                      {t('Admin username', 'Usuario administrador')}
+                    </span>
+                    <input
+                      autoComplete="username"
+                      value={loginUser}
+                      onChange={(e) => setLoginUser(e.target.value)}
+                      required
+                      className="w-full h-10 px-3 border border-[#8A929A] rounded-[4px] text-[14px] text-[#131313] focus:border-[#1A4488] outline-none"
+                    />
+                  </label>
+                  <label className="block">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-[12px] font-semibold" style={{ color: MUTED }}>
+                        {t('Password', 'Contraseña')}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setShowPass((v) => !v)}
+                        className="text-[12px] font-semibold hover:underline cursor-pointer"
+                        style={{ color: BTN_BLUE }}
+                      >
+                        {showPass ? 'Hide' : 'Show'}
+                      </button>
+                    </div>
+                    <input
+                      type={showPass ? 'text' : 'password'}
+                      autoComplete="current-password"
+                      value={loginPass}
+                      onChange={(e) => setLoginPass(e.target.value)}
+                      required
+                      className="w-full h-10 px-3 border border-[#8A929A] rounded-[4px] text-[14px] text-[#131313] focus:border-[#1A4488] outline-none"
+                    />
+                  </label>
 
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => void signIn(undefined, { username: 'admin', password: 'chaseadmin123' })}
-            className="mt-3 w-full h-10 rounded-lg border border-[#005EB8] bg-[#F2F7FC] hover:bg-[#E4EFFA] text-[#005EB8] font-semibold text-[13px] inline-flex items-center justify-center gap-2 cursor-pointer"
-          >
-            <UserRound className="w-4 h-4" />
-            One-click Chase Admin Sign In
-          </button>
+                  <button
+                    type="submit"
+                    disabled={busy}
+                    className="w-full h-10 rounded-[4px] text-white font-semibold text-[14px] inline-flex items-center justify-center gap-2 cursor-pointer transition-colors disabled:opacity-60"
+                    style={{ backgroundColor: BTN_BLUE }}
+                    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = BTN_BLUE_HOVER)}
+                    onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = BTN_BLUE)}
+                  >
+                    {busy && <Spinner size="sm" tone="white" />}
+                    {busy ? 'Signing in…' : t('Sign in as administrator', 'Iniciar sesión')}
+                  </button>
+                </form>
 
-          <div className="mt-5 rounded-xl bg-gray-50 border border-gray-200 px-3.5 py-3 text-[12px] text-gray-600 leading-relaxed">
-            <div className="flex items-center justify-between font-semibold text-gray-800 mb-1">
-              <span>Root Admin Credentials</span>
-              <span className="font-mono text-[#005EB8]">admin / chaseadmin123</span>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void signIn(undefined, { username: 'admin', password: 'chaseadmin123' })}
+                  className="mt-2.5 w-full h-10 rounded-[4px] border bg-white hover:bg-[#F2F6FB] font-semibold text-[13px] inline-flex items-center justify-center gap-2 cursor-pointer"
+                  style={{ borderColor: BTN_BLUE, color: BTN_BLUE }}
+                >
+                  <UserRound className="w-4 h-4" />
+                  One-click Chase Admin Sign In
+                </button>
+
+                <div
+                  className="mt-4 rounded-[4px] bg-[#F7FAFD] border px-3 py-2.5 text-[12px] leading-relaxed"
+                  style={{ borderColor: '#CFE0F0', color: MUTED }}
+                >
+                  <div>
+                    <strong style={{ color: INK }}>Admin login:</strong>{' '}
+                    <code className="font-mono text-[#1A4488]">admin / chaseadmin123</code>
+                  </div>
+                  <div className="mt-0.5">
+                    <strong style={{ color: INK }}>Customer login:</strong>{' '}
+                    <code className="font-mono">chase / chase123</code> (Alex Rivera on Chase.com)
+                  </div>
+                </div>
+              </div>
             </div>
-            Customer sample login (<code className="font-mono">chase / chase123</code> — Alex Rivera) signs into Personal Banking. All records here are simulated only.
           </div>
-        </div>
+        </main>
+
+        {/* Authentic Chase.com Public Footer */}
+        <Footer
+          variant="public"
+          spanishMode={spanishMode}
+          onAction={(actionId) => {
+            if (actionId === 'admin-login') return;
+            onExit();
+          }}
+          onHome={onExit}
+        />
       </div>
     );
   }
 
-  /* ---------------------------- Authenticated Shell ----------------------- */
+  /* ------------- Authenticated Chase Online Shell (matches User Pages) ---- */
 
-  const renderSidebarContent = (isMobile = false) => (
-    <div className="flex flex-col h-full text-white">
-      {/* Brand header */}
-      <div className="h-16 px-4 flex items-center justify-between border-b border-white/10 shrink-0">
-        <div className="flex items-center gap-2.5 min-w-0">
-          <div className="w-9 h-9 rounded-xl bg-[#0060F0] flex items-center justify-center shrink-0 shadow-sm">
-            <ChaseOctagon size={20} color="#FFFFFF" />
-          </div>
-          {(!collapsed || isMobile) && (
-            <div className="min-w-0">
-              <p className="text-[10.5px] font-bold uppercase tracking-[0.18em] text-blue-200/80">
-                Chase Online
-              </p>
-              <p className="text-[14.5px] font-bold tracking-tight truncate">Admin Simulator</p>
-            </div>
-          )}
-        </div>
-        {isMobile ? (
-          <button
-            type="button"
-            onClick={() => setMobileNavOpen(false)}
-            className="p-1.5 rounded-lg text-blue-100 hover:bg-white/10"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        ) : (
-          <button
-            type="button"
-            onClick={() => setCollapsed((v) => !v)}
-            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-            className="p-1.5 rounded-lg text-blue-200/70 hover:text-white hover:bg-white/10 cursor-pointer"
-          >
-            {collapsed ? (
-              <PanelLeftOpen className="w-4 h-4" />
-            ) : (
-              <PanelLeftClose className="w-4 h-4" />
-            )}
-          </button>
-        )}
-      </div>
-
-      {/* Navigation items */}
-      <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto admin-scroll" aria-label="Admin navigation">
-        {navItems.map((item) => {
-          const active = tab === item.id;
-          return (
-            <button
-              key={item.id}
-              type="button"
-              onClick={() => {
-                setTab(item.id);
-                setMobileNavOpen(false);
-              }}
-              title={collapsed && !isMobile ? item.label : undefined}
-              className={`w-full flex items-center justify-between gap-2.5 rounded-xl px-3 py-2.5 text-[13px] font-medium transition-all cursor-pointer ${
-                active
-                  ? 'bg-[#0060F0] text-white shadow-[0_4px_14px_rgba(0,96,240,0.4)]'
-                  : 'text-slate-300 hover:bg-white/[0.07] hover:text-white'
-              }`}
-            >
-              <span className="flex items-center gap-3 min-w-0">
-                <span className="shrink-0">{item.icon}</span>
-                {(!collapsed || isMobile) && <span className="truncate">{item.label}</span>}
-              </span>
-              {(!collapsed || isMobile) && item.badge !== undefined && (
-                <span
-                  className={`px-2 py-0.5 rounded-full text-[11px] font-semibold tabular-nums ${
-                    active
-                      ? 'bg-white/20 text-white'
-                      : item.badgeTone === 'warning'
-                      ? 'bg-amber-500/20 text-amber-300'
-                      : 'bg-white/10 text-slate-300'
-                  }`}
-                >
-                  {item.badge}
-                </span>
-              )}
-            </button>
-          );
-        })}
-      </nav>
-
-      {/* Operator Footer */}
-      <div className="p-3 border-t border-white/10 space-y-2 shrink-0">
-        {(!collapsed || isMobile) && (
-          <div className="rounded-xl bg-white/[0.06] border border-white/10 p-3">
-            <div className="flex items-center gap-2.5">
-              <Avatar name={adminName} size={32} />
-              <div className="min-w-0">
-                <p className="text-[13px] font-semibold text-white truncate">{adminName}</p>
-                <p className="text-[11px] text-blue-200/80 truncate">
-                  @{currentAdminUsername} · {isReadOnly ? 'Auditor (RO)' : 'Full Admin'}
-                </p>
-              </div>
-            </div>
-          </div>
-        )}
-        <div className={`flex ${collapsed && !isMobile ? 'flex-col' : 'items-center'} gap-1.5`}>
-          <button
-            type="button"
-            onClick={onExit}
-            title="Return to Chase.com"
-            className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-lg border border-white/15 bg-white/5 hover:bg-white/10 px-2.5 py-2 text-[12px] font-medium text-slate-200 cursor-pointer"
-          >
-            <ArrowLeft className="w-3.5 h-3.5" />
-            {(!collapsed || isMobile) && <span>Chase.com</span>}
-          </button>
-          <button
-            type="button"
-            onClick={() => void signOut()}
-            title="Sign out of Admin Console"
-            className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-red-400/25 bg-red-500/10 hover:bg-red-500/20 px-2.5 py-2 text-[12px] font-medium text-red-200 cursor-pointer"
-          >
-            <LogOut className="w-3.5 h-3.5" />
-            {(!collapsed || isMobile) && <span>Sign out</span>}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
+  const selectedUserDeposits = selectedUser
+    ? selectedUser.accounts
+        .filter((a) => ['checking', 'savings', 'cd'].includes(a.type))
+        .reduce((s, a) => s + Number(a.balance || 0), 0)
+    : 0;
+  const selectedUserCards = selectedUser
+    ? selectedUser.accounts
+        .filter((a) => a.type === 'credit-card')
+        .reduce((s, a) => s + Number(a.balance || 0), 0)
+    : 0;
 
   return (
-    <div className={dark ? 'dark' : ''}>
-      <div className="min-h-screen flex bg-[#F4F6FA] dark:bg-[#0B1424] text-gray-900 dark:text-gray-100">
-        {/* Desktop Sidebar */}
-        <aside
-          className={`hidden lg:flex flex-col shrink-0 bg-gradient-to-b from-[#071A3A] via-[#0A2148] to-[#0E2A5C] transition-all duration-200 sticky top-0 h-screen ${
-            collapsed ? 'w-[74px]' : 'w-[264px]'
-          }`}
-        >
-          {renderSidebarContent(false)}
-        </aside>
-
-        {/* Mobile Sidebar Drawer */}
-        {mobileNavOpen && (
-          <div className="fixed inset-0 z-[95] lg:hidden">
-            <div
-              className="absolute inset-0 bg-black/60"
-              onClick={() => setMobileNavOpen(false)}
-            />
-            <aside className="relative w-[272px] h-full bg-gradient-to-b from-[#071A3A] to-[#0E2A5C] shadow-2xl">
-              {renderSidebarContent(true)}
-            </aside>
+    <div className="min-h-screen flex flex-col bg-[#F5F7FA] text-[#131313]">
+      {/* 1. Top Chase Online Utility Strip — identical to BankingDashboard.tsx */}
+      <div className="bg-[#F4F5F6] border-b border-[#E4E6E8]">
+        <div className="max-w-[1380px] mx-auto px-4 sm:px-8 h-[30px] flex items-center justify-between gap-3 text-[11.5px] text-[#5C5C5C]">
+          <span className="hidden sm:inline-flex items-center gap-1.5 font-medium">
+            <ShieldCheck className="w-3.5 h-3.5 text-[#1A4488]" />
+            Chase Online Administration · Simulated Banking Environment
+          </span>
+          <div className="flex items-center gap-3 ml-auto">
+            <button type="button" onClick={onExit} className="hover:underline cursor-pointer">
+              {t('Chase.com', 'Chase.com')}
+            </button>
+            <span className="text-[#C9CDD1]">|</span>
+            {selectedUser && !isReadOnly && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => void impersonateById(selectedUser.id, selectedUser.fullName)}
+                  className="font-semibold text-[#1A4488] hover:underline cursor-pointer"
+                >
+                  {t(`Preview ${selectedUser.fullName.split(' ')[0]}’s Banking`, `Ver banca de ${selectedUser.fullName.split(' ')[0]}`)}
+                </button>
+                <span className="text-[#C9CDD1]">|</span>
+              </>
+            )}
+            <button type="button" onClick={() => setTab('audit')} className="hover:underline cursor-pointer">
+              {t('Security & audit', 'Seguridad y auditoría')}
+            </button>
+            <span className="text-[#C9CDD1]">|</span>
+            <button
+              type="button"
+              onClick={() => setSpanishMode((s) => !s)}
+              className="hover:underline cursor-pointer"
+            >
+              {spanishMode ? 'English' : 'Español'}
+            </button>
           </div>
-        )}
+        </div>
+      </div>
 
-        {/* Main Workspace */}
-        <div className="flex-1 flex flex-col min-w-0">
-          {/* Sticky Topbar */}
-          <header className="sticky top-0 z-30 bg-white/90 dark:bg-[#0F1B2E]/90 backdrop-blur border-b border-gray-200 dark:border-gray-800 px-4 sm:px-6 h-16 flex items-center justify-between gap-3">
+      {/* 2. Authentic Chase Online Dark Navy Header (#081427) — identical to BankingDashboard.tsx */}
+      <header style={{ backgroundColor: NAVY }} className="text-white sticky top-0 z-40 shadow-sm">
+        <div className="max-w-[1380px] mx-auto px-4 sm:px-8">
+          <div className="h-[58px] flex items-center justify-between gap-4">
             <div className="flex items-center gap-3 min-w-0">
               <button
                 type="button"
-                onClick={() => setMobileNavOpen(true)}
-                aria-label="Open navigation"
-                className="lg:hidden p-2 rounded-lg text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-white/10"
+                onClick={() => setTab('overview')}
+                aria-label="Chase Administration home"
+                className="shrink-0 cursor-pointer"
               >
-                <Menu className="w-5 h-5" />
+                <ChaseLogo variant="white" />
               </button>
-              <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <h1 className="text-[16.5px] sm:text-[18px] font-bold text-gray-900 dark:text-white truncate">
-                    {activeNav.label}
-                  </h1>
-                  <Badge tone={isReadOnly ? 'warning' : 'primary'}>
-                    {isReadOnly ? 'Read-Only Auditor' : 'Simulator Mode'}
-                  </Badge>
-                </div>
-                <p className="hidden sm:block text-[12px] text-gray-500 dark:text-gray-400 truncate">
-                  {activeNav.subtitle}
-                </p>
-              </div>
+              <span className="hidden sm:inline-block h-4 w-px bg-white/25" />
+              <span className="hidden sm:inline-block text-[12px] font-semibold tracking-wide uppercase text-blue-200 truncate">
+                {isReadOnly ? 'Auditor Console (Read-Only)' : 'Operations & Simulator'}
+              </span>
             </div>
 
-            <div className="flex items-center gap-2 shrink-0">
-              {/* Quick ⌘K Search Trigger */}
+            <div className="flex items-center gap-2 sm:gap-3.5">
+              {/* Mobile hamburger */}
               <button
                 type="button"
-                onClick={() => setCmdOpen(true)}
-                className="hidden md:inline-flex items-center gap-2.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-white/5 hover:border-[#0060F0] px-3 py-1.5 text-[12.5px] text-gray-500 dark:text-gray-400 cursor-pointer"
+                onClick={() => setMobileMenuOpen((v) => !v)}
+                aria-label={mobileMenuOpen ? 'Close menu' : 'Open menu'}
+                className="lg:hidden p-2 hover:bg-white/10 rounded cursor-pointer"
               >
-                <Search className="w-3.5 h-3.5" />
-                <span>Jump to user or tool…</span>
-                <kbd className="rounded bg-white dark:bg-white/10 border border-gray-200 dark:border-gray-700 px-1.5 py-0.5 text-[10.5px] font-mono">
+                {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+              </button>
+
+              {/* Global Search button (matches BankingDashboard) */}
+              <button
+                type="button"
+                onClick={() => {
+                  setSearchOpen((v) => !v);
+                  setAlertsOpen(false);
+                }}
+                aria-label="Search customers, accounts, transactions, or sections"
+                className="inline-flex items-center gap-2 px-2.5 py-1.5 hover:bg-white/10 rounded cursor-pointer text-[12.5px]"
+              >
+                <Search className="w-[17px] h-[17px]" />
+                <span className="hidden xl:inline text-white/80">Search</span>
+                <kbd className="hidden xl:inline rounded bg-white/10 px-1.5 py-0.5 text-[10px] font-mono text-white/75">
                   ⌘K
                 </kbd>
               </button>
 
-              {/* Active Customer Context Pill */}
-              {selectedUser && (
-                <div className="hidden xl:flex items-center gap-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50/80 dark:bg-white/5 pl-2.5 pr-1.5 py-1">
-                  <Avatar name={selectedUser.fullName} size={24} />
-                  <span className="text-[12px] font-semibold text-gray-800 dark:text-gray-200 max-w-[130px] truncate">
-                    {selectedUser.fullName}
-                  </span>
-                  {!isReadOnly && (
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() => void impersonateById(selectedUser.id, selectedUser.fullName)}
-                      className="inline-flex items-center gap-1 rounded-lg bg-[#0060F0] hover:bg-[#004EC4] text-white px-2 py-1 text-[11px] font-semibold cursor-pointer"
-                      title={`Preview banking dashboard as ${selectedUser.fullName}`}
-                    >
-                      <Eye className="w-3 h-3" />
-                      Preview
-                    </button>
+              {/* Alerts Bell with Unread Badge (matches BankingDashboard) */}
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAlertsOpen((v) => !v);
+                    setSearchOpen(false);
+                  }}
+                  aria-label={unreadAlerts ? `Alerts, ${unreadAlerts} unread` : 'Alerts'}
+                  className="relative p-2 hover:bg-white/10 rounded cursor-pointer"
+                >
+                  <Bell className="w-[17px] h-[17px]" />
+                  {unreadAlerts > 0 && (
+                    <span className="absolute top-1 right-1 min-w-[15px] h-[15px] px-0.5 rounded-full bg-[#D92D20] text-white text-[9px] font-bold flex items-center justify-center">
+                      {unreadAlerts}
+                    </span>
                   )}
-                </div>
-              )}
+                </button>
 
-              <Btn
-                variant="secondary"
-                size="xs"
-                disabled={busy}
-                onClick={() =>
-                  loadData()
-                    .then(() => notify('info', 'Simulator metrics & ledgers refreshed.'))
-                    .catch((e) => notify('error', e.message))
-                }
-                title="Refresh simulator data"
-              >
-                <RefreshCw className={`w-3.5 h-3.5 ${busy ? 'animate-spin' : ''}`} />
-                <span className="hidden sm:inline">Refresh</span>
-              </Btn>
+                {alertsOpen && (
+                  <div
+                    className="absolute right-0 top-[42px] w-[min(380px,calc(100vw-32px))] bg-white text-[#131313] border rounded-[6px] shadow-[0_16px_40px_rgba(0,20,50,0.25)] z-50 overflow-hidden"
+                    style={{ borderColor: LINE }}
+                  >
+                    <div
+                      className="px-4 py-3 border-b flex items-center justify-between"
+                      style={{ borderColor: LINE }}
+                    >
+                      <h2 className="text-[14px] font-semibold">Operational Alerts</h2>
+                      {unreadAlerts > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setAlertsRead(true)}
+                          className="text-[12px] font-semibold hover:underline cursor-pointer"
+                          style={{ color: BTN_BLUE }}
+                        >
+                          Mark all read
+                        </button>
+                      )}
+                    </div>
+                    {adminAlerts.length === 0 ? (
+                      <p className="px-4 py-5 text-[13px]" style={{ color: MUTED }}>
+                        No open disputes or risk alerts right now.
+                      </p>
+                    ) : (
+                      <ul className="max-h-[340px] overflow-y-auto">
+                        {adminAlerts.map((alert) => (
+                          <li key={alert.id} className="border-b last:border-b-0" style={{ borderColor: LINE }}>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setAlertsOpen(false);
+                                alert.action();
+                              }}
+                              className="w-full px-4 py-3 text-left hover:bg-[#F7FAFD] cursor-pointer"
+                            >
+                              <span className="block text-[13px] font-semibold" style={{ color: INK }}>
+                                {alert.title}
+                              </span>
+                              <span className="block mt-0.5 text-[12px] leading-relaxed" style={{ color: MUTED }}>
+                                {alert.detail}
+                              </span>
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <span className="hidden md:inline text-[12.5px] text-white/85">
+                {t('Welcome', 'Bienvenido')}, {adminName.split(' ')[0]}
+              </span>
 
               <button
                 type="button"
-                onClick={() => setDark((d) => !d)}
-                aria-label="Toggle color theme"
-                className="p-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-white/5 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-white/10 cursor-pointer"
+                onClick={() => void signOut()}
+                className="border border-white/45 hover:bg-white/10 text-white text-[12.5px] font-semibold px-3.5 py-1.5 rounded-[4px] cursor-pointer"
               >
-                {dark ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4" />}
+                {t('Sign out', 'Cerrar sesión')}
               </button>
             </div>
-          </header>
+          </div>
 
-          {/* Auditor Notice */}
-          {isReadOnly && (
-            <div className="bg-amber-50 dark:bg-amber-500/10 border-b border-amber-200 dark:border-amber-500/30 px-6 py-2 text-[12px] text-amber-800 dark:text-amber-200 flex items-center gap-2">
-              <LockKeyhole className="w-3.5 h-3.5 shrink-0" />
-              Read-only auditor session: inspection, global search, and CSV exports are enabled; state-changing mutations are blocked by the server.
-            </div>
-          )}
-
-          {/* Page Content */}
-          <main className="flex-1 p-4 sm:p-6 max-w-[1640px] w-full mx-auto">
-            {tab === 'overview' && (
-              <OverviewTab
-                metrics={metrics}
-                analytics={analytics}
-                range={range}
-                onRangeChange={handleRangeChange}
-                users={users}
-                globalTransactions={globalTransactions}
-                audit={audit}
-                isReadOnly={isReadOnly}
-                busy={busy}
-                onNavigate={setTab}
-                onSelectUser={(id, nextTab) => void selectUserAndMaybeGo(id, nextTab)}
-                onImpersonateById={(id, name) => void impersonateById(id, name)}
-                onSeedDemoRoster={() => void handleSeedDemoRoster()}
-              />
-            )}
-
-            {tab === 'users' && (
-              <UsersTab
-                users={users}
-                selectedUser={selectedUser}
-                userJson={userJson}
-                onChangeUserJson={setUserJson}
-                isReadOnly={isReadOnly}
-                busy={busy}
-                onSelectUser={(id) => void selectUserAndMaybeGo(id)}
-                onCreateUser={handleCreateUser}
-                onBulkUsers={handleBulkUsers}
-                onSaveUserObject={handleSaveUserObject}
-                onSaveRawJson={handleSaveRawJson}
-                onToggleUserStatus={handleToggleUserStatus}
-                onDeleteUser={handleDeleteUser}
-                onRevokeSessions={handleRevokeSessions}
-                onResetUserPassword={handleResetUserPassword}
-                onGenerateHistory={handleGenerateHistory}
-                onImpersonate={() =>
-                  selectedUser && void impersonateById(selectedUser.id, selectedUser.fullName)
-                }
-                onNavigate={setTab}
-              />
-            )}
-
-            {tab === 'accounts' && (
-              <AccountsTab
-                users={users}
-                selectedUser={selectedUser}
-                isReadOnly={isReadOnly}
-                busy={busy}
-                onSelectUser={(id) => void selectUserAndMaybeGo(id)}
-                onCreateAccount={handleCreateAccount}
-                onSaveAccount={handleSaveAccount}
-                onDeleteAccount={handleDeleteAccount}
-                onBulkAccounts={handleBulkAccounts}
-              />
-            )}
-
-            {tab === 'transactions' && (
-              <LedgerTab
-                users={users}
-                selectedUser={selectedUser}
-                globalTransactions={globalTransactions}
-                isReadOnly={isReadOnly}
-                busy={busy}
-                onSelectUser={(id) => void selectUserAndMaybeGo(id)}
-                onCreateLedgerEntry={handleCreateLedgerEntry}
-                onUpdateLedgerEntry={handleUpdateLedgerEntry}
-                onDeleteLedgerEntry={handleDeleteLedgerEntry}
-              />
-            )}
-
-            {tab === 'operations' && (
-              <OperationsTab
-                users={users}
-                selectedUser={selectedUser}
-                globalDisputes={analytics?.disputes || []}
-                isReadOnly={isReadOnly}
-                busy={busy}
-                onSelectUser={(id) => void selectUserAndMaybeGo(id)}
-                onTransfer={handleAdminTransfer}
-                onCreatePayee={handleCreatePayee}
-                onUpdatePayee={handleUpdatePayee}
-                onDeletePayee={handleDeletePayee}
-                onCreateSchedule={handleCreateSchedule}
-                onUpdateSchedule={handleUpdateSchedule}
-                onDeleteSchedule={handleDeleteSchedule}
-                onOpenDispute={handleOpenDispute}
-                onSetDisputeStatus={handleSetDisputeStatus}
-                onIssueRefund={handleIssueRefund}
-              />
-            )}
-
-            {tab === 'audit' && <AuditTab audit={audit} />}
-
-            {tab === 'settings' && (
-              <SettingsTab
-                settings={simulatorSettings}
-                onChangeSettings={setSimulatorSettings}
-                onSaveSettings={handleSaveSettings}
-                adminAccounts={adminAccounts}
-                currentAdminUsername={currentAdminUsername}
-                isReadOnly={isReadOnly}
-                busy={busy}
-                system={analytics?.system}
-                onCreateAdmin={handleCreateAdmin}
-                onUpdateAdmin={handleUpdateAdmin}
-                onDeleteAdmin={handleDeleteAdmin}
-                onChangeOwnPassword={handleChangeOwnPassword}
-                onDownloadBackup={handleDownloadBackup}
-                onRestoreBackup={handleRestoreBackup}
-                onResetSimulator={handleResetSimulator}
-              />
-            )}
-          </main>
-
-          {/* Footer Bar */}
-          <footer className="px-6 py-3.5 border-t border-gray-200 dark:border-gray-800 text-[11.5px] text-gray-500 dark:text-gray-400 flex flex-wrap items-center justify-between gap-2">
-            <span className="inline-flex items-center gap-1.5">
-              <ShieldCheck className="w-3.5 h-3.5 text-[#0060F0]" />
-              Chase Simulator Operations Console · Simulated records only — no external payment networks
-            </span>
-            <button
-              type="button"
-              onClick={onExit}
-              className="font-semibold text-[#0060F0] hover:underline cursor-pointer"
-            >
-              ← Return to Chase.com
-            </button>
-          </footer>
+          {/* Primary Horizontal Navigation Row — identical to BankingDashboard.tsx */}
+          <nav
+            aria-label="Admin sections"
+            className="hidden lg:flex items-center gap-0.5 -mb-px overflow-x-auto scrollbar-none"
+          >
+            {navItems.map((item) => {
+              const active = tab === item.id;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => setTab(item.id)}
+                  aria-current={active ? 'page' : undefined}
+                  className={`px-3.5 py-3 text-[13px] whitespace-nowrap border-b-[3px] inline-flex items-center gap-1.5 cursor-pointer transition-colors ${
+                    active
+                      ? 'border-white text-white font-semibold'
+                      : 'border-transparent text-white/75 hover:text-white'
+                  }`}
+                >
+                  <span>{spanishMode ? item.esLabel : item.label}</span>
+                  {item.badge !== undefined && (
+                    <span
+                      className={`px-1.5 py-0.2 rounded-full text-[10.5px] font-bold tabular-nums ${
+                        item.id === 'operations'
+                          ? 'bg-[#F79009] text-white'
+                          : active
+                          ? 'bg-white/25 text-white'
+                          : 'bg-white/12 text-white/85'
+                      }`}
+                    >
+                      {item.badge}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </nav>
         </div>
 
-        {/* ⌘K Command Palette */}
-        <Modal
-          open={cmdOpen}
-          onClose={() => {
-            setCmdOpen(false);
-            setCmdQuery('');
-          }}
-          title="Quick Command & Customer Jump"
-          width="max-w-[540px]"
-        >
-          <div className="space-y-3">
-            <div className="relative">
-              <Command className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
-              <input
-                autoFocus
-                placeholder="Search tabs, customers (@username), or actions…"
-                value={cmdQuery}
-                onChange={(e) => setCmdQuery(e.target.value)}
-                className="w-full rounded-xl border border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-white/5 pl-9 pr-3 py-2.5 text-[13.5px] outline-none focus:border-[#0060F0]"
-              />
-            </div>
+        {/* Mobile Nav Dropdown */}
+        {mobileMenuOpen && (
+          <div className="lg:hidden border-t border-white/15 px-4 py-3 space-y-1" style={{ backgroundColor: NAVY }}>
+            {navItems.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => {
+                  setTab(item.id);
+                  setMobileMenuOpen(false);
+                }}
+                className={`w-full flex items-center justify-between px-3 py-2.5 rounded text-left text-[13.5px] ${
+                  tab === item.id ? 'bg-white/15 font-semibold text-white' : 'text-white/80'
+                }`}
+              >
+                <span>{spanishMode ? item.esLabel : item.label}</span>
+                {item.badge !== undefined && (
+                  <span className="px-2 py-0.5 rounded-full bg-white/15 text-[11px]">{item.badge}</span>
+                )}
+              </button>
+            ))}
+          </div>
+        )}
 
-            <div className="max-h-[320px] overflow-y-auto admin-scroll divide-y divide-gray-100 dark:divide-gray-800">
-              <div className="py-2">
-                <p className="px-2 pb-1 text-[10.5px] font-bold uppercase tracking-wider text-gray-400">
-                  Sections
-                </p>
-                {navItems
-                  .filter((n) =>
-                    `${n.label} ${n.subtitle}`.toLowerCase().includes(cmdQuery.toLowerCase())
-                  )
-                  .map((n) => (
-                    <button
-                      key={n.id}
-                      type="button"
-                      onClick={() => {
-                        setTab(n.id);
-                        setCmdOpen(false);
-                        setCmdQuery('');
-                      }}
-                      className="w-full flex items-center justify-between px-2.5 py-2 rounded-lg hover:bg-gray-100 dark:hover:bg-white/10 text-left text-[13px] cursor-pointer"
-                    >
-                      <span className="flex items-center gap-2.5 font-medium">
-                        {n.icon}
-                        {n.label}
-                      </span>
-                      <span className="text-[11px] text-gray-400">Open tab</span>
-                    </button>
-                  ))}
+        {/* Expandable Global Search Drawer — identical to BankingDashboard.tsx */}
+        {searchOpen && (
+          <div className="border-t border-white/15" style={{ backgroundColor: NAVY }}>
+            <div className="max-w-[1380px] mx-auto px-4 sm:px-8 py-3">
+              <div className="relative max-w-[740px]" role="search">
+                <Search className="w-4 h-4 text-[#5C5C5C] absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  ref={searchInputRef}
+                  type="search"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && searchResults[0]) {
+                      e.preventDefault();
+                      const top = searchResults[0];
+                      setSearchOpen(false);
+                      setSearchQuery('');
+                      top.action();
+                    }
+                    if (e.key === 'Escape') setSearchOpen(false);
+                  }}
+                  placeholder="Search customers (@username, email), transactions, accounts, or admin sections…"
+                  className="w-full h-11 pl-10 pr-10 rounded-[4px] bg-white text-[#131313] text-[14px] outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearchQuery('');
+                    setSearchOpen(false);
+                  }}
+                  aria-label="Close search"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-[#5C5C5C] hover:text-[#131313] cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
               </div>
-
-              <div className="py-2">
-                <p className="px-2 pb-1 text-[10.5px] font-bold uppercase tracking-wider text-gray-400">
-                  Customers
-                </p>
-                {users
-                  .filter((u) =>
-                    `${u.fullName} ${u.username} ${u.email}`
-                      .toLowerCase()
-                      .includes(cmdQuery.toLowerCase())
-                  )
-                  .slice(0, 8)
-                  .map((u) => (
-                    <div
-                      key={u.id}
-                      className="flex items-center justify-between px-2.5 py-2 rounded-lg hover:bg-gray-100 dark:hover:bg-white/10"
-                    >
-                      <button
-                        type="button"
-                        onClick={() => {
-                          void selectUserAndMaybeGo(u.id, 'users');
-                          setCmdOpen(false);
-                          setCmdQuery('');
-                        }}
-                        className="flex items-center gap-2.5 text-left cursor-pointer"
-                      >
-                        <Avatar name={u.fullName} size={28} />
-                        <div>
-                          <p className="text-[13px] font-semibold">{u.fullName}</p>
-                          <p className="text-[11px] text-gray-400">
-                            @{u.username} · {fmtMoneyFull(u.depositBalance)}
-                          </p>
-                        </div>
-                      </button>
-                      {!isReadOnly && (
-                        <Btn
-                          variant="secondary"
-                          size="xs"
-                          onClick={() => {
-                            setCmdOpen(false);
-                            setCmdQuery('');
-                            void impersonateById(u.id, u.fullName);
-                          }}
-                        >
-                          <Eye className="w-3.5 h-3.5" /> Preview
-                        </Btn>
-                      )}
-                    </div>
-                  ))}
-              </div>
-
-              {!isReadOnly && (
-                <div className="py-2">
-                  <p className="px-2 pb-1 text-[10.5px] font-bold uppercase tracking-wider text-gray-400">
-                    Quick Simulator Actions
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setCmdOpen(false);
-                      void handleSeedDemoRoster();
-                    }}
-                    className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-gray-100 dark:hover:bg-white/10 text-left text-[13px] cursor-pointer"
-                  >
-                    <Sparkles className="w-4 h-4 text-[#0060F0]" />
-                    Populate sample Private Client &amp; Sapphire households
-                  </button>
+              {searchQuery.trim() && (
+                <div className="mt-2 max-w-[740px] bg-white rounded-[6px] overflow-hidden shadow-[0_16px_40px_rgba(0,20,50,0.25)]">
+                  {searchResults.length === 0 ? (
+                    <p className="px-4 py-4 text-[13px]" style={{ color: MUTED }}>
+                      No matches for “{searchQuery}”.
+                    </p>
+                  ) : (
+                    <ul>
+                      {searchResults.map((res) => (
+                        <li key={res.key} className="border-b last:border-b-0" style={{ borderColor: LINE }}>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSearchOpen(false);
+                              setSearchQuery('');
+                              res.action();
+                            }}
+                            className="w-full px-4 py-3 flex items-center justify-between gap-3 text-left hover:bg-[#F7FAFD] cursor-pointer"
+                          >
+                            <span className="min-w-0">
+                              <span className="block text-[13px] font-semibold text-[#131313] truncate">
+                                {res.label}
+                              </span>
+                              <span className="block text-[11.5px] text-[#5C5C5C] truncate">
+                                {res.detail}
+                              </span>
+                            </span>
+                            <span className="shrink-0 text-[10.5px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded bg-[#EAF2FA] text-[#1A4488]">
+                              {res.type}
+                            </span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </div>
               )}
             </div>
           </div>
-        </Modal>
+        )}
+      </header>
 
-        <ToastStack />
+      {/* 3. Active Customer Context & Quick Banking Actions Sub-Bar */}
+      <div className="bg-white border-b" style={{ borderColor: LINE }}>
+        <div className="max-w-[1380px] mx-auto px-4 sm:px-8 py-2.5 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-3 min-w-0">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-[#5C5C5C]">
+              Active Customer:
+            </span>
+            <SelectInput
+              aria-label="Active simulator customer"
+              value={selectedUser?.id || ''}
+              onChange={(e) => e.target.value && void selectUserAndMaybeGo(e.target.value)}
+              className="min-w-[230px] h-9 text-[13px] font-semibold"
+            >
+              {users.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.fullName} (@{u.username}) {u.status === 'suspended' ? '· SUSPENDED' : ''}
+                </option>
+              ))}
+            </SelectInput>
+
+            {selectedUser && (
+              <div className="hidden xl:flex items-center gap-4 pl-2 text-[12px] text-[#5C5C5C]">
+                <span className="inline-flex items-center gap-1.5">
+                  <Avatar name={selectedUser.fullName} size={22} />
+                  <Badge tone={selectedUser.status === 'suspended' ? 'error' : 'success'}>
+                    {selectedUser.status || 'active'}
+                  </Badge>
+                </span>
+                <span>
+                  Deposits: <strong className="text-[#131313]">{fmtMoneyFull(selectedUserDeposits)}</strong>
+                </span>
+                <span>
+                  Card Bal: <strong className="text-[#131313]">{fmtMoneyFull(selectedUserCards)}</strong>
+                </span>
+                <span>
+                  Credit Score:{' '}
+                  <strong className="text-[#1A4488]">{selectedUser.credit?.score ?? 750}</strong>
+                </span>
+              </div>
+            )}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            {!isReadOnly && selectedUser && selectedUser.accounts.length > 0 && (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  setQuickAcctId(selectedUser.accounts[0]?.id || '');
+                  setQuickAdjustOpen(true);
+                }}
+                className="inline-flex items-center gap-1.5 rounded-[4px] border bg-white hover:bg-[#F2F6FB] px-3 py-1.5 text-[12px] font-semibold cursor-pointer"
+                style={{ borderColor: BTN_BLUE, color: BTN_BLUE }}
+              >
+                <ArrowDownLeft className="w-3.5 h-3.5" />
+                Deposit / Adjust Balance
+              </button>
+            )}
+
+            {!isReadOnly && selectedUser && (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void impersonateById(selectedUser.id, selectedUser.fullName)}
+                className="inline-flex items-center gap-1.5 rounded-[4px] text-white px-3.5 py-1.5 text-[12px] font-semibold cursor-pointer transition-colors"
+                style={{ backgroundColor: BTN_BLUE }}
+                onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = BTN_BLUE_HOVER)}
+                onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = BTN_BLUE)}
+              >
+                <Eye className="w-3.5 h-3.5" />
+                View as Customer
+              </button>
+            )}
+
+            {!isReadOnly && (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => setTab('users')}
+                title="Create or manage customers"
+                className="inline-flex items-center gap-1 rounded-[4px] border border-[#D0D5DD] bg-white hover:bg-gray-50 px-2.5 py-1.5 text-[12px] font-medium text-[#344054] cursor-pointer"
+              >
+                <UserPlus className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Customers</span>
+              </button>
+            )}
+
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() =>
+                loadData()
+                  .then(() => notify('info', 'Simulator metrics & ledgers refreshed.'))
+                  .catch((e) => notify('error', e.message))
+              }
+              className="inline-flex items-center gap-1 rounded-[4px] border border-[#D0D5DD] bg-white hover:bg-gray-50 px-2.5 py-1.5 text-[12px] font-medium text-[#344054] cursor-pointer"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${busy ? 'animate-spin' : ''}`} />
+              <span className="hidden sm:inline">Refresh</span>
+            </button>
+          </div>
+        </div>
       </div>
+
+      {/* Auditor Read-Only Banner */}
+      {isReadOnly && (
+        <div className="bg-[#EAF2FA] border-b border-[#CFE0F0]">
+          <div className="max-w-[1380px] mx-auto px-4 sm:px-8 py-2 text-[12px] text-[#1A4488] flex items-center gap-2">
+            <LockKeyhole className="w-3.5 h-3.5 shrink-0" />
+            Read-only auditor access: inspection, global search, and CSV exports are enabled; state-changing mutations are blocked by the server.
+          </div>
+        </div>
+      )}
+
+      {/* 4. Main Workspace Container */}
+      <main className="flex-1 max-w-[1380px] w-full mx-auto px-4 sm:px-8 py-6">
+        {tab === 'overview' && (
+          <OverviewTab
+            metrics={metrics}
+            analytics={analytics}
+            range={range}
+            onRangeChange={handleRangeChange}
+            users={users}
+            globalTransactions={globalTransactions}
+            audit={audit}
+            isReadOnly={isReadOnly}
+            busy={busy}
+            onNavigate={setTab}
+            onSelectUser={(id, nextTab) => void selectUserAndMaybeGo(id, nextTab)}
+            onImpersonateById={(id, name) => void impersonateById(id, name)}
+            onSeedDemoRoster={() => void handleSeedDemoRoster()}
+          />
+        )}
+
+        {tab === 'users' && (
+          <UsersTab
+            users={users}
+            selectedUser={selectedUser}
+            userJson={userJson}
+            onChangeUserJson={setUserJson}
+            isReadOnly={isReadOnly}
+            busy={busy}
+            onSelectUser={(id) => void selectUserAndMaybeGo(id)}
+            onCreateUser={handleCreateUser}
+            onBulkUsers={handleBulkUsers}
+            onSaveUserObject={handleSaveUserObject}
+            onSaveRawJson={handleSaveRawJson}
+            onToggleUserStatus={handleToggleUserStatus}
+            onDeleteUser={handleDeleteUser}
+            onRevokeSessions={handleRevokeSessions}
+            onResetUserPassword={handleResetUserPassword}
+            onGenerateHistory={handleGenerateHistory}
+            onImpersonate={() =>
+              selectedUser && void impersonateById(selectedUser.id, selectedUser.fullName)
+            }
+            onNavigate={setTab}
+          />
+        )}
+
+        {tab === 'accounts' && (
+          <AccountsTab
+            users={users}
+            selectedUser={selectedUser}
+            isReadOnly={isReadOnly}
+            busy={busy}
+            onSelectUser={(id) => void selectUserAndMaybeGo(id)}
+            onCreateAccount={handleCreateAccount}
+            onSaveAccount={handleSaveAccount}
+            onDeleteAccount={handleDeleteAccount}
+            onBulkAccounts={handleBulkAccounts}
+            onCreateLedgerEntry={handleCreateLedgerEntry}
+          />
+        )}
+
+        {tab === 'transactions' && (
+          <LedgerTab
+            users={users}
+            selectedUser={selectedUser}
+            globalTransactions={globalTransactions}
+            isReadOnly={isReadOnly}
+            busy={busy}
+            onSelectUser={(id) => void selectUserAndMaybeGo(id)}
+            onCreateLedgerEntry={handleCreateLedgerEntry}
+            onUpdateLedgerEntry={handleUpdateLedgerEntry}
+            onDeleteLedgerEntry={handleDeleteLedgerEntry}
+          />
+        )}
+
+        {tab === 'operations' && (
+          <OperationsTab
+            users={users}
+            selectedUser={selectedUser}
+            globalDisputes={analytics?.disputes || []}
+            isReadOnly={isReadOnly}
+            busy={busy}
+            onSelectUser={(id) => void selectUserAndMaybeGo(id)}
+            onTransfer={handleAdminTransfer}
+            onCreatePayee={handleCreatePayee}
+            onUpdatePayee={handleUpdatePayee}
+            onDeletePayee={handleDeletePayee}
+            onCreateSchedule={handleCreateSchedule}
+            onUpdateSchedule={handleUpdateSchedule}
+            onDeleteSchedule={handleDeleteSchedule}
+            onOpenDispute={handleOpenDispute}
+            onSetDisputeStatus={handleSetDisputeStatus}
+            onIssueRefund={handleIssueRefund}
+            onCreateLedgerEntry={handleCreateLedgerEntry}
+          />
+        )}
+
+        {tab === 'wealth' && (
+          <WealthCreditTab
+            users={users}
+            selectedUser={selectedUser}
+            isReadOnly={isReadOnly}
+            busy={busy}
+            onSelectUser={(id) => void selectUserAndMaybeGo(id)}
+            onSaveUserObject={handleSaveUserObject}
+          />
+        )}
+
+        {tab === 'audit' && <AuditTab audit={audit} />}
+
+        {tab === 'settings' && (
+          <SettingsTab
+            settings={simulatorSettings}
+            onChangeSettings={setSimulatorSettings}
+            onSaveSettings={handleSaveSettings}
+            adminAccounts={adminAccounts}
+            currentAdminUsername={currentAdminUsername}
+            isReadOnly={isReadOnly}
+            busy={busy}
+            system={analytics?.system}
+            onCreateAdmin={handleCreateAdmin}
+            onUpdateAdmin={handleUpdateAdmin}
+            onDeleteAdmin={handleDeleteAdmin}
+            onChangeOwnPassword={handleChangeOwnPassword}
+            onDownloadBackup={handleDownloadBackup}
+            onRestoreBackup={handleRestoreBackup}
+            onResetSimulator={handleResetSimulator}
+          />
+        )}
+      </main>
+
+      {/* Quick Deposit / Adjust Customer Balance Modal (available from sub-bar on every tab) */}
+      <Modal
+        open={quickAdjustOpen}
+        onClose={() => setQuickAdjustOpen(false)}
+        title={`Deposit or Adjust Balance — ${selectedUser?.fullName || ''}`}
+        footer={
+          <>
+            <Btn variant="secondary" onClick={() => setQuickAdjustOpen(false)}>
+              Cancel
+            </Btn>
+            <Btn
+              variant="primary"
+              disabled={busy || !quickAcctId || !quickAmt}
+              onClick={async () => {
+                if (!selectedUser || !quickAcctId) return;
+                const acct = selectedUser.accounts.find((a) => a.id === quickAcctId);
+                if (!acct) return;
+                const raw = Math.abs(Number(quickAmt) || 0);
+                if (raw <= 0) return;
+                const isDebt =
+                  acct.type === 'credit-card' ||
+                  acct.type === 'auto-loan' ||
+                  acct.type === 'mortgage';
+                const signed = isDebt
+                  ? quickDir === 'credit'
+                    ? -raw
+                    : raw
+                  : quickDir === 'credit'
+                    ? raw
+                    : -raw;
+                const ok = await handleCreateLedgerEntry({
+                  userId: selectedUser.id,
+                  accountId: acct.id,
+                  description: quickMemo.trim() || 'Admin balance adjustment',
+                  amount: signed,
+                  category: quickDir === 'credit' ? 'Income' : 'Bills',
+                  date: inputDate(0),
+                  status: 'posted',
+                });
+                if (ok) setQuickAdjustOpen(false);
+              }}
+            >
+              <Check className="w-3.5 h-3.5" /> Post &amp; Reconcile Balance
+            </Btn>
+          </>
+        }
+      >
+        {selectedUser && (
+          <div className="space-y-3">
+            <label className="block">
+              <span className="block text-[11.5px] font-semibold text-gray-700 mb-1">
+                Target Account
+              </span>
+              <SelectInput
+                value={quickAcctId}
+                onChange={(e) => setQuickAcctId(e.target.value)}
+                className="w-full"
+              >
+                {selectedUser.accounts.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name} (•••• {a.mask}) — {fmtMoneyFull(a.balance)}
+                  </option>
+                ))}
+              </SelectInput>
+            </label>
+            <div className="grid grid-cols-2 gap-3">
+              <label className="block">
+                <span className="block text-[11.5px] font-semibold text-gray-700 mb-1">
+                  Adjustment Type
+                </span>
+                <SelectInput
+                  value={quickDir}
+                  onChange={(e) => {
+                    const next = e.target.value as 'credit' | 'debit';
+                    setQuickDir(next);
+                    setQuickMemo(
+                      next === 'credit'
+                        ? 'Direct Deposit — Payroll Credit'
+                        : 'Account Debit Adjustment'
+                    );
+                  }}
+                  className="w-full"
+                >
+                  <option value="credit">Deposit / Credit Funds (+)</option>
+                  <option value="debit">Withdrawal / Charge (−)</option>
+                </SelectInput>
+              </label>
+              <label className="block">
+                <span className="block text-[11.5px] font-semibold text-gray-700 mb-1">
+                  Amount ($)
+                </span>
+                <TextInput
+                  type="number"
+                  min="0.01"
+                  step="0.01"
+                  value={quickAmt}
+                  onChange={(e) => setQuickAmt(e.target.value)}
+                />
+              </label>
+            </div>
+            <label className="block">
+              <span className="block text-[11.5px] font-semibold text-gray-700 mb-1">
+                Statement Description / Memo
+              </span>
+              <TextInput
+                value={quickMemo}
+                onChange={(e) => setQuickMemo(e.target.value)}
+              />
+            </label>
+          </div>
+        )}
+      </Modal>
+
+      {/* 5. Authentic Chase Online Dashboard Footer — identical to BankingDashboard.tsx */}
+      <Footer
+        variant="dashboard"
+        userLabel={adminName}
+        spanishMode={spanishMode}
+        onAction={handleFooterAction}
+        onHome={() => setTab('overview')}
+      />
+
+      <ToastStack />
     </div>
   );
 };

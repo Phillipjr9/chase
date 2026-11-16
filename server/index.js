@@ -910,7 +910,7 @@ async function handleApi(req, res, url) {
           fullName: u.fullName,
           email: u.email,
           status: u.status || 'active',
-          creditScore: Number(u.creditScore || 750),
+          creditScore: Number(u.credit?.score ?? u.creditScore ?? 750),
           createdAt: u.createdAt,
           accountCount: accounts.length,
           transactionCount: accounts.reduce((n, a) => n + (a.transactions || []).length, 0),
@@ -1081,18 +1081,21 @@ async function handleApi(req, res, url) {
           next.name = cleanText(patch.name, 80);
           if (!next.name) return sendJson(res, 400, { error: 'Account name is required.' });
         }
-        for (const field of ['balance', 'creditLimit', 'apr', 'monthlyPayment']) {
-          if (field === 'creditLimit' && patch[field] === null) {
+        if (patch.nickname !== undefined) next.nickname = cleanText(patch.nickname, 60);
+        if (patch.mask !== undefined && /^\d{4}$/.test(String(patch.mask))) next.mask = String(patch.mask);
+        if (patch.replacedAt !== undefined) next.replacedAt = String(patch.replacedAt);
+        for (const field of ['balance', 'creditLimit', 'statementBalance', 'apr', 'monthlyPayment', 'rewardsPoints']) {
+          if ((field === 'creditLimit' || field === 'statementBalance') && patch[field] === null) {
             delete next[field];
             continue;
           }
           if (patch[field] !== undefined) {
             const value = Number(patch[field]);
-            if (!Number.isFinite(value) || Math.abs(value) > 100000000 || (field !== 'balance' && value < 0)) return sendJson(res, 400, { error: `Invalid account ${field}.` });
-            next[field] = round2(value);
+            if (!Number.isFinite(value) || Math.abs(value) > 100000000 || (!['balance', 'statementBalance'].includes(field) && value < 0)) return sendJson(res, 400, { error: `Invalid account ${field}.` });
+            next[field] = field === 'rewardsPoints' ? Math.round(value) : round2(value);
           }
         }
-        for (const field of ['locked', 'autopay', 'hidden', 'favorite']) if (patch[field] !== undefined) next[field] = !!patch[field];
+        for (const field of ['locked', 'autopay', 'hidden', 'favorite', 'isPrimary']) if (patch[field] !== undefined) next[field] = !!patch[field];
         const updated = { ...target, accounts: accounts.map((account, i) => i === index ? next : account) };
         updateUser(updated);
         recordAdminAudit('Updated simulator account', { userId, username: target.username, accountId, fields: Object.keys(patch) });

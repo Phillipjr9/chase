@@ -6,10 +6,12 @@ import {
   AlertTriangle,
   ArrowRightLeft,
   CalendarClock,
+  Camera,
   CheckCircle2,
   Cpu,
   Database,
   Download,
+  Globe,
   HardDrive,
   KeyRound,
   LockKeyhole,
@@ -20,6 +22,7 @@ import {
   RefreshCw,
   RotateCcw,
   Search,
+  Send,
   Server,
   ShieldAlert,
   ShieldCheck,
@@ -28,6 +31,7 @@ import {
   UserPlus,
   XCircle,
 } from 'lucide-react';
+import { ZelleLogo } from '../ChaseAssets';
 import {
   Badge,
   Btn,
@@ -118,6 +122,15 @@ interface OperationsProps {
     status: 'open' | 'resolved' | 'denied'
   ) => Promise<void>;
   onIssueRefund: (userId: string, disputeId: string) => Promise<void>;
+  onCreateLedgerEntry: (payload: {
+    userId: string;
+    accountId: string;
+    description: string;
+    amount: number;
+    category: string;
+    date: string;
+    status: 'posted' | 'pending';
+  }) => Promise<boolean>;
 }
 
 export const OperationsTab: React.FC<OperationsProps> = ({
@@ -137,7 +150,16 @@ export const OperationsTab: React.FC<OperationsProps> = ({
   onOpenDispute,
   onSetDisputeStatus,
   onIssueRefund,
+  onCreateLedgerEntry,
 }) => {
+  // Zelle / Wire / QuickDeposit simulator rail state
+  const [railMode, setRailMode] = useState<'zelle' | 'wire' | 'deposit'>('zelle');
+  const [railDirection, setRailDirection] = useState<'in' | 'out'>('in');
+  const [railAccountId, setRailAccountId] = useState('');
+  const [railCounterparty, setRailCounterparty] = useState('Jordan Taylor');
+  const [railAmount, setRailAmount] = useState('350');
+  const [railMemo, setRailMemo] = useState('Rent split');
+
   // Transfer state
   const [fromId, setFromId] = useState('');
   const [toId, setToId] = useState('');
@@ -242,6 +264,178 @@ export const OperationsTab: React.FC<OperationsProps> = ({
             </option>
           ))}
         </SelectInput>
+      </Card>
+
+      {/* Row 0: Zelle®, Wire Transfers & QuickDeposit℠ Check Deposit (matching Customer Pay & Transfer) */}
+      <Card className="p-5 border-t-[3px] border-t-[#1A4488]">
+        <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-gray-100 dark:border-gray-800">
+          <div>
+            <h3 className="text-[15.5px] font-semibold text-gray-900 dark:text-white">
+              Zelle®, Wire Transfers &amp; QuickDeposit℠ Simulator
+            </h3>
+            <p className="text-[12px] text-gray-500 dark:text-gray-400">
+              Post incoming or outgoing Zelle® payments, domestic/international wires, or mobile check deposits directly onto customer deposit accounts
+            </p>
+          </div>
+          <div className="inline-flex rounded-lg border border-gray-200 dark:border-gray-700 p-0.5 bg-gray-50 dark:bg-white/5">
+            <button
+              type="button"
+              onClick={() => {
+                setRailMode('zelle');
+                setRailCounterparty('Jordan Taylor');
+                setRailMemo('Rent split');
+              }}
+              className={`px-3 py-1.5 rounded-md text-[12px] font-semibold inline-flex items-center gap-1.5 cursor-pointer ${
+                railMode === 'zelle'
+                  ? 'bg-white dark:bg-gray-800 text-[#6D1ED4] shadow-sm'
+                  : 'text-gray-600 dark:text-gray-300'
+              }`}
+            >
+              <ZelleLogo className="h-3.5 w-auto" />
+              <span>Zelle®</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setRailMode('wire');
+                setRailCounterparty('JPMorgan Private Bank Escrow');
+                setRailMemo('Domestic Fedwire Ref #88412');
+              }}
+              className={`px-3 py-1.5 rounded-md text-[12px] font-semibold inline-flex items-center gap-1.5 cursor-pointer ${
+                railMode === 'wire'
+                  ? 'bg-white dark:bg-gray-800 text-[#1A4488] shadow-sm'
+                  : 'text-gray-600 dark:text-gray-300'
+              }`}
+            >
+              <Globe className="w-3.5 h-3.5" />
+              <span>Wire Transfer</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setRailMode('deposit');
+                setRailDirection('in');
+                setRailCounterparty('Check #1094');
+                setRailMemo('Chase QuickDeposit℠ Mobile Check');
+              }}
+              className={`px-3 py-1.5 rounded-md text-[12px] font-semibold inline-flex items-center gap-1.5 cursor-pointer ${
+                railMode === 'deposit'
+                  ? 'bg-white dark:bg-gray-800 text-[#1A4488] shadow-sm'
+                  : 'text-gray-600 dark:text-gray-300'
+              }`}
+            >
+              <Camera className="w-3.5 h-3.5" />
+              <span>QuickDeposit℠</span>
+            </button>
+          </div>
+        </div>
+
+        {!selectedUser || depositAccounts.length === 0 ? (
+          <p className="mt-4 text-[12.5px] text-gray-500">
+            Select a customer with a checking or savings account to simulate Zelle®, Wires, or QuickDeposit℠.
+          </p>
+        ) : (
+          <form
+            onSubmit={async (e) => {
+              e.preventDefault();
+              const targetAcct = railAccountId || depositAccounts[0]?.id;
+              if (!targetAcct) return;
+              const raw = Math.abs(Number(railAmount) || 0);
+              if (raw <= 0) return;
+              const effectiveIn = railMode === 'deposit' ? true : railDirection === 'in';
+              const signed = effectiveIn ? raw : -raw;
+              const desc =
+                railMode === 'zelle'
+                  ? `Zelle® ${effectiveIn ? 'payment from' : 'payment to'} ${railCounterparty}${railMemo ? ` — ${railMemo}` : ''}`
+                  : railMode === 'wire'
+                  ? `${effectiveIn ? 'Incoming Wire —' : 'Outgoing Wire —'} ${railCounterparty}${railMemo ? ` (${railMemo})` : ''}`
+                  : `Chase QuickDeposit℠ — ${railCounterparty}${railMemo ? ` (${railMemo})` : ''}`;
+              const cat =
+                railMode === 'zelle' ? 'Zelle' : railMode === 'wire' ? 'Transfer' : 'Income';
+
+              const ok = await onCreateLedgerEntry({
+                userId: selectedUser.id,
+                accountId: targetAcct,
+                description: desc,
+                amount: signed,
+                category: cat,
+                date: inputDate(0),
+                status: 'posted',
+              });
+              if (ok) setRailAmount('');
+            }}
+            className="mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 items-end"
+          >
+            <label className="block">
+              <span className="block text-[11px] font-medium text-gray-600 dark:text-gray-300 mb-1">
+                Deposit Account
+              </span>
+              <SelectInput
+                value={railAccountId || depositAccounts[0]?.id || ''}
+                onChange={(e) => setRailAccountId(e.target.value)}
+                className="w-full"
+              >
+                {depositAccounts.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name} ({fmtMoneyFull(a.balance)})
+                  </option>
+                ))}
+              </SelectInput>
+            </label>
+            {railMode !== 'deposit' && (
+              <label className="block">
+                <span className="block text-[11px] font-medium text-gray-600 dark:text-gray-300 mb-1">
+                  Direction
+                </span>
+                <SelectInput
+                  value={railDirection}
+                  onChange={(e) => setRailDirection(e.target.value as 'in' | 'out')}
+                  className="w-full"
+                >
+                  <option value="in">Incoming (+ Credit)</option>
+                  <option value="out">Outgoing (− Debit)</option>
+                </SelectInput>
+              </label>
+            )}
+            <label className="block">
+              <span className="block text-[11px] font-medium text-gray-600 dark:text-gray-300 mb-1">
+                {railMode === 'zelle'
+                  ? 'Recipient / Sender'
+                  : railMode === 'wire'
+                  ? 'Beneficiary / Originating Bank'
+                  : 'Check Reference'}
+              </span>
+              <TextInput
+                value={railCounterparty}
+                onChange={(e) => setRailCounterparty(e.target.value)}
+                required
+              />
+            </label>
+            <label className="block">
+              <span className="block text-[11px] font-medium text-gray-600 dark:text-gray-300 mb-1">
+                Amount ($)
+              </span>
+              <TextInput
+                type="number"
+                min="0.01"
+                step="0.01"
+                value={railAmount}
+                onChange={(e) => setRailAmount(e.target.value)}
+                required
+              />
+            </label>
+            <label className="block">
+              <span className="block text-[11px] font-medium text-gray-600 dark:text-gray-300 mb-1">
+                Memo / Reference
+              </span>
+              <TextInput value={railMemo} onChange={(e) => setRailMemo(e.target.value)} />
+            </label>
+            <Btn type="submit" variant="primary" disabled={busy || isReadOnly || !railAmount}>
+              <Send className="w-3.5 h-3.5" />
+              Post {railMode === 'zelle' ? 'Zelle®' : railMode === 'wire' ? 'Wire' : 'Check Deposit'}
+            </Btn>
+          </form>
+        )}
       </Card>
 
       {/* Row 1: Simulated Internal / Debt Transfer + Payees Manager */}
