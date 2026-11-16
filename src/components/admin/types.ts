@@ -22,6 +22,7 @@ export interface AdminUserRow {
   fullName: string;
   email: string;
   status: 'active' | 'suspended';
+  ownerAdminId?: string | null;
   creditScore?: number;
   createdAt: string;
   accountCount: number;
@@ -59,6 +60,10 @@ export interface AdminAccountRow {
   status: 'active' | 'disabled';
   createdAt?: string;
   protected?: boolean;
+  permissions?: { createUsers: boolean; generateActivity: boolean; sendMessages: boolean };
+  customerCount?: number;
+  unreadCount?: number;
+  lastActivity?: string | null;
 }
 
 export interface GlobalTransaction extends Transaction {

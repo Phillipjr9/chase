@@ -1400,7 +1400,7 @@ interface SettingsProps {
   }) => Promise<boolean>;
   onUpdateAdmin: (
     admin: AdminAccountRow,
-    patch: { role?: 'admin' | 'auditor'; status?: 'active' | 'disabled'; password?: string }
+    patch: { role?: 'admin' | 'auditor'; status?: 'active' | 'disabled'; password?: string; permissions?: { createUsers: boolean; generateActivity: boolean; sendMessages: boolean } }
   ) => Promise<boolean>;
   onDeleteAdmin: (admin: AdminAccountRow) => Promise<void>;
   onChangeOwnPassword: (currentPassword: string, newPassword: string) => Promise<boolean>;
@@ -1678,6 +1678,9 @@ export const SettingsTab: React.FC<SettingsProps> = ({
                 <Th>Operator</Th>
                 <Th>Role</Th>
                 <Th>Status</Th>
+                <Th>Permissions</Th>
+                <Th>Customers / unread</Th>
+                <Th>Last activity</Th>
                 {!isReadOnly && <Th className="text-right">Controls</Th>}
               </tr>
             </thead>
@@ -1720,6 +1723,9 @@ export const SettingsTab: React.FC<SettingsProps> = ({
                         {adm.status}
                       </Badge>
                     </Td>
+                    <Td>{!adm.protected && (['createUsers', 'generateActivity', 'sendMessages'] as const).map(key => <label className="block text-xs whitespace-nowrap" key={key}><input type="checkbox" className="mr-1" disabled={busy || isReadOnly} checked={adm.permissions?.[key] ?? true} onChange={e => void onUpdateAdmin(adm, { permissions: { createUsers: adm.permissions?.createUsers ?? true, generateActivity: adm.permissions?.generateActivity ?? true, sendMessages: adm.permissions?.sendMessages ?? true, [key]: e.target.checked } })} />{key === 'createUsers' ? 'Create customers' : key === 'generateActivity' ? 'Generate activity' : 'Send messages'}</label>)}</Td>
+                    <Td>{adm.protected ? "—" : `${adm.customerCount ?? 0} / ${adm.unreadCount ?? 0}`}</Td>
+                    <Td>{adm.lastActivity ? new Date(adm.lastActivity).toLocaleString() : "—"}</Td>
                     {!isReadOnly && (
                       <Td className="text-right">
                         {!adm.protected && (
@@ -1809,7 +1815,7 @@ export const SettingsTab: React.FC<SettingsProps> = ({
         <Card className="xl:col-span-5 p-5 border-red-200 dark:border-red-500/30">
           <CardHeader
             title="Reset Simulator Environment"
-            subtitle="Wipes customer profiles & sessions back to a clean Alex Rivera (`chase`) baseline while retaining audit history"
+            subtitle="Deletes customer profiles and customer sessions while retaining audit history"
             action={<ShieldAlert className="w-4 h-4 text-[#F04438]" />}
           />
           <div className="mt-4 flex justify-end">
@@ -1984,7 +1990,7 @@ export const SettingsTab: React.FC<SettingsProps> = ({
         }
       >
         <p className="text-[13px] text-gray-600 dark:text-gray-300">
-          Deletes all customer profiles and sessions, restoring a clean <strong>chase</strong> (Alex Rivera) baseline. Type{' '}
+          Deletes all customer profiles and their sessions. No demo customer will be restored. Type{' '}
           <code className="font-mono font-bold text-[#F04438]">RESET SIMULATOR</code>:
         </p>
         <TextInput

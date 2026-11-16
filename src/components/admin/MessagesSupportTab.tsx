@@ -12,7 +12,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import type { AccountNotice, SecureMessage, SecureMessageCategory, User } from '../../banking/store';
-import type { AdminUserRow } from './types';
+import { adminFetch, type AdminUserRow } from './types';
 import {
   Badge,
   Btn,
@@ -31,6 +31,7 @@ export interface AdminMessageThread {
   email: string;
   status: string;
   unreadForAdmin: number;
+  supportStatus?: string;
   accountNotice: AccountNotice | null;
   lastMessageAt: string;
   messages: SecureMessage[];
@@ -38,6 +39,7 @@ export interface AdminMessageThread {
 
 interface MessagesSupportTabProps {
   users: AdminUserRow[];
+  token: string;
   selectedUser: User | null;
   threads: AdminMessageThread[];
   readOnly: boolean;
@@ -116,6 +118,7 @@ const REPLY_TEMPLATES = [
 
 export const MessagesSupportTab: React.FC<MessagesSupportTabProps> = ({
   users,
+  token,
   selectedUser,
   threads,
   readOnly,
@@ -132,6 +135,13 @@ export const MessagesSupportTab: React.FC<MessagesSupportTabProps> = ({
   const [category, setCategory] = useState<SecureMessageCategory>('general');
   const [body, setBody] = useState('');
   const [sending, setSending] = useState(false);
+  const [search, setSearch] = useState('');
+  const [queue, setQueue] = useState('all');
+  const [savedReplies, setSavedReplies] = useState<{id:string; label:string; category:SecureMessageCategory; subject:string; body:string}[]>([]);
+  const [replyLabel, setReplyLabel] = useState('');
+  const [replyError, setReplyError] = useState('');
+  useEffect(() => { let active = true; adminFetch<{replies: typeof savedReplies}>('/api/admin/replies', {}, token).then(r => { if (active) setSavedReplies(r.replies); }).catch(e => { if (active) setReplyError(e.message); }); return () => { active = false; }; }, [token]);
+  const storeReplies = async (replies: typeof savedReplies) => { try { setReplyError(''); const r = await adminFetch<{replies: typeof savedReplies}>('/api/admin/replies', {method:'PUT', body:JSON.stringify({replies})}, token); setSavedReplies(r.replies); } catch (e) { setReplyError(e instanceof Error ? e.message : 'Could not save replies'); } };
 
   const [bannerTone, setBannerTone] = useState<'info' | 'warning' | 'urgent' | 'success'>(
     activeNotice?.tone || 'info'
@@ -213,6 +223,10 @@ export const MessagesSupportTab: React.FC<MessagesSupportTabProps> = ({
               subtitle="Select a customer household to message or publish a dashboard notice"
             />
           </div>
+          <div className="p-3 space-y-2">
+            <TextInput aria-label="Search conversations" placeholder="Search customers or messages" value={search} onChange={e => setSearch(e.target.value)} />
+            <SelectInput aria-label="Filter support queue" value={queue} onChange={e => setQueue(e.target.value)}><option value="all">All conversations</option><option value="unread">Unread</option><option value="open">Open</option><option value="pending">Pending</option><option value="resolved">Resolved</option></SelectInput>
+          </div>
           <div className="divide-y divide-gray-100 max-h-[680px] overflow-y-auto dark:divide-gray-800">
             {(threads.length > 0
               ? threads
@@ -223,11 +237,12 @@ export const MessagesSupportTab: React.FC<MessagesSupportTabProps> = ({
                   email: u.email,
                   status: u.status,
                   unreadForAdmin: 0,
+                  supportStatus: 'open',
                   accountNotice: null,
                   lastMessageAt: u.createdAt,
                   messages: [],
                 }))
-            ).map((t) => {
+            ).filter(t => (queue === 'all' || (queue === 'unread' ? t.unreadForAdmin > 0 : (t.supportStatus || 'open') === queue)) && `${t.fullName} ${t.username} ${t.messages.map(m => `${m.subject} ${m.body}`).join(' ')}`.toLowerCase().includes(search.toLowerCase())).map((t) => {
               const isSelected = t.userId === activeUserId;
               return (
                 <button
@@ -246,6 +261,7 @@ export const MessagesSupportTab: React.FC<MessagesSupportTabProps> = ({
                     </span>
                     <div className="flex items-center gap-1.5 shrink-0">
                       {t.accountNotice && <Badge tone="warning">Banner</Badge>}
+                      <Badge tone="neutral">{t.supportStatus || 'open'}</Badge>
                       {t.unreadForAdmin > 0 && <Badge tone="error">{t.unreadForAdmin} new</Badge>}
                     </div>
                   </div>
@@ -401,9 +417,12 @@ export const MessagesSupportTab: React.FC<MessagesSupportTabProps> = ({
         <Card className="p-5">
           <CardHeader
             title="Secure Advisor Correspondence"
-            subtitle="Send encrypted messages directly into the customer's Chase Secure Message Center"
+            subtitle="Send messages directly to the customer secure message center"
           />
 
+          <div className="mt-3 flex flex-wrap gap-2">{savedReplies.map(reply => <span key={reply.id} className="inline-flex rounded border text-xs"><button type="button" className="p-2" onClick={() => { setCategory(reply.category); setSubject(reply.subject); setBody(reply.body); }}>{reply.label}</button>{!readOnly && <button type="button" aria-label={`Delete ${reply.label}`} className="p-2 text-red-700" onClick={() => void storeReplies(savedReplies.filter(r => r.id !== reply.id))}>×</button>}</span>)}</div>
+          {!readOnly && <div className="mt-2 flex gap-2"><TextInput aria-label="Saved reply name" placeholder="Name this reply" value={replyLabel} onChange={e => setReplyLabel(e.target.value)} /><Btn variant="secondary" size="xs" disabled={!replyLabel.trim() || !body.trim() || savedReplies.length >= 25} onClick={() => { void storeReplies([...savedReplies, {id: crypto.randomUUID(), label: replyLabel.trim(), subject, body, category}]); setReplyLabel(''); }}>Save current reply</Btn></div>}
+          {replyError && <p className="text-xs text-red-700" role="alert">{replyError}</p>}
           <div className="mt-3 flex flex-wrap gap-2">
             {REPLY_TEMPLATES.map((tpl) => (
               <button

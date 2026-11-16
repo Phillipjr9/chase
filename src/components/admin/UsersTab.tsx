@@ -100,7 +100,7 @@ export const UsersTab: React.FC<Props> = ({
   const [newUsername, setNewUsername] = useState('');
   const [newFullName, setNewFullName] = useState('');
   const [newEmail, setNewEmail] = useState('');
-  const [newPassword, setNewPassword] = useState('chase123');
+  const [newPassword, setNewPassword] = useState('');
 
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState('');
@@ -173,7 +173,7 @@ export const UsersTab: React.FC<Props> = ({
       setNewUsername('');
       setNewFullName('');
       setNewEmail('');
-      setNewPassword('chase123');
+      setNewPassword('');
     }
   };
 
@@ -506,6 +506,9 @@ export const UsersTab: React.FC<Props> = ({
                 subtitle="Synthesize realistic payroll deposits, merchant card purchases, transfers, interest & loan payments across any date range"
                 action={<Badge tone="violet">Simulator Engine</Badge>}
               />
+              {selectedUser.accounts.length === 0 && (
+                <p className="mt-3 text-sm text-amber-700">Create an account for this customer in Accounts &amp; cards before generating transactions.</p>
+              )}
               <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 items-end">
                 <label className="block">
                   <span className="block text-[11px] font-medium text-gray-600 dark:text-gray-300 mb-1">
@@ -556,7 +559,7 @@ export const UsersTab: React.FC<Props> = ({
                 </label>
                 <Btn
                   variant="primary"
-                  disabled={busy || isReadOnly}
+                  disabled={busy || isReadOnly || selectedUser.accounts.length === 0}
                   onClick={() =>
                     void onGenerateHistory({
                       startDate: activityStart,
