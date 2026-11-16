@@ -38,6 +38,7 @@ import {
   payLoan as apiPayLoan,
   schedulePayment as apiSchedulePayment,
   cancelScheduledPayment as apiCancelScheduled,
+  manageScheduledPayment as apiManageScheduled,
   fmtDueDate,
   nextDueDate,
 } from '../banking/store';
@@ -271,7 +272,7 @@ export const PayTransferHub: React.FC<HubProps> = ({
   const scheduled = useMemo(
     () =>
       [...(user.scheduledPayments || [])]
-        .filter((sp) => sp.status === 'scheduled')
+        .filter((sp) => sp.status === 'scheduled' || sp.status === 'paused')
         .sort((a, b) => a.date.localeCompare(b.date)),
     [user.scheduledPayments]
   );
@@ -286,6 +287,15 @@ export const PayTransferHub: React.FC<HubProps> = ({
         kind: 'error',
         text: e instanceof Error ? e.message : 'Could not cancel the scheduled payment.',
       });
+    }
+  };
+
+  const manageScheduled = async (id: string, label: string, patch: { action: 'pause' | 'resume' | 'edit'; amount?: number; date?: string }) => {
+    try {
+      onUpdateUser(await apiManageScheduled(id, patch));
+      setHubNotice({ kind: 'success', text: `Scheduled payment to ${label} updated.` });
+    } catch (e) {
+      setHubNotice({ kind: 'error', text: e instanceof Error ? e.message : 'Could not update the scheduled payment.' });
     }
   };
 
@@ -394,6 +404,7 @@ export const PayTransferHub: React.FC<HubProps> = ({
               movement={moneyMovement}
               scheduled={scheduled}
               onCancelScheduled={cancelScheduled}
+              onManageScheduled={manageScheduled}
               menu={menu}
               go={go}
               onOpenAccount={onOpenAccount}
@@ -443,7 +454,8 @@ const KIND_LABEL: Record<string, string> = {
 const ScheduledPanel: React.FC<{
   scheduled: ScheduledPayment[];
   onCancel: (id: string, label: string) => void;
-}> = ({ scheduled, onCancel }) => (
+  onManage: (id: string, label: string, patch: { action: 'pause' | 'resume' | 'edit'; amount?: number; date?: string }) => void;
+}> = ({ scheduled, onCancel, onManage }) => (
   <div className="mt-5 border rounded-[6px] bg-white" style={{ borderColor: LINE }}>
     <div className="px-5 py-3.5 border-b flex items-center justify-between gap-3" style={{ borderColor: LINE }}>
       <h2 className="text-[15px] font-semibold flex items-center gap-2" style={{ color: INK }}>
@@ -472,20 +484,25 @@ const ScheduledPanel: React.FC<{
               </span>
               <span className="block text-[11.5px]" style={{ color: FAINT }}>
                 {fmtDueDate(sp.date)} · {sp.frequency === 'monthly' ? 'Repeats monthly' : 'One time'} ·{' '}
-                {KIND_LABEL[sp.kind] || sp.kind}
+                {KIND_LABEL[sp.kind] || sp.kind}{sp.status === 'paused' ? ' · Paused' : ''}
               </span>
             </span>
             <span className="text-[13.5px] font-semibold shrink-0" style={{ color: INK }}>
               {fmtMoney(sp.amount)}
             </span>
-            <button
-              type="button"
-              aria-label={`Cancel scheduled payment to ${sp.label}`}
-              onClick={() => onCancel(sp.id, sp.label)}
-              className="p-1.5 text-[#B42318] hover:bg-[#FEF2F2] rounded cursor-pointer shrink-0"
-            >
-              <XCircle className="w-4 h-4" />
-            </button>
+            <div className="flex flex-wrap items-center justify-end gap-2 shrink-0">
+              <button type="button" onClick={() => {
+                const amountText = window.prompt('New payment amount', sp.amount.toFixed(2));
+                if (amountText === null) return;
+                const dateText = window.prompt('New payment date (YYYY-MM-DD)', sp.date);
+                if (dateText === null) return;
+                onManage(sp.id, sp.label, { action: 'edit', amount: Number(amountText), date: dateText.trim() });
+              }} className="text-[11.5px] font-semibold hover:underline cursor-pointer" style={{ color: BTN_BLUE }}>Edit</button>
+              {sp.frequency === 'monthly' && <button type="button" onClick={() => onManage(sp.id, sp.label, { action: sp.status === 'paused' ? 'resume' : 'pause' })} className="text-[11.5px] font-semibold hover:underline cursor-pointer" style={{ color: BTN_BLUE }}>{sp.status === 'paused' ? 'Resume' : 'Pause'}</button>}
+              <button type="button" aria-label={`Cancel scheduled payment to ${sp.label}`} onClick={() => onCancel(sp.id, sp.label)} className="p-1.5 text-[#B42318] hover:bg-[#FEF2F2] rounded cursor-pointer shrink-0">
+                <XCircle className="w-4 h-4" />
+              </button>
+            </div>
           </li>
         ))}
       </ul>
@@ -499,10 +516,11 @@ const OverviewPage: React.FC<{
   movement: { date: string; text: string; amount: number; id: string }[];
   scheduled: ScheduledPayment[];
   onCancelScheduled: (id: string, label: string) => void;
+  onManageScheduled: (id: string, label: string, patch: { action: 'pause' | 'resume' | 'edit'; amount?: number; date?: string }) => void;
   go: (p: PayPage) => void;
   onOpenAccount: () => void;
   menu: typeof MENU;
-}> = ({ deposits, cards, movement, scheduled, onCancelScheduled, go, onOpenAccount, menu }) => (
+}> = ({ deposits, cards, movement, scheduled, onCancelScheduled, onManageScheduled, go, onOpenAccount, menu }) => (
   <div>
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
       {menu.map((m) => (
@@ -527,7 +545,7 @@ const OverviewPage: React.FC<{
       ))}
     </div>
 
-    <ScheduledPanel scheduled={scheduled} onCancel={onCancelScheduled} />
+    <ScheduledPanel scheduled={scheduled} onCancel={onCancelScheduled} onManage={onManageScheduled} />
 
     <div className="mt-5 border rounded-[6px] bg-white" style={{ borderColor: LINE }}>
       <div className="px-5 py-3.5 border-b flex items-center justify-between" style={{ borderColor: LINE }}>

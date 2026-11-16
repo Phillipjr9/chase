@@ -99,6 +99,40 @@ All endpoints are JSON. Authenticated routes require
 | POST | `/api/loans/pay` | ✓ | Pay a mortgage or auto loan (reduces principal) |
 | POST | `/api/scheduled` | ✓ | Schedule a future or recurring payment |
 | POST | `/api/scheduled/cancel` | ✓ | Cancel a scheduled payment |
+| POST | `/api/scheduled/manage` | ✓ | Edit, pause, or resume a scheduled payment |
+| POST | `/api/budgets` | ✓ | Save monthly spending budgets |
+| POST | `/api/admin/login` | — | Sign in to the simulator admin portal |
+| GET | `/api/admin/me` | Admin | Current admin identity and role |
+| PUT | `/api/admin/me/password` | Admin | Confirmed password change for stored admin accounts; root password remains environment-managed |
+| GET/POST/PUT/DELETE | `/api/admin/admins` | Admin | Create/manage admin and read-only auditor accounts |
+| GET | `/api/admin/transactions` | Admin | Search simulator ledger activity across all customers |
+| GET/POST | `/api/admin/backup` | Admin | Download or confirmed-restore a simulator backup |
+| POST | `/api/admin/users/bulk` | Admin | Bulk suspend, reactivate, or confirmed-delete selected users |
+| GET | `/api/admin/overview` | Admin | Simulator totals and recent admin activity |
+| GET | `/api/admin/users` | Admin | List simulated customer profiles |
+| POST | `/api/admin/users` | Admin | Create a sample simulator profile |
+| GET/PUT/DELETE | `/api/admin/users/:id` | Admin | View, fully edit, or delete simulated customer data |
+| POST | `/api/admin/users/:id/revoke-sessions` | Admin | Revoke all user and impersonation sessions |
+| POST | `/api/admin/users/:id/impersonate` | Admin | Open a customer-view simulation session |
+| POST | `/api/admin/users/:id/transfers` | Admin | Post a confirmed simulated account transfer or debt payment |
+| POST | `/api/admin/users/:id/accounts` | Admin | Add a simulated account |
+| PUT/DELETE | `/api/admin/users/:id/accounts/:accountId` | Admin | Edit or confirmed-delete an account |
+| POST | `/api/admin/users/:id/accounts/bulk` | Admin | Bulk lock/unlock or typed-confirm delete accounts |
+| GET/POST | `/api/admin/users/:id/transactions` | Admin | List or add simulated ledger activity |
+| PUT/DELETE | `/api/admin/users/:id/transactions/:transactionId` | Admin | Edit or confirmed-delete a ledger entry; balances reconcile automatically |
+| POST | `/api/admin/users/:id/payees` | Admin | Add a simulated payee |
+| PUT/DELETE | `/api/admin/users/:id/payees/:payeeId` | Admin | Edit or confirmed-delete a payee and linked schedules |
+| POST | `/api/admin/users/:id/scheduled` | Admin | Add a simulated scheduled payment |
+| PUT/DELETE | `/api/admin/users/:id/scheduled/:paymentId` | Admin | Edit, pause, resume, cancel, or confirmed-delete a schedule |
+| POST | `/api/admin/users/:id/disputes` | Admin | Open a simulated card dispute |
+| PUT | `/api/admin/users/:id/disputes/:disputeId` | Admin | Update dispute status |
+| POST | `/api/admin/users/:id/disputes/:disputeId/refund` | Admin | Issue a confirmed simulated refund and reconcile the card balance |
+| POST | `/api/admin/users/:id/generate-transactions` | Admin | Generate posted simulated activity over a selected date range and cadence |
+| POST | `/api/admin/users/:id/reset-password` | Admin | Reset a simulated user's password |
+| GET/PUT | `/api/admin/settings` | Admin | Read/update simulator enrollment and password recovery controls |
+| POST | `/api/admin/reset` | Admin | Reset all simulator data to the sample profile |
+| GET | `/api/admin/audit` | Admin | Search and page through up to 5,000 retained audit entries |
+| POST | `/api/admin/logout` | Admin | End the administrator session |
 | POST | `/api/cards/reveal` | ✓ | Verify password and reveal a sample card number |
 | POST | `/api/cards/replace` | ✓ | Order a replacement and lock the old card |
 | POST | `/api/cards/dispute` | ✓ | Dispute a posted card purchase |
@@ -136,7 +170,14 @@ server-side and returns the updated user object.
   show-hide, travel notices, alerts, and privacy choices — all persisted
 - Real mortgage and auto-loan accounts: monthly, payoff, or custom
   payments that reduce principal, plus scheduled future payments
-- Scheduled & recurring transfers with a cancellable upcoming-payments panel
+- Scheduled & recurring payments with an upcoming-payments manager to edit,
+  pause/resume recurring items, or cancel payments
+- Checking and savings monthly statements with downloadable, period-specific CSV
+  transaction exports
+- Spending & Budgeting with current-month category totals and persisted monthly
+  budget targets
+- Ultimate Rewards® cash-back redemption posts a card statement credit; points
+  and card balances update with each redemption
 - Chase MyHome® driven by the live mortgage account, not static figures
 - Error boundary so a render failure shows a recovery screen, not a blank page
 - Dedicated Chase-style credit-card account page: real card artwork,
@@ -160,8 +201,23 @@ server-side and returns the updated user object.
   actions, utility bar and sign-out, with an Español/English switch
 - Global dashboard search across accounts, transactions, payees, settings
   sections, Chase Offers, credit tools and shortcuts
+- Simulator-only admin portal at `/admin`: separate role-protected login,
+  user/account/ledger/rewards/credit/preferences management through complete
+  simulator records; filter/page/export users and audit history; global transaction
+  search and date-range reports; create, edit and delete accounts and ledger entries
+  with balance reconciliation; manage payees, schedules, disputes and simulated
+  refunds; bulk user status/delete actions; admin and read-only auditor accounts;
+  secure JSON backup/restore; user session revocation; environment access controls;
+  and a persistent 5,000-entry audit log. Admin credentials entered in the regular
+  sign-in form route directly to administration; `/admin` also has one-click demo sign-in. Demo
+  credentials are `admin` / `chaseadmin123` (override with `DEMO_ADMIN_USERNAME`
+  and `DEMO_ADMIN_PASSWORD` environment variables).
+  Admin controls only simulated data; this portal has no real payment rails.
 - Committed end-to-end test (`tests/e2e.mjs`) covering sign in → transfer →
-  card payment → persistence, asserting balances through the API
+  card payment → persistence, asserting balances through the API; admin API
+  smoke test (`tests/admin-api.mjs`) covers authorization and roles, backup/restore,
+  settings, account/ledger reconciliation, payees, schedules, disputes/refunds,
+  user/session controls, impersonation, and audit logging.
 - Session persistence across refreshes; sign-out invalidates the token
 
 ---
@@ -185,6 +241,7 @@ server-side and returns the updated user object.
 │   │   ├── EditorialSections.tsx
 │   │   ├── SignUpWizard.tsx    # Enrollment flow
 │   │   ├── BankingDashboard.tsx# Online Banking
+│   │   ├── AdminPage.tsx       # Simulator administrator portal
 │   │   ├── Modals.tsx          # Offers, mortgage, scheduler, auto loan
 │   │   ├── Footer.tsx
 │   │   └── ChaseLogo.tsx       # Octagon logo + card artwork (SVG)
@@ -202,11 +259,15 @@ npm run build
 node server/index.js &                      # serve app + API
 npm install --no-save playwright && npx playwright install chromium
 BASE_URL=http://127.0.0.1:3000 node tests/e2e.mjs
+BASE_URL=http://127.0.0.1:3000 node tests/admin-api.mjs
 ```
 
 The E2E suite signs in with the sample Chase account, transfers money, pays the card,
-and verifies both account balances through the API. It exits non-zero on any
-failure and is safe to run on a fresh database (it seeds the sample user).
+and verifies both account balances through the API. The admin API smoke test
+checks role separation, customer creation, daily/monthly/yearly history generation,
+full-record editing, suspension, impersonation, and audit entries; it creates
+and removes one temporary simulated customer.
+Both suites exit non-zero on failure.
 
 Auth hardening already in place: scrypt password hashing, 24-hour session
 tokens, ten-attempt sign-in throttling per client/username, password reset

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Search,
   MapPin,
@@ -46,6 +46,8 @@ import {
   redeemPoints,
   updateSecuritySettings,
   updateCardControls,
+  defaultBudgets,
+  saveBudgets,
 } from '../banking/store';
 
 /* Real Chase tokens */
@@ -76,15 +78,17 @@ const Panel: React.FC<{
   </div>
 );
 
-const Outline: React.FC<{ children: React.ReactNode; onClick: () => void; size?: 'sm' | 'md' }> = ({
+const Outline: React.FC<{ children: React.ReactNode; onClick: () => void; size?: 'sm' | 'md'; disabled?: boolean }> = ({
   children,
   onClick,
   size = 'md',
+  disabled = false,
 }) => (
   <button
     type="button"
     onClick={onClick}
-    className={`inline-flex items-center justify-center gap-1.5 border bg-white hover:bg-[#F2F6FB] font-semibold rounded-[4px] cursor-pointer ${
+    disabled={disabled}
+    className={`inline-flex items-center justify-center gap-1.5 border bg-white hover:bg-[#F2F6FB] font-semibold rounded-[4px] cursor-pointer disabled:opacity-60 ${
       size === 'sm' ? 'text-[12.5px] px-3.5 py-2' : 'text-[14px] px-5 py-2.5'
     }`}
     style={{ borderColor: BLUE, color: BLUE }}
@@ -552,13 +556,15 @@ export const TravelView: React.FC<{
           </p>
           <div className="mt-4">
             <label className="block text-[12px] font-semibold mb-1" style={{ color: '#353535' }}>Points to redeem</label>
-            <input className={inputCls} inputMode="numeric" value={cashPts} onChange={(e) => setCashPts(e.target.value)} />
+            <input className={inputCls} type="number" min="1000" step="1000" max={activeCard?.rewardsPoints || 0} inputMode="numeric" value={cashPts} onChange={(e) => setCashPts(e.target.value)} />
+            <p className="mt-1 text-[11.5px]" style={{ color: MUT }}>Available on this card: {(activeCard?.rewardsPoints || 0).toLocaleString()} points. Redemptions post as a statement credit.</p>
             <p className="mt-1.5 text-[12.5px] font-semibold text-[#138842]">
               Statement credit value: {fmtMoney((parseInt(cashPts, 10) || 0) / 100)}
             </p>
           </div>
           <div className="mt-4">
             <Outline
+              disabled={busy || !activeCard || !Number.isInteger(Number(cashPts)) || Number(cashPts) < 1000 || Number(cashPts) > (activeCard?.rewardsPoints || 0)}
               onClick={() => {
                 const pts = parseInt(cashPts, 10) || 0;
                 if (!activeCard) return;
@@ -600,21 +606,26 @@ export const TravelView: React.FC<{
 };
 
 /* ============================ 3. SPENDING & BUDGETING ============================ */
-export const SpendingView: React.FC<{ user: User }> = ({ user }) => {
-  const [budgets, setBudgets] = useState<Record<string, number>>({
-    Groceries: 400,
-    Dining: 250,
-    Travel: 600,
-    Shopping: 350,
-    Bills: 300,
-    Transportation: 200,
-    Subscriptions: 60,
-  });
+export const SpendingView: React.FC<{ user: User; onUpdateUser: (user: User) => void }> = ({ user, onUpdateUser }) => {
+  const [budgets, setBudgets] = useState<Record<string, number>>(user.budgets || defaultBudgets());
+  const [budgetNotice, setBudgetNotice] = useState<string | null>(null);
+  useEffect(() => setBudgets(user.budgets || defaultBudgets()), [user.budgets]);
+  const persistBudgets = async () => {
+    try {
+      onUpdateUser(await saveBudgets(budgets));
+      setBudgetNotice('Monthly budgets saved.');
+    } catch (error) {
+      setBudgetNotice(error instanceof Error ? error.message : 'Could not save budgets.');
+    }
+  };
 
-  // Aggregate real outgoing spending from all accounts
+  // Aggregate current-month outgoing spending from all accounts
+  const now = new Date();
   const totals: Record<string, number> = {};
   for (const acct of user.accounts) {
     for (const t of acct.transactions) {
+      const date = new Date(t.date);
+      if (date.getFullYear() !== now.getFullYear() || date.getMonth() !== now.getMonth()) continue;
       const isExpense = acct.type === 'credit-card' ? t.amount > 0 : t.amount < 0;
       if (!isExpense) continue;
       if (['Transfer', 'Payment', 'Cash', 'Fee', 'Wire'].includes(t.category)) continue;
@@ -638,6 +649,7 @@ export const SpendingView: React.FC<{ user: User }> = ({ user }) => {
         <ChaseIcon name="piggy" size={32} />
       </div>
 
+      {budgetNotice && <p role="status" className="mt-3 text-[12.5px]" style={{ color: MUT }}>{budgetNotice}</p>}
       <Panel className="mt-5 p-5">
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
           <div>
@@ -679,6 +691,7 @@ export const SpendingView: React.FC<{ user: User }> = ({ user }) => {
                     onChange={(e) =>
                       setBudgets((prev) => ({ ...prev, [cat]: Math.max(0, Number(e.target.value) || 0) }))
                     }
+                    onBlur={persistBudgets}
                     className="w-[78px] h-7 px-2 border rounded-[3px] text-[12.5px] text-right"
                     style={{ borderColor: '#B7BEC6' }}
                   />
