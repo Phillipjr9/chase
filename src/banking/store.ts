@@ -486,12 +486,12 @@ export function defaultCredit(): CreditProfile {
     enrolledAt: daysAgoIso(140),
     history,
     factors: [
-      { id: 'payment-history', label: 'Payment history', status: 'good', weight: 'Extremely influential', detail: 'No late payments appear in this sample credit file.' },
+      { id: 'payment-history', label: 'Payment history', status: 'good', weight: 'Extremely influential', detail: 'No late payments appear in this credit file.' },
       { id: 'credit-utilization', label: 'Credit utilization', status: 'good', weight: 'Highly influential', detail: 'Reported revolving utilization is about 8%.' },
       { id: 'balances', label: 'Balances', status: 'fair', weight: 'Moderately influential', detail: 'Reported card balances increased $120 since the prior update.' },
       { id: 'credit-history', label: 'Credit history', status: 'good', weight: 'Highly influential', detail: 'Your oldest reported account is about 6 years old.' },
       { id: 'credit-checks', label: 'Recent credit behavior', status: 'good', weight: 'Less influential', detail: '1 hard inquiry in the past 12 months; none in the past 6 months.' },
-      { id: 'available-credit', label: 'Available credit', status: 'good', weight: 'Less influential', detail: '$17,917 available across 2 open cards in this sample file.' },
+      { id: 'available-credit', label: 'Available credit', status: 'good', weight: 'Less influential', detail: '$17,917 available across 2 open cards in this credit file.' },
     ],
     changes: [
       { id: 'chg-latest', date: daysAgoIso(6), delta: -6, reason: 'Card balance increased by $120 this week.' },
@@ -830,7 +830,7 @@ function hydrateDefaults(user: User | null | undefined): User {
 /* --------------------------- Exported async API --------------------------- */
 
 export async function seedSampleUserIfNeeded(): Promise<void> {
-  // Demo identities are not provisioned automatically.
+  // Sample identities are not provisioned automatically.
 }
 
 export async function fetchMe(): Promise<User | null> {

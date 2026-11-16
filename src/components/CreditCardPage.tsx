@@ -950,7 +950,7 @@ export const CreditCardPage: React.FC<Props> = ({
                   </div>
                 </div>
                 <p className="mt-3 text-[11.5px] leading-relaxed" style={{ color: MUTED }}>
-                  Sample number only. This site does not store real card numbers. Never share a card
+                  Card number only. This site does not store real card numbers. Never share a card
                   number with someone who contacts you unexpectedly.
                 </p>
               </div>

@@ -263,15 +263,15 @@ export const CreditJourney: React.FC<Props> = ({ user, onUpdateUser }) => {
           <div className="flex items-center gap-2">
             <h1 className="text-[26px] font-light" style={{ color: INK }}>Credit Journey®</h1>
             <span className="text-[10.5px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full" style={{ background: '#EAF2FA', color: BLUE }}>
-              Sample profile
+              Profile
             </span>
           </div>
           <p className="mt-0.5 text-[13px]" style={{ color: MUTED }}>
-            Simulated {credit.model} score based on a sample {credit.bureau}® file. Checking a score does not affect it.
+            {credit.model} score based on the latest {credit.bureau}® file. Checking a score does not affect it.
           </p>
         </div>
         <div className="text-right">
-          <p className="text-[11.5px]" style={{ color: FAINT }}>Sample file updated</p>
+          <p className="text-[11.5px]" style={{ color: FAINT }}>File updated</p>
           <p className="text-[13px] font-semibold" style={{ color: INK }}>{fmtDate(credit.report.pulledAt)}</p>
         </div>
       </div>

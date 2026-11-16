@@ -3,13 +3,15 @@ import { adminFetch, type AdminAccountRow } from './types';
 import { Btn, Card, CardHeader, SelectInput, TextInput } from './ui';
 
 interface Note { id: string; text: string; author: string; createdAt: string }
-interface Props { userId: string; token: string; isSuperAdmin: boolean; admins: AdminAccountRow[]; ownerId?: string | null; status?: string; onRefresh: () => Promise<unknown>; readOnly: boolean }
-export const CustomerSupportTools: React.FC<Props> = ({ userId, token, isSuperAdmin, admins, ownerId, status, onRefresh, readOnly }) => {
+interface Props { userId: string; token: string; isSuperAdmin: boolean; admins: AdminAccountRow[]; customerUsername?: string; ownerId?: string | null; status?: string; onRefresh: () => Promise<unknown>; readOnly: boolean }
+export const CustomerSupportTools: React.FC<Props> = ({ userId, token, isSuperAdmin, admins, customerUsername, ownerId, status, onRefresh, readOnly }) => {
   const [notes, setNotes] = useState<Note[]>([]);
   const [text, setText] = useState('');
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
   const base = `/api/admin/users/${encodeURIComponent(userId)}`;
+  const alreadyAdmin = !!customerUsername && admins.some((admin) => admin.username.toLowerCase() === customerUsername.toLowerCase());
   useEffect(() => {
     let active = true;
     setNotes([]); setError(''); setText('');
@@ -28,6 +30,14 @@ export const CustomerSupportTools: React.FC<Props> = ({ userId, token, isSuperAd
       <CardHeader title="Customer support" subtitle="Organize the customer conversation and assignment." />
       <label className="block text-xs font-semibold">Conversation status<SelectInput className="mt-1" value={status || 'open'} disabled={busy || readOnly} onChange={e => { const value = e.target.value; void run(async () => { await adminFetch(`${base}/support-status`, {method:'PUT', body: JSON.stringify({status:value})}, token); await onRefresh(); }); }}><option value="open">Open</option><option value="pending">Pending</option><option value="resolved">Resolved</option></SelectInput></label>
       {isSuperAdmin && <label className="block text-xs font-semibold">Assigned administrator<SelectInput className="mt-1" value={ownerId || ''} disabled={busy || readOnly} onChange={e => { const value = e.target.value; void run(async () => { await adminFetch(`${base}/assign-admin`, {method:'PUT', body:JSON.stringify({adminId:value || null})}, token); await onRefresh(); }); }}><option value="">Super admin only</option>{admins.filter(a => !a.protected && a.role === 'admin' && a.status === 'active').map(a => <option key={a.id} value={a.id}>{a.fullName} ({a.username})</option>)}</SelectInput></label>}
+      {isSuperAdmin && !alreadyAdmin && !readOnly && (
+        <div className="rounded border border-violet-200 bg-violet-50 p-3">
+          <p className="text-xs font-medium text-violet-900 mb-2">Promote this customer to a limited admin account.</p>
+          <Btn variant="primary" size="sm" disabled={busy} onClick={() => { void run(async () => { setNotice(''); const res = await adminFetch<{ admin: AdminAccountRow; user: { id: string } }>(`${base}/promote-admin`, { method: 'POST' }, token); setNotice(`${res.admin.fullName || res.admin.username} is now a limited admin.`); await onRefresh(); }); }}>Promote to limited admin</Btn>
+        </div>
+      )}
+      {alreadyAdmin && <p className="text-xs text-emerald-700">This customer already has an administrator account.</p>}
+      {notice && <p className="text-xs text-emerald-700">{notice}</p>}
       {error && <p role="alert" className="text-xs text-red-700">{error}</p>}
     </Card>
   </div>;

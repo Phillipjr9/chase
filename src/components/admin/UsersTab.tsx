@@ -201,7 +201,7 @@ export const UsersTab: React.FC<Props> = ({
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
               <h3 className="text-[15.5px] font-semibold text-gray-900 dark:text-white">
-                Simulator Customers ({filtered.length})
+                Customer profiles ({filtered.length})
               </h3>
               <p className="text-[12px] text-gray-500 dark:text-gray-400">
                 Select any profile to manage accounts, ledger, or preview banking
@@ -417,7 +417,7 @@ export const UsersTab: React.FC<Props> = ({
                   <div className="flex flex-wrap items-center gap-2">
                     <Btn variant="primary" size="sm" disabled={busy} onClick={onImpersonate}>
                       <Eye className="w-4 h-4" />
-                      Preview as Customer
+                      Switch to customer
                     </Btn>
                     <Btn variant="secondary" size="sm" disabled={busy} onClick={onToggleUserStatus}>
                       {selectedUser.status === 'suspended' ? (
@@ -499,12 +499,12 @@ export const UsersTab: React.FC<Props> = ({
               </div>
             </Card>
 
-            {/* Simulated Activity History Generator (from 8f9d1770) */}
+            {/* Customer activity history generator */}
             <Card className="p-5">
               <CardHeader
-                title="Simulated Ledger History Generator"
-                subtitle="Synthesize realistic payroll deposits, merchant card purchases, transfers, interest & loan payments across any date range"
-                action={<Badge tone="violet">Simulator Engine</Badge>}
+                title="Customer activity generator"
+                subtitle="Synthesize realistic payroll deposits, merchant card purchases, transfers, interest, and loan payments across any date range"
+                action={<Badge tone="violet">Activity engine</Badge>} 
               />
               {selectedUser.accounts.length === 0 && (
                 <p className="mt-3 text-sm text-amber-700">Create an account for this customer in Accounts &amp; cards before generating transactions.</p>
@@ -649,7 +649,7 @@ export const UsersTab: React.FC<Props> = ({
                     </label>
                     <label className="block">
                       <span className="block text-[11.5px] font-medium text-gray-600 dark:text-gray-300 mb-1">
-                        Simulated Credit Score (300–850)
+                        Credit score (300–850)
                       </span>
                       <TextInput
                         type="number"
@@ -737,7 +737,7 @@ export const UsersTab: React.FC<Props> = ({
       <Modal
         open={createOpen}
         onClose={() => setCreateOpen(false)}
-        title="Create Simulated Customer Profile"
+        title="Create customer profile"
         footer={
           <>
             <Btn variant="secondary" onClick={() => setCreateOpen(false)}>
@@ -751,7 +751,7 @@ export const UsersTab: React.FC<Props> = ({
       >
         <form onSubmit={handleCreateSubmit} className="space-y-3.5">
           <p className="text-[12.5px] text-gray-500 dark:text-gray-400">
-            Provisions a complete Chase household with sample checking, savings, Sapphire Preferred card, payees, investments, and credit profile.
+            Provisions a complete Chase household with checking, savings, Sapphire Preferred card, payees, investments, and credit profile.
           </p>
           <label className="block">
             <span className="block text-[12px] font-medium text-gray-700 dark:text-gray-300 mb-1">
@@ -808,7 +808,7 @@ export const UsersTab: React.FC<Props> = ({
           setBulkDeleteOpen(false);
           setBulkDeleteConfirm('');
         }}
-        title={`Delete ${selectedIds.length} Selected Customers`}
+        title={`Delete ${selectedIds.length} selected customers`}
         footer={
           <>
             <Btn variant="secondary" onClick={() => setBulkDeleteOpen(false)}>
@@ -832,7 +832,7 @@ export const UsersTab: React.FC<Props> = ({
         }
       >
         <p className="text-[13px] text-gray-600 dark:text-gray-300">
-          This permanently removes <strong>{selectedIds.length}</strong> simulated customer profiles and their accounts. Type{' '}
+          This permanently removes <strong>{selectedIds.length}</strong> customer profiles and their accounts. Type{' '}
           <code className="font-mono font-bold text-[#F04438]">DELETE SELECTED USERS</code> to confirm:
         </p>
         <TextInput
@@ -847,7 +847,7 @@ export const UsersTab: React.FC<Props> = ({
       <Modal
         open={deleteUserOpen}
         onClose={() => setDeleteUserOpen(false)}
-        title="Delete Simulated Customer"
+        title="Delete customer"
         footer={
           <>
             <Btn variant="secondary" onClick={() => setDeleteUserOpen(false)}>

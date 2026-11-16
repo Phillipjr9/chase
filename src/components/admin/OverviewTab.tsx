@@ -176,7 +176,7 @@ export const OverviewTab: React.FC<Props> = ({
 
   const kpis = [
     {
-      label: 'Simulator Customers',
+      label: 'Customer profiles',
       value: String(metrics?.users ?? 0),
       sub:
         metrics && metrics.suspendedUsers > 0
@@ -256,7 +256,7 @@ export const OverviewTab: React.FC<Props> = ({
           <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
             <div>
               <h3 className="text-[15.5px] font-semibold text-gray-900 dark:text-white">
-                Simulated Cashflow Velocity
+                Cashflow Velocity
               </h3>
               <p className="text-[12px] text-gray-500 dark:text-gray-400 mt-0.5">
                 Deposits &amp; credits vs. purchases &amp; outgoing payments across all customer ledgers
@@ -296,7 +296,7 @@ export const OverviewTab: React.FC<Props> = ({
           {areaPoints.length > 0 ? (
             <AreaChart data={areaPoints} aLabel="Inflows" bLabel="Outflows" height={270} />
           ) : (
-            <EmptyState title="No ledger cashflow yet" detail="Generate simulated customer activity to populate the curve." />
+              <EmptyState title="No ledger cashflow yet" detail="Generate customer activity to populate the curve." />
           )}
         </Card>
 
@@ -306,7 +306,7 @@ export const OverviewTab: React.FC<Props> = ({
               Current-Month Deposit Pace
             </h3>
             <p className="text-[12px] text-gray-500 dark:text-gray-400 mt-0.5">
-              Monthly inflow benchmark across active simulator profiles
+              Monthly inflow benchmark across active customer profiles
             </p>
           </div>
           <div className="my-2">
@@ -361,7 +361,7 @@ export const OverviewTab: React.FC<Props> = ({
                 centerLabel="Total accounts"
               />
             ) : (
-              <EmptyState title="No simulated accounts" />
+              <EmptyState title="No customer accounts" />
             )}
           </div>
         </Card>
@@ -591,7 +591,7 @@ export const OverviewTab: React.FC<Props> = ({
             />
             {openDisputes.length === 0 ? (
               <p className="mt-3 text-[12.5px] text-gray-500 dark:text-gray-400">
-                All customer card disputes are currently resolved. You can open or refund simulated disputes in Payments &amp; Disputes.
+                All customer card disputes are currently resolved. You can open or refund disputes in Payments &amp; Disputes.
               </p>
             ) : (
               <ul className="mt-3 divide-y divide-gray-100 dark:divide-gray-800">
@@ -623,7 +623,7 @@ export const OverviewTab: React.FC<Props> = ({
           <Card className="p-5">
             <CardHeader
               title="Recent Admin Audit Trail"
-              subtitle="Latest operator & compliance events"
+              subtitle="Latest operator and compliance events"
               action={
                 <Btn variant="ghost" size="xs" onClick={() => onNavigate('audit')}>
                   Full log ({audit.length})

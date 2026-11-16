@@ -445,13 +445,6 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
                   </div>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => onAction('admin-login')}
-                  className="mt-4 text-[#005EB8] hover:underline font-medium text-[12.5px] cursor-pointer"
-                >
-                  Administrator sign in
-                </button>
               </div>
             )}
           </div>

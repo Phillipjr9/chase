@@ -76,7 +76,7 @@ export const WealthCreditTab: React.FC<WealthCreditProps> = ({
   const [goal, setGoal] = useState('800');
   const [changeReason, setChangeReason] = useState('On-time statement payment & lower utilization');
   const [alertTitle, setAlertTitle] = useState('Experian® inquiry alert');
-  const [alertDetail, setAlertDetail] = useState('Simulated credit inquiry recorded on file.');
+  const [alertDetail, setAlertDetail] = useState('Credit inquiry recorded on file.');
 
   // Ultimate Rewards & Travel state
   const [pointsCardId, setPointsCardId] = useState('');

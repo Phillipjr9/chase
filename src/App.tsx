@@ -279,7 +279,7 @@ export function App() {
     return (
       <ChasePageLoader
         message="Loading Chase Online…"
-        detail="Restoring your sample session securely."
+        detail="Restoring your session securely."
       />
     );
   }

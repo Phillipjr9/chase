@@ -255,7 +255,6 @@ function createAdminToken(username, role) {
 }
 
 function verifyAdminToken(token) {
-  if (!CHASE_ADMIN_PASSWORD && !process.env.ADMIN_SESSION_SECRET) return null;
   if (typeof token !== 'string') return null;
   const [version, payload, signature, extra] = token.split('.');
   if (version !== 'adm1' || !payload || !signature || extra) return null;
@@ -879,7 +878,7 @@ async function handleApi(req, res, url) {
       });
     }
 
-    if (pathname === '/api/admin/seed-demo' && method === 'POST') return sendJson(res, 410, { error: 'Demo seeding disabled.' });
+    if (pathname === '/api/admin/seed-sample' && method === 'POST') return sendJson(res, 410, { error: 'Sample seeding disabled.' });
     if (pathname === '/api/admin/transactions' && method === 'GET') {
       const q = String(url.searchParams.get('q') || '').trim().toLowerCase();
       const status = url.searchParams.get('status') || '';
@@ -1152,6 +1151,34 @@ async function handleApi(req, res, url) {
         return String(b.lastMessageAt).localeCompare(String(a.lastMessageAt));
       });
       return sendJson(res, 200, { threads });
+    }
+
+    const promoteCustomerRoute = pathname.match(/^\/api\/admin\/users\/([^/]+)\/promote-admin$/);
+    if (promoteCustomerRoute) {
+      if (!isSuperAdmin) return sendJson(res, 403, { error: 'Super administrator access required.' });
+      const userId = decodeURIComponent(promoteCustomerRoute[1]);
+      const target = findUserById(userId);
+      if (!target) return sendJson(res, 404, { error: 'Simulator user not found.' });
+      const existingAdmin = findAdminByUsername(target.username);
+      if (existingAdmin) return sendJson(res, 409, { error: 'This customer already has an administrator account.' });
+      const limitedAdmin = {
+        id: uid(),
+        username: target.username,
+        fullName: target.fullName || target.username,
+        email: target.email || `${target.username}@example.com`,
+        role: 'admin',
+        status: 'active',
+        passwordHash: target.passwordHash,
+        createdAt: new Date().toISOString(),
+        permissions: {
+          createUsers: false,
+          generateActivity: false,
+          sendMessages: true,
+        },
+      };
+      insertAdminAccount(limitedAdmin);
+      recordAdminAudit('Promoted customer to limited admin', { userId, adminId: limitedAdmin.id, username: limitedAdmin.username });
+      return sendJson(res, 201, { admin: limitedAdmin, user: publicUser(target) });
     }
 
     const msgAdminRoute = pathname.match(/^\/api\/admin\/users\/([^/]+)\/(messages|messages\/read|notice|staff-notes|support-status|assign-admin)$/);

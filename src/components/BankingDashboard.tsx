@@ -608,7 +608,7 @@ export const BankingDashboard: React.FC<Props> = ({
       {isImpersonating && (
         <div role="status" className="bg-[#EAF2FA] border-b border-[#CFE0F0]">
           <div className="max-w-[1260px] mx-auto px-4 sm:px-8 min-h-[38px] flex flex-wrap items-center justify-between gap-2 text-[12px]" style={{ color: BTN_BLUE }}>
-            <span><ShieldCheck className="inline w-3.5 h-3.5 mr-1" /> Admin preview · viewing simulated account for {user.fullName}</span>
+            <span><ShieldCheck className="inline w-3.5 h-3.5 mr-1" /> Admin preview · viewing account for {user.fullName}</span>
             <button type="button" onClick={onExitImpersonation} className="font-semibold underline cursor-pointer">Return to admin</button>
           </div>
         </div>

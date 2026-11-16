@@ -510,7 +510,7 @@ export const MessagesSupportTab: React.FC<MessagesSupportTabProps> = ({
               <EmptyState
                 icon={<AlertTriangle className="h-5 w-5" />}
                 title="No messages in this thread yet"
-                detail="Send an advisor notice above or sign in as the customer to test two-way correspondence."
+                detail="Send an advisor notice above or sign in as the customer to review two-way correspondence."
               />
             ) : (
               <div className="space-y-3 max-h-[420px] overflow-y-auto pr-1">

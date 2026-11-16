@@ -160,7 +160,7 @@ export const OperationsTab: React.FC<OperationsProps> = ({
   onProcessScheduled,
   onRunMonthEndClose,
 }) => {
-  // Zelle / Wire / QuickDeposit simulator rail state
+  // Zelle / Wire / QuickDeposit rail state
   const [railMode, setRailMode] = useState<'zelle' | 'wire' | 'deposit'>('zelle');
   const [railDirection, setRailDirection] = useState<'in' | 'out'>('in');
   const [railAccountId, setRailAccountId] = useState('');
@@ -172,7 +172,7 @@ export const OperationsTab: React.FC<OperationsProps> = ({
   const [fromId, setFromId] = useState('');
   const [toId, setToId] = useState('');
   const [transferAmt, setTransferAmt] = useState('');
-  const [transferDesc, setTransferDesc] = useState('Admin simulated transfer');
+  const [transferDesc, setTransferDesc] = useState('Admin transfer');
 
   // Payee state
   const [payeeName, setPayeeName] = useState('');
@@ -499,11 +499,11 @@ export const OperationsTab: React.FC<OperationsProps> = ({
         )}
       </Card>
 
-      {/* Row 1: Simulated Internal / Debt Transfer + Payees Manager */}
+      {/* Row 1: Internal / Debt Transfer + Payees Manager */}
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-5">
         <Card className="xl:col-span-6 p-5">
           <CardHeader
-            title="Simulated Account / Debt Transfer"
+            title="Account / Debt Transfer"
             subtitle="Reconciles both source deposit balance and destination deposit, card, or loan ledger"
             action={<ArrowRightLeft className="w-4 h-4 text-[#0060F0]" />}
           />
@@ -590,7 +590,7 @@ export const OperationsTab: React.FC<OperationsProps> = ({
                   disabled={busy || isReadOnly || !toId || !transferAmt}
                 >
                   <ArrowRightLeft className="w-4 h-4" />
-                  Post Simulated Transfer
+                  Post transfer
                 </Btn>
               </div>
             </form>
@@ -690,7 +690,7 @@ export const OperationsTab: React.FC<OperationsProps> = ({
       <Card className="p-5">
         <CardHeader
           title="Scheduled Payments & Recurring Instructions"
-          subtitle="Create, pause, resume, edit, or cancel simulated scheduled transfers and bill payments"
+          subtitle="Create, pause, resume, edit, or cancel scheduled transfers and bill payments"
           action={<CalendarClock className="w-4 h-4 text-[#0060F0]" />}
         />
         {!isReadOnly && selectedUser && selectedUser.accounts.length > 0 && (
@@ -949,15 +949,15 @@ export const OperationsTab: React.FC<OperationsProps> = ({
         </div>
       </Card>
 
-      {/* Row 3: Card Disputes & Simulated Refunds */}
+      {/* Row 3: Card disputes and refunds */}
       <Card className="p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h3 className="text-[15.5px] font-semibold text-gray-900 dark:text-white">
-              Card Disputes &amp; Simulated Chargeback Refunds
+              Card Disputes &amp; Chargeback Refunds
             </h3>
             <p className="text-[12px] text-gray-500 dark:text-gray-400 mt-0.5">
-              Issuing a simulated refund posts a card-credit transaction, reduces the card balance, and resolves the dispute
+              Issuing a refund posts a card-credit transaction, reduces the card balance, and resolves the dispute
             </p>
           </div>
           <div className="inline-flex rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-white/5 p-0.5">
@@ -1048,7 +1048,7 @@ export const OperationsTab: React.FC<OperationsProps> = ({
             <EmptyState
               icon={<AlertTriangle className="w-5 h-5" />}
               title="No card disputes in this view"
-              detail="Open a simulated dispute above on any customer card purchase to test chargeback resolution and card-credit refunds."
+              detail="Open a dispute above on any customer card purchase to review chargeback resolution and card-credit refunds."
             />
           ) : (
             <TableShell>
@@ -1461,8 +1461,8 @@ export const SettingsTab: React.FC<SettingsProps> = ({
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-5">
         <Card className="xl:col-span-6 p-5">
           <CardHeader
-            title="Simulator Access Guardrails"
-            subtitle="Server-enforced public customer enrollment & password recovery controls"
+            title="Access guardrails"
+            subtitle="Server-enforced customer enrollment and password recovery controls"
             action={<LockKeyhole className="w-4 h-4 text-[#0060F0]" />}
           />
           <div className="mt-4 space-y-3">
@@ -1521,9 +1521,9 @@ export const SettingsTab: React.FC<SettingsProps> = ({
         {/* System Telemetry */}
         <Card className="xl:col-span-6 p-5">
           <CardHeader
-            title="Environment & Runtime Telemetry"
-            subtitle="Live Node.js process health, session counts & simulated storage footprint"
-            action={<Badge tone="success">Simulated Rails Only</Badge>}
+            title="Environment and runtime telemetry"
+            subtitle="Live Node.js process health, session counts, and storage footprint"
+            action={<Badge tone="success">Live operations</Badge>} 
           />
           <div className="mt-4 grid grid-cols-2 sm:grid-cols-3 gap-3 text-[12.5px]">
             <div className="rounded-xl bg-gray-50 dark:bg-white/[0.04] p-3">
@@ -1592,7 +1592,7 @@ export const SettingsTab: React.FC<SettingsProps> = ({
       {/* Row 2: Administrator & Read-Only Auditor Accounts */}
       <Card className="p-5">
         <CardHeader
-          title="Administrator & Read-Only Auditor Staff Accounts"
+          title="Administrator and read-only auditor staff accounts"
           subtitle="Admins manage their assigned customers; auditors have read-only access to their assigned customers"
           action={
             !isRootProtected && (
@@ -1784,7 +1784,7 @@ export const SettingsTab: React.FC<SettingsProps> = ({
         <Card className="xl:col-span-7 p-5">
           <CardHeader
             title="Encrypted-Hash JSON Backup & Restore"
-            subtitle="Export or restore all simulated customers, accounts, ledgers & settings (`chase-simulator-backup-v1`)"
+            subtitle="Export or restore customer profiles, accounts, ledgers, and settings"
           />
           <div className="mt-4 flex flex-wrap items-end gap-3">
             <Btn
@@ -1964,14 +1964,14 @@ export const SettingsTab: React.FC<SettingsProps> = ({
         }
       >
         <p className="text-[13px] text-gray-600 dark:text-gray-300">
-          Restoring replaces all simulated customer records and revokes active customer sessions. Type{' '}
-          <code className="font-mono font-bold text-[#F04438]">RESTORE SIMULATOR BACKUP</code>:
+          Restoring replaces all customer records and revokes active customer sessions. Type{' '}
+          <code className="font-mono font-bold text-[#F04438]">RESTORE BACKUP</code>:
         </p>
         <TextInput
           className="mt-3"
           value={restoreConfirm}
           onChange={(e) => setRestoreConfirm(e.target.value)}
-          placeholder="RESTORE SIMULATOR BACKUP"
+          placeholder="RESTORE BACKUP"
         />
       </Modal>
 
@@ -2005,14 +2005,14 @@ export const SettingsTab: React.FC<SettingsProps> = ({
         }
       >
         <p className="text-[13px] text-gray-600 dark:text-gray-300">
-          Deletes all customer profiles and their sessions. No demo customer will be restored. Type{' '}
-          <code className="font-mono font-bold text-[#F04438]">RESET SIMULATOR</code>:
+          Deletes all customer profiles and their sessions. No customer data will be restored. Type{' '}
+          <code className="font-mono font-bold text-[#F04438]">RESET DATA</code>:
         </p>
         <TextInput
           className="mt-3"
           value={resetSimConfirm}
           onChange={(e) => setResetSimConfirm(e.target.value)}
-          placeholder="RESET SIMULATOR"
+          placeholder="RESET DATA"
         />
       </Modal>
     </div>

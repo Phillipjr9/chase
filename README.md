@@ -24,11 +24,11 @@ npm run build         # build the frontend into dist/
 node server/index.js  # start API + static server (PORT env, default 3000)
 ```
 
-**Sample Customer credentials (Alex Rivera — Personal Banking):** username `chase` · password `chase123`
+**Customer credentials (Alex Rivera — Personal Banking):** username `chase` · password `chase123`
 (or enroll a brand-new account through the sign-up wizard).
 
-**Chase Administrator credentials (Operations & Simulator Console):** username `admin` · password `chaseadmin123`
-(configurable via `CHASE_ADMIN_USERNAME` and `CHASE_ADMIN_PASSWORD`). Open directly at `/admin`, click **Admin Console** in the header/sign-in card/footer, or enter `admin` / `chaseadmin123` in the homepage sign-in card. See [Admin Simulator Console](#admin-simulator-console).
+**Chase administrator credentials (Operations Console):** username `admin` · password `chaseadmin123`
+(configurable via `CHASE_ADMIN_USERNAME` and `CHASE_ADMIN_PASSWORD`). Open directly at `/admin`, click **Admin Console** in the header/sign-in card/footer, or enter `admin` / `chaseadmin123` in the homepage sign-in card. See [Admin Console](#admin-console).
 
 The frontend also works **standalone** (static preview only): if the API is
 unreachable, the app automatically falls back to browser-local storage with
@@ -69,7 +69,7 @@ All endpoints are JSON. Authenticated routes require
 | Method | Endpoint | Auth | Description |
 | --- | --- | --- | --- |
 | GET | `/api/health` | — | Liveness probe (`{ status, uptime, users }`) |
-| POST | `/api/seed` | — | Seed the sample Chase user (idempotent) |
+| POST | `/api/seed` | — | Seed the default Chase user (idempotent) |
 | POST | `/api/auth/register` | — | Enroll + open first account → `{ user, token }` |
 | POST | `/api/auth/login` | — | Sign in → `{ user, token }` (401 on bad credentials) |
 | POST | `/api/auth/logout` | ✓ | Invalidate the session token |
@@ -102,28 +102,28 @@ All endpoints are JSON. Authenticated routes require
 | POST | `/api/loans/pay` | ✓ | Pay a mortgage or auto loan (reduces principal) |
 | POST | `/api/scheduled` | ✓ | Schedule a future or recurring payment |
 | POST | `/api/scheduled/cancel` | ✓ | Cancel a scheduled payment |
-| POST | `/api/cards/reveal` | ✓ | Verify password and reveal a sample card number |
+| POST | `/api/cards/reveal` | ✓ | Verify password and reveal a card number |
 | POST | `/api/cards/replace` | ✓ | Order a replacement and lock the old card |
 | POST | `/api/cards/dispute` | ✓ | Dispute a posted card purchase |
 | POST | `/api/credit/simulate` | ✓ | Estimate a score range for a scenario |
 | POST | `/api/admin/login` | — | Sign in as root admin (`admin` / `chaseadmin123`) or staff admin/auditor |
 | GET | `/api/admin/me` | ⛨ | Verify active admin/auditor session |
 | GET | `/api/admin/overview?range=7d\|30d\|12w` | ⛨ | Bank-wide KPIs, cashflow velocity, account mix, credit utilization, categories & disputes |
-| POST | `/api/admin/seed-demo` | ⛨ | Populate sample Private Client & Sapphire households for testing |
+| POST | `/api/admin/seed-sample` | ⛨ | Populate Private Client & Sapphire households for setup |
 | GET / POST | `/api/admin/users` | ⛨ | List customer directory or provision a new customer household |
 | POST | `/api/admin/users/bulk` | ⛨ | Bulk suspend, reactivate, or confirmed-delete customer profiles |
-| GET / PUT / DELETE | `/api/admin/users/:id` | ⛨ | Inspect, edit full simulator JSON record, suspend, or delete customer |
+| GET / PUT / DELETE | `/api/admin/users/:id` | ⛨ | Inspect, edit the full customer JSON record, suspend, or delete customer |
 | POST | `/api/admin/users/:id/impersonate` | ⛨ | Mint customer preview session while preserving admin session |
 | POST | `/api/admin/users/:id/generate-transactions` | ⛨ | Generate daily/weekly/monthly/yearly realistic ledger activity |
-| POST / PUT / DELETE | `/api/admin/users/:id/accounts[/:accountId]` | ⛨ | Create, edit balances/limits, lock/unlock, or delete simulated accounts |
+| POST / PUT / DELETE | `/api/admin/users/:id/accounts[/:accountId]` | ⛨ | Create, edit balances/limits, lock/unlock, or delete accounts |
 | GET | `/api/admin/transactions` | ⛨ | Cross-customer global ledger search, date-range filter & pagination |
 | POST / PUT / DELETE | `/api/admin/users/:id/transactions[/:txId]` | ⛨ | Post, edit, or reverse & delete ledger entries with automatic balance reconciliation |
 | POST / PUT / DELETE | `/api/admin/users/:id/{transfers,payees,scheduled,disputes}` | ⛨ | Execute internal transfers, manage payees/schedules, resolve disputes & issue card refunds |
 | GET | `/api/admin/audit` | ⛨ | Immutable 5,000-entry compliance & operator audit trail |
 | GET / PUT | `/api/admin/settings` | ⛨ | Toggle customer self-enrollment and password reset guardrails |
 | GET / POST / PUT / DELETE | `/api/admin/admins[/:id]` | ⛨ | Manage full-access `admin` and read-only `auditor` staff accounts |
-| GET / POST | `/api/admin/backup` | ⛨ | Download or confirmed-restore full JSON simulator backup |
-| POST | `/api/admin/reset` | ⛨ | Confirmed reset of simulator to clean baseline |
+| GET / POST | `/api/admin/backup` | ⛨ | Download or confirmed-restore full JSON backup |
+| POST | `/api/admin/reset` | ⛨ | Confirmed reset to a clean baseline |
 
 Every mutation validates ownership, amounts, and sufficient funds
 server-side and returns the updated user object.
@@ -144,7 +144,7 @@ Sign in at `/admin` with `admin` / `chaseadmin123` (while customer `chase` / `ch
 | **Users & Simulator** | Searchable customer directory, bulk suspend/reactivate/confirmed-delete, `+ New Customer` modal, CSV export, customer inspector with **Preview as Customer** (with one-click `Return to Admin` banner), session revocation, password reset, **Activity History Generator** (`daily`/`weekly`/`monthly`/`yearly`), quick profile/credit score editor, and **Raw JSON Record Studio** |
 | **Accounts Portfolio** | Customer liquidity/credit/loan KPIs, open new Checking/Savings/CD/Credit Card/Auto Loan/Mortgage accounts, bulk lock/unlock/confirmed-delete, and inline balance/credit-limit/autopay/lock editors |
 | **Ledger Activity** | Balance-reconciled ledger entry poster, global or per-customer search/status/type/date-range explorer, CSV export, edit modal (adjusts balance by delta), and delete & reverse modal |
-| **Payments & Disputes** | Simulated internal transfers, bill-pay payees CRUD, recurring/one-time scheduled instructions (pause/resume/edit/cancel/delete), card dispute filing, status updates, and one-click **Issue Refund** (posts card credit & resolves dispute) |
+| **Payments & Disputes** | Internal transfers, bill-pay payees CRUD, recurring/one-time scheduled instructions (pause/resume/edit/cancel/delete), card dispute filing, status updates, and one-click **Issue Refund** (posts card credit & resolves dispute) |
 | **Admin Audit Log** | Searchable 5,000-entry compliance log with structured detail badges and CSV export |
 | **Settings & Backup** | Self-enrollment & password-reset guardrails, live runtime/memory/DB/session telemetry, `admin` & read-only `auditor` staff accounts, full JSON backup download/restore, and confirmed simulator reset |
 
@@ -175,7 +175,7 @@ to the same browser-local mode as the banking app, so it never dead-ends.
   profile & password controls
 - Dashboard search across accounts, sections, and transactions, plus
   account-derived alerts with mark-as-read
-- Working username remembering, sample password reset, and expired-session
+- Working username remembering, password reset, and expired-session
   handling; mortgage estimator, meeting scheduler, and auto loan application
 - Full Profile & Settings: editable personal details, password and
   sign-in protection, paperless, account nicknames/favorites/primary/
@@ -223,7 +223,7 @@ to the same browser-local mode as the banking app, so it never dead-ends.
 ├── server/
 │   ├── index.js                # HTTP server: customer + admin simulator REST API + static hosting
 │   ├── db.js                   # JSON database (users, admin staff, settings, sessions, audit log)
-│   └── domain.js               # Products, account factory, sample data
+│   └── domain.js               # Products, account factory, default data
 ├── src/
 │   ├── banking/store.ts        # Proxy-safe API client (+ local fallback mode)
 │   ├── components/
@@ -266,9 +266,9 @@ npm install --no-save playwright && npx playwright install chromium
 BASE_URL=http://127.0.0.1:3000 node tests/e2e.mjs
 ```
 
-The E2E suite signs in with the sample Chase account, transfers money, pays the card,
+The E2E suite signs in with the default Chase account, transfers money, pays the card,
 and verifies both account balances through the API. It exits non-zero on any
-failure and is safe to run on a fresh database (it seeds the sample user).
+failure and is safe to run on a fresh database (it seeds the default user).
 
 Auth hardening already in place: scrypt password hashing, 24-hour session
 tokens, ten-attempt sign-in throttling per client/username, password reset
@@ -290,6 +290,6 @@ gzip). Further splitting requires changing the Vite build configuration.
 - The database file (`server/data/db.json`) is created automatically on first
   run and written atomically; a corrupt file is preserved with a
   `.corrupt-<timestamp>.json` suffix instead of being silently overwritten.
-  Delete `db.json` to reset all data (the sample Chase user is re-seeded on next start).
+  Delete `db.json` to reset all data (the default Chase user is re-seeded on next start).
 - To deploy: run `npm run build`, then `node server/index.js` on any Node
   host (Render, Railway, Fly.io, a VPS, …). Set `PORT` as required.

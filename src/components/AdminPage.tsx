@@ -227,6 +227,12 @@ export const AdminPage: React.FC<{
 
   // Verify session on mount / token change
   useEffect(() => {
+    if (!token) {
+      setCheckingAuth(false);
+      setAuthenticated(false);
+      return;
+    }
+
     let active = true;
     (async () => {
       setCheckingAuth(true);
@@ -390,7 +396,7 @@ export const AdminPage: React.FC<{
         method: 'POST',
         body: JSON.stringify(payload),
       });
-      await acceptUpdatedUser(res.user, `Created simulator profile @${res.user.username}.`);
+      await acceptUpdatedUser(res.user, `Created customer profile @${res.user.username}.`);
       return true;
     } catch (err) {
       notify('error', err instanceof Error ? err.message : 'Could not create customer.');
@@ -484,7 +490,7 @@ export const AdminPage: React.FC<{
         setSelectedUser(null);
         setUserJson('');
       }
-      notify('success', `Deleted simulator profile @${removedUsername}.`);
+      notify('success', `Deleted customer profile @${removedUsername}.`);
     } catch (err) {
       notify('error', err instanceof Error ? err.message : 'Could not delete customer.');
     } finally {
@@ -547,7 +553,7 @@ export const AdminPage: React.FC<{
       });
       await acceptUpdatedUser(
         res.user,
-        `Generated ${res.transactionsAdded.toLocaleString()} ledger entries across ${res.eventsGenerated.toLocaleString()} simulated events.`
+        `Generated ${res.transactionsAdded.toLocaleString()} ledger entries across ${res.eventsGenerated.toLocaleString()} activity events.`
       );
     } catch (err) {
       notify('error', err instanceof Error ? err.message : 'Could not generate history.');
@@ -570,7 +576,7 @@ export const AdminPage: React.FC<{
         `/api/admin/users/${encodeURIComponent(selectedUser.id)}/accounts`,
         { method: 'POST', body: JSON.stringify(payload) }
       );
-      await acceptUpdatedUser(res.user, `Opened simulated ${payload.type} account.`);
+      await acceptUpdatedUser(res.user, `Opened ${payload.type} account.`);
       return true;
     } catch (err) {
       notify('error', err instanceof Error ? err.message : 'Could not create account.');
@@ -608,7 +614,7 @@ export const AdminPage: React.FC<{
         )}`,
         { method: 'DELETE', body: JSON.stringify({ confirm: true }) }
       );
-      await acceptUpdatedUser(res.user, 'Simulated account deleted.');
+      await acceptUpdatedUser(res.user, 'Account deleted.');
     } catch (err) {
       notify('error', err instanceof Error ? err.message : 'Could not delete account.');
     } finally {
@@ -749,7 +755,7 @@ export const AdminPage: React.FC<{
         `/api/admin/users/${encodeURIComponent(selectedUser.id)}/transfers`,
         { method: 'POST', body: JSON.stringify(payload) }
       );
-      await acceptUpdatedUser(res.user, 'Simulated transfer posted & both accounts reconciled.');
+      await acceptUpdatedUser(res.user, 'Transfer posted & both accounts reconciled.');
       return true;
     } catch (err) {
       notify('error', err instanceof Error ? err.message : 'Transfer failed.');
@@ -902,7 +908,7 @@ export const AdminPage: React.FC<{
         `/api/admin/users/${encodeURIComponent(selectedUser.id)}/disputes`,
         { method: 'POST', body: JSON.stringify(payload) }
       );
-      await acceptUpdatedUser(res.user, 'Opened simulated card dispute.');
+      await acceptUpdatedUser(res.user, 'Opened card dispute.');
       return true;
     } catch (err) {
       notify('error', err instanceof Error ? err.message : 'Could not open dispute.');
@@ -950,7 +956,7 @@ export const AdminPage: React.FC<{
         setUserJson(JSON.stringify(res.user, null, 2));
       }
       await loadData();
-      notify('success', 'Simulated card-credit refund posted & dispute resolved.');
+      notify('success', 'Card-credit refund posted & dispute resolved.');
     } catch (err) {
       notify('error', err instanceof Error ? err.message : 'Could not issue refund.');
     } finally {
@@ -1456,7 +1462,7 @@ export const AdminPage: React.FC<{
             <div className="lg:col-span-7 text-white space-y-4">
               <p className="inline-flex items-center gap-2 rounded-full bg-white/15 px-3.5 py-1 text-[11.5px] font-bold uppercase tracking-wider">
                 <ShieldCheck className="w-4 h-4" />
-                Chase Online · Operations &amp; Simulator Control
+                Chase Online · Operations Control
               </p>
               <h1 className="text-[32px] sm:text-[42px] font-light leading-tight tracking-tight">
                 {t(
@@ -1595,7 +1601,7 @@ export const AdminPage: React.FC<{
         <div className="max-w-[1380px] mx-auto px-4 sm:px-8 h-[30px] flex items-center justify-between gap-3 text-[11.5px] text-[#5C5C5C]">
           <span className="hidden sm:inline-flex items-center gap-1.5 font-medium">
             <ShieldCheck className="w-3.5 h-3.5 text-[#1A4488]" />
-            Chase Online Administration · Simulated Banking Environment
+            Chase Online Administration
           </span>
           <div className="flex items-center gap-3 ml-auto">
             <button type="button" onClick={onExit} className="hover:underline cursor-pointer">
@@ -1644,7 +1650,7 @@ export const AdminPage: React.FC<{
               </button>
               <span className="hidden sm:inline-block h-4 w-px bg-white/25" />
               <span className="hidden sm:inline-block text-[12px] font-semibold tracking-wide uppercase text-blue-200 truncate">
-                {isReadOnly ? 'Auditor Console (Read-Only)' : 'Operations & Simulator'}
+                {isReadOnly ? 'Auditor Console (Read-Only)' : !isSuperAdmin ? 'Limited Admin Console' : 'Operations Console'}
               </span>
             </div>
 
@@ -1972,7 +1978,7 @@ export const AdminPage: React.FC<{
                 onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = BTN_BLUE)}
               >
                 <Eye className="w-3.5 h-3.5" />
-                View as Customer
+                Switch to customer
               </button>
             )}
 
@@ -2126,7 +2132,7 @@ export const AdminPage: React.FC<{
 
         {tab === 'messages' && (
           <>
-          {selectedUser && <CustomerSupportTools key={selectedUser.id} userId={selectedUser.id} token={token} isSuperAdmin={isSuperAdmin} admins={adminAccounts} ownerId={users.find(u => u.id === selectedUser.id)?.ownerAdminId} status={messageThreads.find(t => t.userId === selectedUser.id)?.supportStatus} onRefresh={() => loadData()} readOnly={isReadOnly} />}
+          {selectedUser && <CustomerSupportTools key={selectedUser.id} userId={selectedUser.id} token={token} isSuperAdmin={isSuperAdmin} admins={adminAccounts} customerUsername={selectedUser.username} ownerId={users.find(u => u.id === selectedUser.id)?.ownerAdminId} status={messageThreads.find(t => t.userId === selectedUser.id)?.supportStatus} onRefresh={() => loadData()} readOnly={isReadOnly} />}
           <MessagesSupportTab
             token={token}
             users={users}
