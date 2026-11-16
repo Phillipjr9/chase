@@ -1141,7 +1141,7 @@ export const AdminPage: React.FC<{
 
   const handleUpdateAdmin = async (
     admin: AdminAccountRow,
-    patch: { role?: 'admin' | 'auditor'; status?: 'active' | 'disabled'; password?: string; permissions?: { createUsers: boolean; generateActivity: boolean; sendMessages: boolean } }
+    patch: { username?: string; fullName?: string; lockMessage?: string; role?: 'admin' | 'auditor'; status?: 'active' | 'disabled'; password?: string; permissions?: { createUsers: boolean; generateActivity: boolean; sendMessages: boolean } }
   ): Promise<boolean> => {
     setBusy(true);
     try {

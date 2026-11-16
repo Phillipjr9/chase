@@ -56,3 +56,21 @@ assert.equal((await call(`/api/admin/users/${userA.id}/staff-notes`,{token:b})).
 assert((await call('/api/admin/messages',{token:b})).threads.some(t => t.userId === userA.id && t.messages.length === 2));
 assert.equal((await call('/api/admin/users',{token:root})).users.length, 2);
 console.log('Administrator ownership, support isolation and reassignment passed.');
+// Credential changes and freeze messages are super-admin controlled; old tokens never revive.
+await call(`/api/admin/admins/${adminB.id}`, {token:a, method:'PUT', status:403, body:{status:'disabled',lockMessage:'Contact support'}});
+await call(`/api/admin/admins/${adminB.id}`, {token:root, method:'PUT', body:{status:'disabled',lockMessage:'Contact the super administrator about your account.'}});
+await call('/api/admin/me',{token:b,status:401});
+for (const endpoint of ['/api/admin/login','/api/auth/login']) {
+  const denied = await call(endpoint,{status:403,body:{username:'operator-b',password:'operatorPassword123!'}});
+  assert.equal(denied.error,'Contact the super administrator about your account.');
+  await call(endpoint,{status:401,body:{username:'operator-b',password:'incorrect'}});
+}
+await call(`/api/admin/admins/${adminB.id}`, {token:root, method:'PUT', body:{status:'active'}});
+await call('/api/admin/me',{token:b,status:401});
+const b2 = (await call('/api/admin/login',{body:{username:'operator-b',password:'operatorPassword123!'}})).token;
+await call(`/api/admin/admins/${adminB.id}`, {token:root, method:'PUT', body:{username:'operator-new',fullName:'New Name',password:'newPassword123!',confirm:true}});
+await call('/api/admin/me',{token:b2,status:401});
+await call('/api/admin/login',{status:401,body:{username:'operator-new',password:'operatorPassword123!'}});
+const b3 = (await call('/api/admin/login',{body:{username:'operator-new',password:'newPassword123!'}})).token;
+assert.equal((await call('/api/admin/users',{token:b3})).users.length,2);
+console.log('Staff credentials, lock messages and session invalidation passed.');

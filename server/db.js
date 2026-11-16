@@ -252,9 +252,11 @@ export function updateAdminAccount(id, patch) {
   const db = load();
   const index = db.adminAccounts.findIndex((admin) => admin.id === id);
   if (index < 0) return null;
+  const oldUsername = db.adminAccounts[index].username;
+  if (patch.passwordHash || patch.role || patch.status || patch.username) patch.sessionVersion = (db.adminAccounts[index].sessionVersion || 0) + 1;
   db.adminAccounts[index] = { ...db.adminAccounts[index], ...patch };
-  if (patch.passwordHash || patch.role || patch.status === 'disabled') {
-    const sessionUserId = `admin:${db.adminAccounts[index].username}`;
+  if (patch.passwordHash || patch.role || patch.status || patch.username) {
+    const sessionUserId = `admin:${oldUsername}`;
     for (const [token, session] of Object.entries(db.sessions)) {
       if (session.userId === sessionUserId) delete db.sessions[token];
     }

@@ -213,7 +213,8 @@ function getAdminSession(req, url) {
       }
       const username = String(session.userId || '').replace(/^admin:/, '');
       const account = findAdminByUsername(username);
-      if (account && account.status === 'active' && account.role === session.role) return { ...session, token };
+      const verified = verifyAdminToken(token);
+      if (account && verified && verified.userId === session.userId) return { ...verified, token };
       continue;
     }
     const stateless = verifyAdminToken(token);
@@ -246,6 +247,7 @@ function createAdminToken(username, role) {
     username,
     role,
     expiresAt: Date.now() + 8 * 60 * 60 * 1000,
+    sessionVersion: findAdminByUsername(username)?.sessionVersion || 0,
     nonce: crypto.randomBytes(16).toString('hex'),
   })).toString('base64url');
   const signature = crypto.createHmac('sha256', adminTokenSecret()).update(payload).digest('base64url');
@@ -266,7 +268,7 @@ function verifyAdminToken(token) {
     if (!['admin', 'auditor'].includes(claims.role) || !claims.username || claims.expiresAt <= Date.now()) return null;
     if (String(claims.username).toLowerCase() !== CHASE_ADMIN_USERNAME.toLowerCase()) {
       const admin = findAdminByUsername(claims.username);
-      if (!admin || admin.status !== 'active' || admin.role !== claims.role) return null;
+      if (!admin || admin.status !== 'active' || admin.role !== claims.role || (admin.sessionVersion || 0) !== (claims.sessionVersion || 0)) return null;
     }
     return { userId: String(claims.username).toLowerCase() === CHASE_ADMIN_USERNAME.toLowerCase() ? '__chase_admin__' : `admin:${claims.username}`, role: claims.role, expiresAt: claims.expiresAt };
   } catch {
@@ -404,7 +406,9 @@ async function handleApi(req, res, url) {
     const username = String(body.username || '').trim();
     const storedAdmin = findAdminByUsername(username);
     const isRootAdmin = !!CHASE_ADMIN_PASSWORD_HASH && username.toLowerCase() === CHASE_ADMIN_USERNAME.toLowerCase() && verifyPassword(String(body.password || ''), CHASE_ADMIN_PASSWORD_HASH);
-    const isStoredAdmin = storedAdmin && storedAdmin.status === 'active' && verifyPassword(String(body.password || ''), storedAdmin.passwordHash);
+    const validStoredPassword = storedAdmin && verifyPassword(String(body.password || ''), storedAdmin.passwordHash);
+    const isStoredAdmin = validStoredPassword && storedAdmin.status === 'active';
+    if (validStoredPassword && storedAdmin.status === 'disabled') return sendJson(res, 403, { error: storedAdmin.lockMessage || 'This administrator account is disabled. Contact the super administrator.' });
     if (!isRootAdmin && !isStoredAdmin) return sendJson(res, 401, { error: 'Admin username or password is incorrect.' });
     const role = isRootAdmin ? 'admin' : storedAdmin.role;
     const adminUsername = isRootAdmin ? CHASE_ADMIN_USERNAME : storedAdmin.username;
@@ -478,9 +482,11 @@ async function handleApi(req, res, url) {
     const storedAdmin = findAdminByUsername(adminUsername);
     const rootNameMatch = adminUsername.toLowerCase() === CHASE_ADMIN_USERNAME.toLowerCase();
     const isRootAdmin = !!CHASE_ADMIN_PASSWORD_HASH && rootNameMatch && verifyPassword(String(body.password || ''), CHASE_ADMIN_PASSWORD_HASH);
-    const isStoredAdmin = storedAdmin && storedAdmin.status === 'active' && verifyPassword(String(body.password || ''), storedAdmin.passwordHash);
+    const validStoredPassword = storedAdmin && verifyPassword(String(body.password || ''), storedAdmin.passwordHash);
+    const isStoredAdmin = validStoredPassword && storedAdmin.status === 'active';
     if (rootNameMatch || storedAdmin) {
       if (limited(req, res, 'admin-login', 10, 15 * 60 * 1000, 'Too many admin sign-in attempts. Try again later.')) return;
+      if (validStoredPassword && storedAdmin.status === 'disabled') return sendJson(res, 403, { error: storedAdmin.lockMessage || 'This administrator account is disabled. Contact the super administrator.' });
       if (!isRootAdmin && !isStoredAdmin) return sendJson(res, 401, { error: 'The username or password you entered is incorrect. Please try again.' });
       const role = isRootAdmin ? 'admin' : storedAdmin.role;
       const token = createAdminToken(isRootAdmin ? CHASE_ADMIN_USERNAME : storedAdmin.username, role);
@@ -639,6 +645,21 @@ async function handleApi(req, res, url) {
       if (method === 'PUT') {
         const body = await readBody(req);
         const patch = {};
+        if (body.username !== undefined) {
+          const username = cleanText(body.username, 32);
+          const conflict = findAdminByUsername(username);
+          if (!/^[a-zA-Z0-9._-]{4,32}$/.test(username) || username.toLowerCase() === CHASE_ADMIN_USERNAME.toLowerCase() || (conflict && conflict.id !== adminId) || findUserByUsername(username)) return sendJson(res, 400, { error: 'Provide an available staff username of 4–32 letters, numbers, dots, underscores or hyphens.' });
+          patch.username = username;
+        }
+        if (body.fullName !== undefined) {
+          const fullName = cleanText(body.fullName, 80);
+          if (!fullName) return sendJson(res, 400, { error: 'Staff name is required.' });
+          patch.fullName = fullName;
+        }
+        if (body.lockMessage !== undefined) {
+          if (typeof body.lockMessage !== 'string' || body.lockMessage.length > 300) return sendJson(res, 400, { error: 'Lock message must be at most 300 characters.' });
+          patch.lockMessage = cleanText(body.lockMessage, 300);
+        }
         if (body.role !== undefined) {
           if (!['admin', 'auditor'].includes(body.role)) return sendJson(res, 400, { error: 'Role must be admin or auditor.' });
           patch.role = body.role;
