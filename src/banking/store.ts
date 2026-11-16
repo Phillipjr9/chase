@@ -103,7 +103,7 @@ export interface ScheduledPayment {
   amount: number;
   date: string;
   frequency: ScheduledFrequency;
-  status: 'scheduled' | 'paid' | 'cancelled';
+  status: 'scheduled' | 'paused' | 'paid' | 'cancelled';
   createdAt: string;
 }
 
@@ -238,11 +238,9 @@ export interface User {
   credit?: CreditProfile;
   disputes?: CardDispute[];
   home?: HomeProperty | null;
-  /** Admin console role — 'admin' unlocks the /api/admin surface. */
-  role?: 'admin' | 'member';
-  /** Account standing — 'frozen' blocks sign-in and API access. */
-  status?: 'active' | 'frozen';
-  lastLoginAt?: string | null;
+  budgets?: Record<string, number>;
+  status?: 'active' | 'suspended';
+  adminCreated?: boolean;
   createdAt: string;
 }
 
@@ -463,12 +461,12 @@ export function defaultCredit(): CreditProfile {
     enrolledAt: daysAgoIso(140),
     history,
     factors: [
-      { id: 'payment-history', label: 'Payment history', status: 'good', weight: 'High impact', detail: '100% on-time payments reported across your accounts.' },
-      { id: 'credit-utilization', label: 'Credit utilization', status: 'good', weight: 'High impact', detail: 'Using 8% of your available revolving credit.' },
-      { id: 'balances', label: 'Balances', status: 'fair', weight: 'Medium impact', detail: 'Card balances rose $120 since last week.' },
-      { id: 'credit-history', label: 'Credit history', status: 'good', weight: 'Medium impact', detail: 'Oldest account is 4 years 3 months old.' },
-      { id: 'credit-checks', label: 'Credit checks', status: 'good', weight: 'Low impact', detail: '1 inquiry in the past 12 months; 0 in the last 6 months.' },
-      { id: 'available-credit', label: 'Available credit', status: 'good', weight: 'Low impact', detail: '$10,759 available across 2 cards.' },
+      { id: 'payment-history', label: 'Payment history', status: 'good', weight: 'Extremely influential', detail: 'No late payments appear in this sample credit file.' },
+      { id: 'credit-utilization', label: 'Credit utilization', status: 'good', weight: 'Highly influential', detail: 'Reported revolving utilization is about 8%.' },
+      { id: 'balances', label: 'Balances', status: 'fair', weight: 'Moderately influential', detail: 'Reported card balances increased $120 since the prior update.' },
+      { id: 'credit-history', label: 'Credit history', status: 'good', weight: 'Highly influential', detail: 'Your oldest reported account is about 6 years old.' },
+      { id: 'credit-checks', label: 'Recent credit behavior', status: 'good', weight: 'Less influential', detail: '1 hard inquiry in the past 12 months; none in the past 6 months.' },
+      { id: 'available-credit', label: 'Available credit', status: 'good', weight: 'Less influential', detail: '$17,917 available across 2 open cards in this sample file.' },
     ],
     changes: [
       { id: 'chg-latest', date: daysAgoIso(6), delta: -6, reason: 'Card balance increased by $120 this week.' },
@@ -524,13 +522,26 @@ export function defaultPreferences(): UserPreferences {
   };
 }
 
+export function defaultBudgets(): Record<string, number> {
+  return {
+    Groceries: 400,
+    Dining: 250,
+    Travel: 600,
+    Shopping: 350,
+    Bills: 300,
+    Transportation: 200,
+    Subscriptions: 60,
+  };
+}
+
 /* ------------------------------ API client -------------------------------- */
 
 const TOKEN_KEY = 'chase_clone_token_v1';
 const USERS_KEY = 'chase_clone_users_v2';
 const SESSION_KEY = 'chase_clone_session_v2';
+export const ADMIN_TOKEN_KEY = 'chase_sim_admin_token';
 
-function readStoredToken(): string | null {
+function readCustomerToken(): string | null {
   try {
     const v = localStorage.getItem(TOKEN_KEY);
     if (v) return v;
@@ -546,7 +557,7 @@ function readStoredToken(): string | null {
   return null;
 }
 
-let token: string | null = readStoredToken();
+let token: string | null = readCustomerToken();
 
 function setToken(t: string | null) {
   token = t;
@@ -554,14 +565,55 @@ function setToken(t: string | null) {
     if (t) localStorage.setItem(TOKEN_KEY, t);
     else localStorage.removeItem(TOKEN_KEY);
   } catch {
-    /* localStorage unavailable */
+    /* storage unavailable */
   }
   try {
     if (t) sessionStorage.setItem(TOKEN_KEY, t);
     else sessionStorage.removeItem(TOKEN_KEY);
   } catch {
-    /* sessionStorage unavailable */
+    /* storage unavailable */
   }
+}
+
+export function readAdminToken(): string {
+  try {
+    const s = sessionStorage.getItem(ADMIN_TOKEN_KEY);
+    if (s) return s;
+  } catch {
+    /* unavailable */
+  }
+  try {
+    const l = localStorage.getItem(ADMIN_TOKEN_KEY);
+    if (l) return l;
+  } catch {
+    /* unavailable */
+  }
+  return '';
+}
+
+export function writeAdminToken(t: string | null): void {
+  try {
+    if (t) sessionStorage.setItem(ADMIN_TOKEN_KEY, t);
+    else sessionStorage.removeItem(ADMIN_TOKEN_KEY);
+  } catch {
+    /* unavailable */
+  }
+  try {
+    if (t) localStorage.setItem(ADMIN_TOKEN_KEY, t);
+    else localStorage.removeItem(ADMIN_TOKEN_KEY);
+  } catch {
+    /* unavailable */
+  }
+}
+
+function clearUserSessionState(preserveAdmin = false) {
+  setToken(null);
+  setLocalSession(null);
+  if (!preserveAdmin) writeAdminToken(null);
+}
+
+export function adoptSessionToken(sessionToken: string): void {
+  setToken(sessionToken);
 }
 
 let apiMode: boolean | null = null;
@@ -594,20 +646,20 @@ const PUBLIC_API_PREFIXES = [
   '/api/auth/reset-password',
 ];
 
-function withSessionParam(path: string, tok: string | null): string {
-  if (!tok || !path.startsWith('/api/')) return path;
-  if (PUBLIC_API_PREFIXES.some((prefix) => path.startsWith(prefix))) return path;
+function withCustomerTokenParam(path: string, tok: string | null): string {
+  if (!tok || !path.startsWith('/api/') || path.startsWith('/api/admin/')) return path;
+  if (PUBLIC_API_PREFIXES.some((p) => path.startsWith(p))) return path;
   const sep = path.includes('?') ? '&' : '?';
   return `${path}${sep}_st=${encodeURIComponent(tok)}`;
 }
 
 async function apiFetch(path: string, options: RequestInit = {}): Promise<any> {
-  const activeToken = token || readStoredToken();
+  const activeToken = token || readCustomerToken();
   if (activeToken && !token) token = activeToken;
-  const url = withSessionParam(path, activeToken);
+  const url = withCustomerTokenParam(path, activeToken);
   const res = await fetch(url, {
-    credentials: 'same-origin',
     ...options,
+    credentials: options.credentials || 'same-origin',
     headers: {
       'Content-Type': 'application/json',
       ...(activeToken
@@ -628,9 +680,22 @@ async function apiFetch(path: string, options: RequestInit = {}): Promise<any> {
       !path.startsWith('/api/auth/reset-password') &&
       !path.startsWith('/api/auth/me')
     ) {
-      setToken(null);
-      setLocalSession(null);
-      window.dispatchEvent(new CustomEvent('chase:session-expired'));
+      try {
+        const sessionCheck = await fetch(withCustomerTokenParam('/api/auth/me', activeToken), {
+          credentials: 'same-origin',
+          headers: {
+            Authorization: `Bearer ${activeToken}`,
+            'X-Chase-Token': activeToken,
+          },
+        });
+        if (sessionCheck.status === 401 || sessionCheck.status === 403) {
+          setToken(null);
+          setLocalSession(null);
+          window.dispatchEvent(new CustomEvent('chase:session-expired'));
+        }
+      } catch {
+        // A temporary network failure is not proof that the session expired.
+      }
     }
     const err = new Error(data.error || `Request failed (${res.status})`) as ApiError;
     err.status = res.status;
@@ -844,6 +909,7 @@ function buildChaseUserLocal(): User {
     investments: defaultInvestments(),
     security: defaultSecurity(),
     preferences: defaultPreferences(),
+    budgets: defaultBudgets(),
     credit: defaultCredit(),
     home: defaultHome(),
     scheduledPayments: [
@@ -872,9 +938,6 @@ function buildChaseUserLocal(): User {
         status: 'Confirmed',
       },
     ],
-    role: 'admin',
-    status: 'active',
-    lastLoginAt: null,
     createdAt: daysAgoIso(400),
   };
 }
@@ -888,14 +951,13 @@ function hydrateDefaults(user: User | null | undefined): User {
     investments: user.investments || defaultInvestments(),
     security: user.security || defaultSecurity(),
     preferences: user.preferences || defaultPreferences(),
+    budgets: user.budgets || defaultBudgets(),
     credit: user.credit || defaultCredit(),
     travelNotices: user.travelNotices || [],
     travelBookings: user.travelBookings || [],
     scheduledPayments: user.scheduledPayments || [],
     disputes: user.disputes || [],
     home: user.home ?? null,
-    role: user.role || (user.username === 'chase' ? 'admin' : 'member'),
-    status: user.status || 'active',
   };
 }
 
@@ -907,18 +969,7 @@ export async function seedSampleUserIfNeeded(): Promise<void> {
     return;
   }
   const users = loadUsers();
-  const existingIdx = users.findIndex((u) => u.username.toLowerCase() === 'chase');
-  if (existingIdx >= 0) {
-    if (users[existingIdx].role !== 'admin') {
-      users[existingIdx] = {
-        ...users[existingIdx],
-        role: 'admin',
-        status: users[existingIdx].status || 'active',
-      };
-      saveUsers(users);
-    }
-    return;
-  }
+  if (users.some((u) => u.username.toLowerCase() === 'chase')) return;
   users.push(buildChaseUserLocal());
   saveUsers(users);
 }
@@ -941,13 +992,18 @@ export async function fetchMe(): Promise<User | null> {
 export async function authenticate(
   username: string,
   password: string
-): Promise<{ user: User } | { error: string }> {
+): Promise<{ user: User } | { admin: { username: string; label: string; role?: 'admin' | 'auditor' }; token: string } | { error: string }> {
   if (await detectApi()) {
     try {
       const data = await apiFetch('/api/auth/login', {
         method: 'POST',
         body: JSON.stringify({ username, password }),
       });
+      if (data.admin) {
+        setToken(null);
+        writeAdminToken(data.token);
+        return { admin: data.admin, token: data.token };
+      }
       setToken(data.token);
       return { user: hydrateDefaults(data.user as User) };
     } catch (e) {
@@ -965,20 +1021,21 @@ export async function authenticate(
   if (user.password !== password) {
     return { error: 'The username or password you entered is incorrect. Please try again.' };
   }
-  if (user.status === 'frozen') {
-    return { error: 'This account has been frozen by an administrator. Please contact support.' };
-  }
   setLocalSession(user.id);
   return { user: hydrateDefaults(user) };
 }
 
-export async function logout(): Promise<void> {
+export async function logout(preserveAdmin = false): Promise<void> {
   if (await detectApi()) {
-    await apiFetch('/api/auth/logout', { method: 'POST' }).catch(() => undefined);
-    setToken(null);
+    try {
+      await apiFetch('/api/auth/logout', { method: 'POST' });
+    } catch {
+      // Clear local customer state even if backend token was already expired.
+    }
+    clearUserSessionState(preserveAdmin);
     return;
   }
-  setLocalSession(null);
+  clearUserSessionState(preserveAdmin);
 }
 
 export async function resetPassword(
@@ -1547,6 +1604,9 @@ export async function redeemPoints(payload: {
     });
     return hydrateDefaults(data.user as User);
   }
+  if (!Number.isInteger(payload.points) || payload.points < 1000 || payload.points > 1000000 || !['travel', 'transfer', 'cashback'].includes(payload.kind)) {
+    throw new Error('Enter a valid redemption of at least 1,000 Ultimate Rewards® points.');
+  }
   const updated: User = JSON.parse(JSON.stringify(requireLocalUser()));
   const card = updated.accounts.find((a) => a.id === payload.cardId && a.type === 'credit-card');
   if (!card || (card.rewardsPoints || 0) < payload.points) {
@@ -1556,7 +1616,7 @@ export async function redeemPoints(payload: {
   if (!updated.travelBookings) updated.travelBookings = [];
   if (payload.kind === 'cashback') {
     const credit = round2(payload.points / 100);
-    card.balance = round2(Math.max(0, card.balance - credit));
+    card.balance = round2(card.balance - credit);
     card.transactions.unshift({
       id: uid(),
       date: new Date().toISOString(),
@@ -1628,6 +1688,24 @@ export async function simulateCredit(scenario: string): Promise<{
   };
   persistUser(updated);
   return { ...result, estimatedScore: result.high, user: updated };
+}
+
+export async function saveBudgets(budgets: Record<string, number>): Promise<User> {
+  const cleaned = Object.fromEntries(Object.entries(budgets).map(([category, amount]) => {
+    const value = Number(amount);
+    if (!category.trim() || !Number.isFinite(value) || value < 0 || value > 1000000) {
+      throw new Error('Enter valid monthly budget amounts.');
+    }
+    return [category, round2(value)];
+  }));
+  if (await detectApi()) {
+    const data = await apiFetch('/api/budgets', { method: 'POST', body: JSON.stringify({ budgets: cleaned }) });
+    return hydrateDefaults(data.user as User);
+  }
+  const updated: User = JSON.parse(JSON.stringify(requireLocalUser()));
+  updated.budgets = cleaned;
+  persistUser(updated);
+  return updated;
 }
 
 export async function setCreditGoal(goal: number): Promise<User> {
@@ -1845,6 +1923,34 @@ export async function schedulePayment(input: ScheduleInput): Promise<User> {
   return updated;
 }
 
+export async function manageScheduledPayment(
+  id: string,
+  patch: { action: 'pause' | 'resume' | 'edit'; amount?: number; date?: string }
+): Promise<User> {
+  if (await detectApi()) {
+    const data = await apiFetch('/api/scheduled/manage', {
+      method: 'POST',
+      body: JSON.stringify({ id, ...patch }),
+    });
+    return hydrateDefaults(data.user as User);
+  }
+  const updated: User = JSON.parse(JSON.stringify(requireLocalUser()));
+  const item = (updated.scheduledPayments || []).find((s) => s.id === id);
+  if (!item) throw new Error('Scheduled payment not found.');
+  if (patch.action === 'pause') item.status = 'paused';
+  if (patch.action === 'resume') item.status = 'scheduled';
+  if (patch.action === 'edit') {
+    if (!Number.isFinite(patch.amount) || !patch.amount || patch.amount < 0.01) throw new Error('Enter a valid amount.');
+    if (!patch.date || !/^\d{4}-\d{2}-\d{2}$/.test(patch.date) || new Date(`${patch.date}T23:59:59`) < new Date()) {
+      throw new Error('Choose a future delivery date.');
+    }
+    item.amount = round2(patch.amount);
+    item.date = patch.date;
+  }
+  persistUser(updated);
+  return updated;
+}
+
 export async function cancelScheduledPayment(id: string): Promise<User> {
   if (await detectApi()) {
     const data = await apiFetch('/api/scheduled/cancel', {
@@ -1865,10 +1971,10 @@ export async function cancelScheduledPayment(id: string): Promise<User> {
 export async function signOutAllDevices(): Promise<void> {
   if (await detectApi()) {
     await apiFetch('/api/auth/sign-out-all', { method: 'POST' }).catch(() => undefined);
-    setToken(null);
+    clearUserSessionState();
     return;
   }
-  setLocalSession(null);
+  clearUserSessionState();
 }
 
 export async function changePasswordApi(
@@ -1892,912 +1998,4 @@ export async function changePasswordApi(
   const updated: User = JSON.parse(JSON.stringify(user));
   updated.password = newPassword;
   persistUser(updated);
-}
-
-/* ========================================================================== */
-/* Admin Console API client (+ local fallback mirroring server/admin.js)      */
-/* ========================================================================== */
-
-export interface AdminKpis {
-  totalUsers: number;
-  newUsers30: number;
-  newUsersDeltaPct: number | null;
-  activeUsers: number;
-  frozenUsers: number;
-  totalDeposits: number;
-  depositsDeltaPct: number | null;
-  netFlow30: number;
-  txVolume30: number;
-  txVolumeDeltaPct: number | null;
-  txCount30: number;
-  cardBalance: number;
-  loanBalance: number;
-  creditUtilizationPct: number;
-  flaggedTx: number;
-  openDisputes: number;
-  riskItems: number;
-  activeSessions: number;
-  monthInflow: number;
-  monthlyTarget: number;
-  monthlyTargetPct: number;
-}
-
-export interface AdminCashflowPoint {
-  label: string;
-  inflow: number;
-  outflow: number;
-}
-
-export interface AdminDailyPoint {
-  label: string;
-  count: number;
-  amount: number;
-}
-
-export interface AdminMixSlice {
-  type: AccountType;
-  count: number;
-  balance: number;
-}
-
-export interface AdminActivityItem {
-  id: string;
-  kind: 'signup' | 'transaction' | 'admin';
-  at: string;
-  text: string;
-  detail: string;
-  userId: string | null;
-  flagged?: boolean;
-}
-
-/** Time-range bucketing for the overview cashflow chart. */
-export type AdminRange = '7d' | '30d' | '12w';
-
-export interface AdminOverview {
-  generatedAt: string;
-  range: AdminRange;
-  kpis: AdminKpis;
-  sparklines: { signups: number[]; inflow: number[]; volume: number[] };
-  cashflow: AdminCashflowPoint[];
-  daily: AdminDailyPoint[];
-  accountMix: AdminMixSlice[];
-  topCustomers: AdminCustomerSummary[];
-  activity: AdminActivityItem[];
-}
-
-export interface AdminCustomerSummary {
-  id: string;
-  username: string;
-  fullName: string;
-  email: string;
-  phone: string;
-  address: string;
-  role: 'admin' | 'member';
-  status: 'active' | 'frozen';
-  joinedAt: string;
-  lastLoginAt: string | null;
-  accountCount: number;
-  deposits: number;
-  liabilities: number;
-  txCount: number;
-  flaggedCount: number;
-  openDisputes: number;
-}
-
-export interface AdminCustomerAccount {
-  id: string;
-  type: AccountType;
-  name: string;
-  mask: string;
-  balance: number;
-  creditLimit?: number;
-  apr?: number;
-  locked: boolean;
-  autopay: boolean;
-  createdAt: string;
-  txCount: number;
-}
-
-export interface AdminTxRow {
-  id: string;
-  userId: string;
-  userName: string;
-  username: string;
-  accountId: string;
-  accountName: string;
-  accountMask: string;
-  accountType: AccountType;
-  date: string;
-  description: string;
-  amount: number;
-  category: string;
-  status: string;
-  flagged: boolean;
-  flagNote: string | null;
-}
-
-export interface AdminCustomerDetail {
-  summary: AdminCustomerSummary;
-  accounts: AdminCustomerAccount[];
-  recentTx: AdminTxRow[];
-  disputes: CardDispute[];
-  payees: Payee[];
-  scheduledPayments: ScheduledPayment[];
-  sessions: number;
-  security: SecuritySettings | null;
-  creditScore: number | null;
-}
-
-export interface AdminDisputeRow {
-  id: string;
-  userId: string;
-  userName: string;
-  username: string;
-  accountName: string;
-  accountMask: string;
-  transactionId: string;
-  description: string;
-  amount: number;
-  reason: string;
-  status: 'open' | 'resolved' | 'denied';
-  createdAt: string;
-  resolvedAt: string | null;
-  resolutionNote: string | null;
-  resolvedBy: string | null;
-}
-
-export interface AdminAuditEntry {
-  id: string;
-  at: string;
-  actorId: string;
-  actorName: string;
-  action: string;
-  target: string;
-  detail: string;
-}
-
-export interface AdminSystemInfo {
-  status: string;
-  version: string;
-  node: string;
-  platform: string;
-  pid: number;
-  port: number;
-  startedAt: string;
-  uptimeSec: number;
-  memoryMb: number;
-  heapMb: number;
-  users: number;
-  admins: number;
-  frozenUsers: number;
-  activeSessions: number;
-  auditEntries: number;
-  products: number;
-  db: { bytes: number; modifiedAt: string | null };
-}
-
-export interface AdminPage<T> {
-  items: T[];
-  total: number;
-  page: number;
-  pageSize: number;
-  pages: number;
-}
-
-export interface CustomerQuery {
-  q?: string;
-  status?: 'all' | 'active' | 'frozen';
-  role?: 'all' | 'admin' | 'member';
-  sort?: string;
-  page?: number;
-  pageSize?: number;
-}
-
-export interface TransactionQuery {
-  q?: string;
-  type?: string;
-  min?: number | null;
-  max?: number | null;
-  from?: string | null;
-  to?: string | null;
-  sort?: string;
-  page?: number;
-  pageSize?: number;
-}
-
-function toParams(query: Record<string, unknown>): string {
-  const params = new URLSearchParams();
-  for (const [key, value] of Object.entries(query)) {
-    if (value !== undefined && value !== null && value !== '') params.set(key, String(value));
-  }
-  const qs = params.toString();
-  return qs ? `?${qs}` : '';
-}
-
-/* --------------------------- Local fallback mode -------------------------- */
-
-const AUDIT_KEY = 'chase_clone_audit_v1';
-
-function loadAuditLocal(): AdminAuditEntry[] {
-  try {
-    const raw = localStorage.getItem(AUDIT_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? (parsed as AdminAuditEntry[]) : [];
-  } catch {
-    return [];
-  }
-}
-
-function appendAuditLocal(me: User, action: string, target: string, detail: string): void {
-  const entries = loadAuditLocal();
-  entries.unshift({
-    id: uid(),
-    at: new Date().toISOString(),
-    actorId: me.id,
-    actorName: me.fullName,
-    action,
-    target,
-    detail,
-  });
-  try {
-    localStorage.setItem(AUDIT_KEY, JSON.stringify(entries.slice(0, 600)));
-  } catch {
-    /* storage unavailable */
-  }
-}
-
-function flattenLocal(users: User[]): AdminTxRow[] {
-  const rows: AdminTxRow[] = [];
-  for (const u of users) {
-    for (const a of u.accounts || []) {
-      for (const t of a.transactions || []) {
-        rows.push({
-          id: t.id,
-          userId: u.id,
-          userName: u.fullName,
-          username: u.username,
-          accountId: a.id,
-          accountName: a.name,
-          accountMask: a.mask,
-          accountType: a.type,
-          date: t.date,
-          description: t.description,
-          amount: t.amount,
-          category: t.category,
-          status: t.status,
-          flagged: !!(t as Transaction & { flagged?: boolean }).flagged,
-          flagNote: (t as Transaction & { flagNote?: string }).flagNote || null,
-        });
-      }
-    }
-  }
-  rows.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-  return rows;
-}
-
-function summaryLocal(u: User): AdminCustomerSummary {
-  const accounts = u.accounts || [];
-  let txCount = 0;
-  let flaggedCount = 0;
-  for (const a of accounts) {
-    for (const t of a.transactions || []) {
-      txCount += 1;
-      if ((t as Transaction & { flagged?: boolean }).flagged) flaggedCount += 1;
-    }
-  }
-  return {
-    id: u.id,
-    username: u.username,
-    fullName: u.fullName,
-    email: u.email,
-    phone: u.phone || '',
-    address: u.address || '',
-    role: (u.role || 'member') as 'admin' | 'member',
-    status: (u.status || 'active') as 'active' | 'frozen',
-    joinedAt: u.createdAt,
-    lastLoginAt: u.lastLoginAt || null,
-    accountCount: accounts.length,
-    deposits: round2(accounts.filter((a) => DEPOSIT_TYPES.has(a.type)).reduce((s, a) => s + a.balance, 0)),
-    liabilities: round2(
-      accounts.filter((a) => a.type === 'credit-card' || a.type === 'mortgage' || a.type === 'auto-loan').reduce((s, a) => s + a.balance, 0)
-    ),
-    txCount,
-    flaggedCount,
-    openDisputes: (u.disputes || []).filter((d) => d.status === 'open').length,
-  };
-}
-
-function paginateLocal<T>(list: T[], page = 1, pageSize = 10): AdminPage<T> {
-  const p = Math.max(1, page);
-  const size = Math.min(50, Math.max(5, pageSize));
-  const start = (p - 1) * size;
-  return {
-    items: list.slice(start, start + size),
-    total: list.length,
-    page: p,
-    pageSize: size,
-    pages: Math.max(1, Math.ceil(list.length / size)),
-  };
-}
-
-function deltaPctLocal(curr: number, prev: number): number | null {
-  if (!prev) return null;
-  return round2(((curr - prev) / Math.abs(prev)) * 100);
-}
-
-function overviewLocal(users: User[], range: AdminRange = '12w'): AdminOverview {
-  const txs = flattenLocal(users);
-  const now = Date.now();
-  const DAY_MS = 86400000;
-  const age = (iso: string) => now - new Date(iso).getTime();
-
-  const totalDeposits = users.reduce(
-    (s, u) => s + (u.accounts || []).filter((a) => DEPOSIT_TYPES.has(a.type)).reduce((x, a) => x + a.balance, 0),
-    0
-  );
-  const cardAccounts = users.flatMap((u) => (u.accounts || []).filter((a) => a.type === 'credit-card'));
-  const cardBalance = cardAccounts.reduce((s, a) => s + a.balance, 0);
-  const cardLimits = cardAccounts.reduce((s, a) => s + (a.creditLimit || 0), 0);
-  const loanBalance = users.reduce(
-    (s, u) => s + (u.accounts || []).filter((a) => a.type === 'mortgage' || a.type === 'auto-loan').reduce((x, a) => x + a.balance, 0),
-    0
-  );
-
-  const tx30 = txs.filter((t) => age(t.date) < 30 * DAY_MS);
-  const txPrev30 = txs.filter((t) => age(t.date) >= 30 * DAY_MS && age(t.date) < 60 * DAY_MS);
-  const vol = (list: AdminTxRow[]) => list.reduce((s, t) => s + Math.abs(t.amount), 0);
-  const net = (list: AdminTxRow[]) => list.reduce((s, t) => s + t.amount, 0);
-  const newUsers30 = users.filter((u) => age(u.createdAt) < 30 * DAY_MS).length;
-  const newUsersPrev30 = users.filter((u) => age(u.createdAt) >= 30 * DAY_MS && age(u.createdAt) < 60 * DAY_MS).length;
-
-  /* Cashflow — bucketed per requested range (7d/30d daily, 12w weekly) */
-  const cashflowMidnight = new Date();
-  cashflowMidnight.setHours(0, 0, 0, 0);
-  const cashflow: AdminCashflowPoint[] = [];
-  const pushCashflowBucket = (from: number, to: number, labelDate: Date) => {
-    const bucket = txs.filter((t) => {
-      const ts = new Date(t.date).getTime();
-      return ts >= from && ts < to;
-    });
-    cashflow.push({
-      label: labelDate.toISOString().slice(5, 10).replace('-', '/'),
-      inflow: round2(bucket.filter((t) => t.amount > 0).reduce((s, t) => s + t.amount, 0)),
-      outflow: round2(bucket.filter((t) => t.amount < 0).reduce((s, t) => s - t.amount, 0)),
-    });
-  };
-  if (range === '7d' || range === '30d') {
-    const days = range === '7d' ? 7 : 30;
-    for (let i = days - 1; i >= 0; i -= 1) {
-      const from = cashflowMidnight.getTime() - i * DAY_MS;
-      pushCashflowBucket(from, from + DAY_MS, new Date(from));
-    }
-  } else {
-    for (let i = 11; i >= 0; i -= 1) {
-      const to = now - i * 7 * DAY_MS;
-      pushCashflowBucket(to - 7 * DAY_MS, to, new Date(to - DAY_MS));
-    }
-  }
-
-  /* Sparkline sources stay on a stable 12-week history regardless of chart range */
-  const weeklyInflow: number[] = [];
-  for (let i = 11; i >= 0; i -= 1) {
-    const to = now - i * 7 * DAY_MS;
-    const from = to - 7 * DAY_MS;
-    weeklyInflow.push(
-      round2(
-        txs
-          .filter((t) => t.amount > 0 && new Date(t.date).getTime() >= from && new Date(t.date).getTime() < to)
-          .reduce((s, t) => s + t.amount, 0)
-      )
-    );
-  }
-
-  const todayStart = new Date();
-  todayStart.setHours(0, 0, 0, 0);
-  const daily: AdminDailyPoint[] = [];
-  for (let i = 13; i >= 0; i -= 1) {
-    const from = todayStart.getTime() - i * DAY_MS;
-    const to = from + DAY_MS;
-    const bucket = txs.filter((t) => {
-      const ts = new Date(t.date).getTime();
-      return ts >= from && ts < to;
-    });
-    daily.push({
-      label: new Date(from).toISOString().slice(5, 10).replace('-', '/'),
-      count: bucket.length,
-      amount: round2(vol(bucket)),
-    });
-  }
-
-  const signups: number[] = [];
-  for (let i = 11; i >= 0; i -= 1) {
-    const cutoff = now - i * 7 * DAY_MS;
-    signups.push(users.filter((u) => new Date(u.createdAt).getTime() <= cutoff).length);
-  }
-
-  const mixMap = new Map<AccountType, AdminMixSlice>();
-  for (const u of users) {
-    for (const a of u.accounts || []) {
-      const entry = mixMap.get(a.type) || { type: a.type, count: 0, balance: 0 };
-      entry.count += 1;
-      entry.balance = round2(entry.balance + a.balance);
-      mixMap.set(a.type, entry);
-    }
-  }
-
-  const monthStart = new Date();
-  monthStart.setDate(1);
-  monthStart.setHours(0, 0, 0, 0);
-  const monthInflow = round2(
-    txs.filter((t) => t.amount > 0 && new Date(t.date).getTime() >= monthStart.getTime()).reduce((s, t) => s + t.amount, 0)
-  );
-
-  const activity: AdminActivityItem[] = [];
-  for (const u of users) {
-    activity.push({ id: `signup-${u.id}`, kind: 'signup', at: u.createdAt, text: `${u.fullName} enrolled`, detail: `@${u.username}`, userId: u.id });
-  }
-  for (const t of txs.slice(0, 200)) {
-    activity.push({
-      id: `tx-${t.userId}-${t.id}`,
-      kind: 'transaction',
-      at: t.date,
-      text: t.description,
-      detail: `${t.userName} · ${t.accountName} (••${t.accountMask}) · ${t.amount >= 0 ? '+' : '−'}${fmtMoney(Math.abs(t.amount))}`,
-      userId: t.userId,
-      flagged: t.flagged,
-    });
-  }
-  for (const e of loadAuditLocal().slice(0, 50)) {
-    if (/^(customer|dispute|transaction)\./.test(e.action)) {
-      activity.push({ id: `audit-${e.id}`, kind: 'admin', at: e.at, text: e.detail || e.action, detail: `${e.actorName} → ${e.target}`, userId: null });
-    }
-  }
-  activity.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
-
-  const flaggedTx = txs.filter((t) => t.flagged).length;
-  const openDisputes = users.reduce((s, u) => s + (u.disputes || []).filter((d) => d.status === 'open').length, 0);
-  const frozenUsers = users.filter((u) => u.status === 'frozen').length;
-  const monthlyTarget = 250000;
-
-  return {
-    generatedAt: new Date().toISOString(),
-    range,
-    kpis: {
-      totalUsers: users.length,
-      newUsers30,
-      newUsersDeltaPct: deltaPctLocal(newUsers30, newUsersPrev30),
-      activeUsers: users.filter((u) => u.status !== 'frozen').length,
-      frozenUsers,
-      totalDeposits: round2(totalDeposits),
-      depositsDeltaPct: deltaPctLocal(net(tx30), net(txPrev30)),
-      netFlow30: round2(net(tx30)),
-      txVolume30: round2(vol(tx30)),
-      txVolumeDeltaPct: deltaPctLocal(vol(tx30), vol(txPrev30)),
-      txCount30: tx30.length,
-      cardBalance: round2(cardBalance),
-      loanBalance: round2(loanBalance),
-      creditUtilizationPct: cardLimits ? round2((cardBalance / cardLimits) * 100) : 0,
-      flaggedTx,
-      openDisputes,
-      riskItems: flaggedTx + openDisputes,
-      activeSessions: getLocalSession(null) ? 1 : 0,
-      monthInflow,
-      monthlyTarget,
-      monthlyTargetPct: round2((monthInflow / monthlyTarget) * 100),
-    },
-    sparklines: { signups, inflow: weeklyInflow, volume: daily.map((d) => d.amount) },
-    cashflow,
-    daily,
-    accountMix: [...mixMap.values()].sort((a, b) => b.count - a.count),
-    topCustomers: users.map(summaryLocal).sort((a, b) => b.deposits - a.deposits).slice(0, 5),
-    activity: activity.slice(0, 12),
-  };
-}
-
-function getLocalSession(_unused: null): string | null {
-  try {
-    return localStorage.getItem(SESSION_KEY);
-  } catch {
-    return null;
-  }
-}
-
-function mutateLocalUser(id: string, mutate: (u: User) => string | null): void {
-  const users = loadUsers();
-  const idx = users.findIndex((u) => u.id === id);
-  if (idx < 0) throw new Error('Customer not found');
-  const updated: User = JSON.parse(JSON.stringify(users[idx]));
-  const error = mutate(updated);
-  if (error) throw new Error(error);
-  users[idx] = updated;
-  saveUsers(users);
-}
-
-/* --------------------------- Exported admin API --------------------------- */
-
-export async function adminOverview(range: AdminRange = '12w'): Promise<AdminOverview> {
-  if (await detectApi()) return apiFetch(`/api/admin/overview${toParams({ range })}`, { method: 'GET' });
-  return overviewLocal(loadUsers(), range);
-}
-
-export async function adminCustomers(query: CustomerQuery): Promise<{
-  customers: AdminCustomerSummary[];
-  total: number;
-  page: number;
-  pageSize: number;
-  pages: number;
-}> {
-  if (await detectApi()) return apiFetch(`/api/admin/customers${toParams({ ...query })}`, { method: 'GET' });
-  const q = (query.q || '').trim().toLowerCase();
-  let rows = loadUsers().map(summaryLocal);
-  if (q) {
-    rows = rows.filter(
-      (r) =>
-        r.fullName.toLowerCase().includes(q) ||
-        r.username.toLowerCase().includes(q) ||
-        r.email.toLowerCase().includes(q)
-    );
-  }
-  if (query.status && query.status !== 'all') rows = rows.filter((r) => r.status === query.status);
-  if (query.role && query.role !== 'all') rows = rows.filter((r) => r.role === query.role);
-  const sorters: Record<string, (a: AdminCustomerSummary, b: AdminCustomerSummary) => number> = {
-    'name-asc': (a, b) => a.fullName.localeCompare(b.fullName),
-    'name-desc': (a, b) => b.fullName.localeCompare(a.fullName),
-    'joined-desc': (a, b) => new Date(b.joinedAt).getTime() - new Date(a.joinedAt).getTime(),
-    'joined-asc': (a, b) => new Date(a.joinedAt).getTime() - new Date(b.joinedAt).getTime(),
-    'deposits-desc': (a, b) => b.deposits - a.deposits,
-    'deposits-asc': (a, b) => a.deposits - b.deposits,
-  };
-  rows.sort(sorters[query.sort || 'joined-desc'] || sorters['joined-desc']);
-  const page = paginateLocal(rows, query.page, query.pageSize);
-  return { customers: page.items, total: page.total, page: page.page, pageSize: page.pageSize, pages: page.pages };
-}
-
-export async function adminCustomerDetail(id: string): Promise<AdminCustomerDetail> {
-  if (await detectApi()) return apiFetch(`/api/admin/customers/detail${toParams({ id })}`, { method: 'GET' }).then((d) => d.customer);
-  const u = loadUsers().find((x) => x.id === id);
-  if (!u) throw new Error('Customer not found');
-  return {
-    summary: summaryLocal(u),
-    accounts: (u.accounts || []).map((a) => ({
-      id: a.id,
-      type: a.type,
-      name: a.name,
-      mask: a.mask,
-      balance: a.balance,
-      creditLimit: a.creditLimit,
-      apr: a.apr,
-      locked: !!a.locked,
-      autopay: !!a.autopay,
-      createdAt: a.createdAt,
-      txCount: (a.transactions || []).length,
-    })),
-    recentTx: flattenLocal([u]).slice(0, 12),
-    disputes: u.disputes || [],
-    payees: u.payees || [],
-    scheduledPayments: u.scheduledPayments || [],
-    sessions: getLocalSession(null) === u.id ? 1 : 0,
-    security: u.security || null,
-    creditScore: u.credit?.score ?? null,
-  };
-}
-
-export async function adminSetCustomerStatus(
-  actor: User,
-  id: string,
-  status: 'active' | 'frozen',
-  reason?: string
-): Promise<AdminCustomerSummary> {
-  if (await detectApi()) {
-    const data = await apiFetch('/api/admin/customers/status', {
-      method: 'POST',
-      body: JSON.stringify({ id, status, reason }),
-    });
-    return data.customer;
-  }
-  if (id === actor.id && status === 'frozen') throw new Error('You cannot freeze your own account.');
-  const users = loadUsers();
-  const target = users.find((u) => u.id === id);
-  if (!target) throw new Error('Customer not found');
-  target.status = status;
-  saveUsers(users);
-  appendAuditLocal(actor, status === 'frozen' ? 'customer.frozen' : 'customer.reactivated', target.username, reason || `Set status to ${status}`);
-  return summaryLocal(target);
-}
-
-export async function adminSetCustomerRole(
-  actor: User,
-  id: string,
-  role: 'admin' | 'member'
-): Promise<AdminCustomerSummary> {
-  if (await detectApi()) {
-    const data = await apiFetch('/api/admin/customers/role', {
-      method: 'POST',
-      body: JSON.stringify({ id, role }),
-    });
-    return data.customer;
-  }
-  if (id === actor.id && role === 'member') throw new Error('You cannot remove your own administrator role.');
-  const users = loadUsers();
-  const target = users.find((u) => u.id === id);
-  if (!target) throw new Error('Customer not found');
-  if (role === 'member' && target.role === 'admin' && users.filter((u) => u.role === 'admin').length <= 1) {
-    throw new Error('At least one administrator must remain.');
-  }
-  target.role = role;
-  saveUsers(users);
-  appendAuditLocal(actor, 'customer.role', target.username, `Role changed to ${role}`);
-  return summaryLocal(target);
-}
-
-export async function adminAdjustBalance(
-  actor: User,
-  id: string,
-  accountId: string,
-  amount: number,
-  reason: string
-): Promise<AdminCustomerSummary> {
-  if (await detectApi()) {
-    const data = await apiFetch('/api/admin/customers/adjust', {
-      method: 'POST',
-      body: JSON.stringify({ id, accountId, amount, reason }),
-    });
-    return data.customer;
-  }
-  if (!Number.isFinite(amount) || amount === 0) throw new Error('Enter a non-zero adjustment amount.');
-  if (!reason.trim()) throw new Error('A reason is required for balance adjustments.');
-  let result: AdminCustomerSummary | null = null;
-  mutateLocalUser(id, (u) => {
-    const account = (u.accounts || []).find((a) => a.id === accountId);
-    if (!account) return 'Account not found';
-    if (amount < 0 && account.balance + amount < 0) return 'Adjustment would make the balance negative.';
-    account.balance = round2(account.balance + amount);
-    account.transactions.unshift({
-      id: uid(),
-      date: new Date().toISOString(),
-      description: `Admin adjustment — ${reason.trim()}`,
-      amount: round2(amount),
-      category: 'Adjustment',
-      status: 'posted',
-    });
-    result = summaryLocal(u);
-    return null;
-  });
-  appendAuditLocal(
-    actor,
-    'customer.adjustment',
-    id,
-    `${amount > 0 ? '+' : '−'}${fmtMoney(Math.abs(round2(amount)))} — ${reason.trim()}`
-  );
-  return result!;
-}
-
-export async function adminSignOutCustomer(actor: User, id: string): Promise<void> {
-  if (await detectApi()) {
-    await apiFetch('/api/admin/customers/sign-out', { method: 'POST', body: JSON.stringify({ id }) });
-    return;
-  }
-  const users = loadUsers();
-  const target = users.find((u) => u.id === id);
-  if (!target) throw new Error('Customer not found');
-  appendAuditLocal(actor, 'customer.signout', target.username, 'Ended all active sessions');
-}
-
-export async function adminTransactions(query: TransactionQuery): Promise<{
-  transactions: AdminTxRow[];
-  total: number;
-  page: number;
-  pageSize: number;
-  pages: number;
-  summary: { count: number; inflow: number; outflow: number };
-}> {
-  if (await detectApi()) return apiFetch(`/api/admin/transactions${toParams({ ...query })}`, { method: 'GET' });
-  const q = (query.q || '').trim().toLowerCase();
-  let rows = flattenLocal(loadUsers());
-  if (q) {
-    rows = rows.filter(
-      (t) =>
-        t.description.toLowerCase().includes(q) ||
-        t.userName.toLowerCase().includes(q) ||
-        t.username.toLowerCase().includes(q) ||
-        t.accountName.toLowerCase().includes(q) ||
-        t.category.toLowerCase().includes(q)
-    );
-  }
-  const typeFilters: Record<string, (t: AdminTxRow) => boolean> = {
-    all: () => true,
-    in: (t) => t.amount > 0,
-    out: (t) => t.amount < 0,
-    transfer: (t) => t.category === 'Transfer',
-    zelle: (t) => t.category === 'Zelle',
-    card: (t) => t.accountType === 'credit-card',
-    loan: (t) => t.accountType === 'mortgage' || t.accountType === 'auto-loan',
-    adjustment: (t) => t.category === 'Adjustment',
-    flagged: (t) => t.flagged,
-  };
-  rows = rows.filter(typeFilters[query.type || 'all'] || typeFilters.all);
-  if (query.min != null && Number.isFinite(query.min)) rows = rows.filter((t) => Math.abs(t.amount) >= (query.min as number));
-  if (query.max != null && Number.isFinite(query.max) && (query.max as number) > 0) rows = rows.filter((t) => Math.abs(t.amount) <= (query.max as number));
-  if (query.from) rows = rows.filter((t) => t.date.slice(0, 10) >= (query.from as string));
-  if (query.to) rows = rows.filter((t) => t.date.slice(0, 10) <= (query.to as string));
-  if (query.sort === 'amount-desc') rows.sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
-  else if (query.sort === 'amount-asc') rows.sort((a, b) => Math.abs(a.amount) - Math.abs(b.amount));
-  else if (query.sort === 'date-asc') rows.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-  const summary = {
-    count: rows.length,
-    inflow: round2(rows.filter((t) => t.amount > 0).reduce((s, t) => s + t.amount, 0)),
-    outflow: round2(rows.filter((t) => t.amount < 0).reduce((s, t) => s - t.amount, 0)),
-  };
-  const page = paginateLocal(rows, query.page, query.pageSize);
-  return { transactions: page.items, total: page.total, page: page.page, pageSize: page.pageSize, pages: page.pages, summary };
-}
-
-export async function adminFlagTransaction(
-  actor: User,
-  ref: { userId: string; accountId: string; txId: string },
-  flagged: boolean,
-  note?: string
-): Promise<void> {
-  if (await detectApi()) {
-    await apiFetch('/api/admin/transactions/flag', {
-      method: 'POST',
-      body: JSON.stringify({ ...ref, flagged, note }),
-    });
-    return;
-  }
-  let description = '';
-  let amount = 0;
-  mutateLocalUser(ref.userId, (u) => {
-    const account = (u.accounts || []).find((a) => a.id === ref.accountId);
-    const tx = account && (account.transactions || []).find((t) => t.id === ref.txId);
-    if (!tx) return 'Transaction not found';
-    (tx as Transaction & { flagged?: boolean; flagNote?: string }).flagged = flagged;
-    (tx as Transaction & { flagNote?: string }).flagNote = flagged ? note || 'Flagged by administrator' : undefined;
-    description = tx.description;
-    amount = tx.amount;
-    return null;
-  });
-  appendAuditLocal(
-    actor,
-    flagged ? 'transaction.flagged' : 'transaction.unflagged',
-    actor.username,
-    `${flagged ? 'Flagged' : 'Cleared'} "${description}" (${fmtMoney(Math.abs(amount))})${note ? ` — ${note}` : ''}`
-  );
-}
-
-export async function adminDisputes(status: 'all' | 'open' | 'resolved' | 'denied' = 'all', page = 1, pageSize = 10): Promise<{
-  disputes: AdminDisputeRow[];
-  total: number;
-  open: number;
-  page: number;
-  pageSize: number;
-  pages: number;
-}> {
-  if (await detectApi()) return apiFetch(`/api/admin/disputes${toParams({ status, page, pageSize })}`, { method: 'GET' });
-  let rows: AdminDisputeRow[] = [];
-  for (const u of loadUsers()) {
-    for (const d of u.disputes || []) {
-      const account = (u.accounts || []).find((a) => a.id === d.accountId);
-      rows.push({
-        id: d.id,
-        userId: u.id,
-        userName: u.fullName,
-        username: u.username,
-        accountName: account ? account.name : 'Card account',
-        accountMask: account ? account.mask : '----',
-        transactionId: d.transactionId,
-        description: d.description,
-        amount: d.amount,
-        reason: d.reason,
-        status: d.status,
-        createdAt: d.createdAt,
-        resolvedAt: (d as CardDispute & { resolvedAt?: string }).resolvedAt || null,
-        resolutionNote: (d as CardDispute & { resolutionNote?: string }).resolutionNote || null,
-        resolvedBy: (d as CardDispute & { resolvedBy?: string }).resolvedBy || null,
-      });
-    }
-  }
-  rows.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-  const open = rows.filter((d) => d.status === 'open').length;
-  if (status !== 'all') rows = rows.filter((d) => d.status === status);
-  const paged = paginateLocal(rows, page, pageSize);
-  return { disputes: paged.items, total: paged.total, open, page: paged.page, pageSize: paged.pageSize, pages: paged.pages };
-}
-
-export async function adminResolveDispute(
-  actor: User,
-  userId: string,
-  disputeId: string,
-  resolution: 'approved' | 'denied',
-  note?: string
-): Promise<void> {
-  if (await detectApi()) {
-    await apiFetch('/api/admin/disputes/resolve', {
-      method: 'POST',
-      body: JSON.stringify({ userId, disputeId, resolution, note }),
-    });
-    return;
-  }
-  let description = '';
-  mutateLocalUser(userId, (u) => {
-    const dispute = (u.disputes || []).find((d) => d.id === disputeId);
-    if (!dispute) return 'Dispute not found';
-    if (dispute.status !== 'open') return 'That dispute has already been resolved.';
-    dispute.status = resolution === 'approved' ? 'resolved' : 'denied';
-    (dispute as CardDispute & { resolvedAt?: string; resolvedBy?: string; resolutionNote?: string }).resolvedAt = new Date().toISOString();
-    (dispute as CardDispute & { resolvedBy?: string }).resolvedBy = actor.username;
-    (dispute as CardDispute & { resolutionNote?: string | null }).resolutionNote = note || null;
-    if (resolution === 'approved') {
-      const account = (u.accounts || []).find((a) => a.id === dispute.accountId);
-      if (account) {
-        account.balance = round2(Math.max(0, account.balance - dispute.amount));
-        account.transactions.unshift({
-          id: uid(),
-          date: new Date().toISOString(),
-          description: `Dispute refund — ${dispute.description}`,
-          amount: -round2(dispute.amount),
-          category: 'Dispute refund',
-          status: 'posted',
-        });
-      }
-    }
-    description = dispute.description;
-    return null;
-  });
-  appendAuditLocal(
-    actor,
-    resolution === 'approved' ? 'dispute.approved' : 'dispute.denied',
-    actor.username,
-    `${resolution === 'approved' ? 'Approved refund' : 'Denied dispute'} for "${description}"${note ? ` — ${note}` : ''}`
-  );
-}
-
-export async function adminAudit(query: {
-  q?: string;
-  action?: string;
-  page?: number;
-  pageSize?: number;
-}): Promise<{ entries: AdminAuditEntry[]; total: number; page: number; pageSize: number; pages: number; actions: string[] }> {
-  if (await detectApi()) return apiFetch(`/api/admin/audit${toParams({ ...query })}`, { method: 'GET' });
-  const q = (query.q || '').trim().toLowerCase();
-  let rows = loadAuditLocal();
-  if (q) {
-    rows = rows.filter(
-      (e) =>
-        e.actorName.toLowerCase().includes(q) ||
-        e.action.toLowerCase().includes(q) ||
-        e.target.toLowerCase().includes(q) ||
-        (e.detail || '').toLowerCase().includes(q)
-    );
-  }
-  const action = query.action || 'all';
-  if (action !== 'all') rows = rows.filter((e) => e.action === action || e.action.startsWith(`${action}.`));
-  const actions = [...new Set(loadAuditLocal().map((e) => e.action))].sort();
-  const page = paginateLocal(rows, query.page, query.pageSize || 12);
-  return { entries: page.items, total: page.total, page: page.page, pageSize: page.pageSize, pages: page.pages, actions };
-}
-
-export async function adminSystem(): Promise<AdminSystemInfo> {
-  if (await detectApi()) return apiFetch('/api/admin/system', { method: 'GET' });
-  const users = loadUsers();
-  return {
-    status: 'local',
-    version: '1.0.0',
-    node: 'browser fallback',
-    platform: navigator.platform || 'web',
-    pid: 0,
-    port: 0,
-    startedAt: new Date().toISOString(),
-    uptimeSec: 0,
-    memoryMb: 0,
-    heapMb: 0,
-    users: users.length,
-    admins: users.filter((u) => u.role === 'admin').length,
-    frozenUsers: users.filter((u) => u.status === 'frozen').length,
-    activeSessions: getLocalSession(null) ? 1 : 0,
-    auditEntries: loadAuditLocal().length,
-    products: PRODUCTS.length,
-    db: { bytes: 0, modifiedAt: null },
-  };
 }

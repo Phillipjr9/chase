@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   Search,
   Bell,
@@ -75,10 +75,11 @@ interface Props {
   onSignOut: () => void;
   onBackHome: () => void;
   onOpenAccount: (product?: ProductId) => void;
-  onOpenAdmin?: () => void;
   initialView?: DashboardView;
   spanishMode?: boolean;
   onToggleSpanish?: () => void;
+  isImpersonating?: boolean;
+  onExitImpersonation?: () => void;
 }
 
 export type DashboardView =
@@ -189,10 +190,11 @@ export const BankingDashboard: React.FC<Props> = ({
   onSignOut,
   onBackHome,
   onOpenAccount,
-  onOpenAdmin,
   initialView = 'accounts',
   spanishMode = false,
   onToggleSpanish,
+  isImpersonating = false,
+  onExitImpersonation,
 }) => {
   const t = (en: string, es: string) => (spanishMode ? es : en);
   const [view, setView] = useState<View>(initialView);
@@ -261,6 +263,13 @@ export const BankingDashboard: React.FC<Props> = ({
   const cards = visibleAccounts.filter((a) => a.type === 'credit-card');
   const loans = visibleAccounts.filter((a) => a.type === 'auto-loan' || a.type === 'mortgage');
   const selected = user.accounts.find((a) => a.id === selectedId) || null;
+
+  // Dashboard sections are client-side views, so the browser does not perform
+  // its normal page-navigation scroll reset. Reset before paint on each route,
+  // including switching directly between account detail pages.
+  useLayoutEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+  }, [view, selectedId]);
 
   const inv = user.investments || { accountMask: '7192', cash: 2450, holdings: [] };
   const totalInvestments =
@@ -407,21 +416,27 @@ export const BankingDashboard: React.FC<Props> = ({
   };
 
   /* ------------------------------ Statements ----------------------------- */
-  const downloadStatement = (account: Account) => {
+  const downloadStatement = (account: Account, monthOffset = 0) => {
+    const period = new Date();
+    period.setDate(1);
+    period.setMonth(period.getMonth() - monthOffset);
+    const start = new Date(period.getFullYear(), period.getMonth(), 1);
+    const end = new Date(period.getFullYear(), period.getMonth() + 1, 1);
+    const csvCell = (value: string | number) => `"${String(value).replace(/"/g, '""')}"`;
     const rows = [
       ['Date', 'Description', 'Category', 'Amount'],
-      ...account.transactions.map((t) => [
-        fmtDate(t.date),
-        `"${t.description.replace(/"/g, '""')}"`,
-        t.category,
-        t.amount.toFixed(2),
-      ]),
+      ...account.transactions
+        .filter((t) => {
+          const date = new Date(t.date);
+          return date >= start && date < end;
+        })
+        .map((t) => [fmtDate(t.date), t.description, t.category, t.amount.toFixed(2)]),
     ];
-    const blob = new Blob([rows.map((r) => r.join(',')).join('\n')], { type: 'text/csv;charset=utf-8' });
+    const blob = new Blob(['\uFEFF', rows.map((r) => r.map(csvCell).join(',')).join('\r\n')], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${account.name.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}-statement.csv`;
+    a.download = `${account.name.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}-${period.toISOString().slice(0, 7)}-statement.csv`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -568,6 +583,14 @@ export const BankingDashboard: React.FC<Props> = ({
   /* =============================== MARKUP =============================== */
   return (
     <div className="min-h-screen flex flex-col bg-white text-[#131313]">
+      {isImpersonating && (
+        <div role="status" className="bg-[#EAF2FA] border-b border-[#CFE0F0]">
+          <div className="max-w-[1260px] mx-auto px-4 sm:px-8 min-h-[38px] flex flex-wrap items-center justify-between gap-2 text-[12px]" style={{ color: BTN_BLUE }}>
+            <span><ShieldCheck className="inline w-3.5 h-3.5 mr-1" /> Admin preview · viewing simulated account for {user.fullName}</span>
+            <button type="button" onClick={onExitImpersonation} className="font-semibold underline cursor-pointer">Return to admin</button>
+          </div>
+        </div>
+      )}
       {/* Utility strip */}
       <div className="bg-[#F4F5F6] border-b border-[#E4E6E8]">
         <div className="max-w-[1260px] mx-auto px-4 sm:px-8 h-[30px] flex items-center justify-end gap-3 text-[11.5px] text-[#5C5C5C]">
@@ -674,17 +697,6 @@ export const BankingDashboard: React.FC<Props> = ({
               <span className="hidden md:inline text-[12.5px] text-white/80">
                 {t('Welcome', 'Bienvenido')}, {firstName}
               </span>
-              {user.role === 'admin' && onOpenAdmin && (
-                <button
-                  type="button"
-                  onClick={onOpenAdmin}
-                  title="Open the Admin Console"
-                  className="inline-flex items-center gap-1.5 border border-white/45 hover:bg-white/10 text-white text-[12.5px] font-semibold px-2.5 sm:px-3.5 py-1.5 rounded-[4px] cursor-pointer"
-                >
-                  <ShieldCheck className="w-[15px] h-[15px]" />
-                  <span className="hidden sm:inline">{t('Admin', 'Admin')}</span>
-                </button>
-              )}
               <button
                 type="button"
                 onClick={onSignOut}
@@ -810,20 +822,7 @@ export const BankingDashboard: React.FC<Props> = ({
                 );
               })}
             </ul>
-            <div className="px-4 py-3 flex flex-wrap gap-4 text-[13px] text-white/75">
-              {user.role === 'admin' && onOpenAdmin && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setMenuOpen(false);
-                    onOpenAdmin();
-                  }}
-                  className="inline-flex items-center gap-1 text-white font-semibold underline cursor-pointer"
-                >
-                  <ShieldCheck className="w-3.5 h-3.5" />
-                  <span>Admin Console</span>
-                </button>
-              )}
+            <div className="px-4 py-3 flex gap-4 text-[13px] text-white/75">
               <button type="button" onClick={onBackHome} className="underline cursor-pointer">Chase.com</button>
               <button type="button" onClick={onSignOut} className="underline cursor-pointer">Sign out</button>
             </div>
@@ -1450,7 +1449,7 @@ export const BankingDashboard: React.FC<Props> = ({
         {/* ============================= ALL CHASE VIEWS ============================= */}
         {view === 'investments' && <InvestmentsView user={user} onUpdateUser={onUpdateUser} />}
         {view === 'travel' && <TravelView user={user} onUpdateUser={onUpdateUser} />}
-        {view === 'spending' && <SpendingView user={user} />}
+        {view === 'spending' && <SpendingView user={user} onUpdateUser={onUpdateUser} />}
         {view === 'security' && <SecurityCenterView user={user} onUpdateUser={onUpdateUser} />}
         {view === 'locations' && <LocationsView onSchedule={() => go('profile')} />}
         {view === 'myhome' && (
@@ -1496,10 +1495,10 @@ export const BankingDashboard: React.FC<Props> = ({
                           <p className="text-[13px]" style={{ color: INK }}>
                             {d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })} statement
                           </p>
-                          <p className="text-[11px]" style={{ color: '#8A929A' }}>PDF · CSV available</p>
+                          <p className="text-[11px]" style={{ color: '#8A929A' }}>CSV statement · monthly activity</p>
                         </div>
-                        <button type="button" onClick={() => downloadStatement(a)} className="inline-flex items-center gap-1 text-[12.5px] font-semibold hover:underline cursor-pointer" style={{ color: BTN_BLUE }}>
-                          <Download className="w-3.5 h-3.5" /> Download
+                        <button type="button" onClick={() => downloadStatement(a, off)} className="inline-flex items-center gap-1 text-[12.5px] font-semibold hover:underline cursor-pointer" style={{ color: BTN_BLUE }}>
+                          <Download className="w-3.5 h-3.5" /> Download CSV
                         </button>
                       </div>
                     );

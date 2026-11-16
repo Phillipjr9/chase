@@ -22,7 +22,6 @@ interface HeaderProps {
   onFocusSignIn: () => void;
   user: User | null;
   onGoToDashboard: () => void;
-  onGoToAdmin?: () => void;
   onSignOut: () => void;
 }
 
@@ -35,7 +34,6 @@ export const Header: React.FC<HeaderProps> = ({
   onFocusSignIn,
   user,
   onGoToDashboard,
-  onGoToAdmin,
   onSignOut,
 }) => {
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
@@ -133,16 +131,6 @@ export const Header: React.FC<HeaderProps> = ({
                 <span className="font-semibold text-[#131313]">
                   Welcome, {user.fullName.split(' ')[0]}
                 </span>
-                {user.role === 'admin' && onGoToAdmin && (
-                  <button
-                    type="button"
-                    onClick={onGoToAdmin}
-                    className="inline-flex items-center gap-1 text-[#005EB8] font-semibold hover:underline cursor-pointer"
-                  >
-                    <ShieldCheck className="w-3.5 h-3.5" />
-                    <span>Admin Console</span>
-                  </button>
-                )}
                 <button
                   type="button"
                   onClick={onGoToDashboard}
@@ -217,6 +205,15 @@ export const Header: React.FC<HeaderProps> = ({
 
             <button
               type="button"
+              onClick={() => handleLinkAction('admin-login')}
+              className="inline-flex items-center gap-1 font-semibold text-[#005EB8] hover:underline cursor-pointer"
+            >
+              <ShieldCheck className="w-3.5 h-3.5" />
+              <span>Admin</span>
+            </button>
+
+            <button
+              type="button"
               onClick={onToggleSpanish}
               className={`hover:text-[#005EB8] hover:underline cursor-pointer ${spanishMode ? 'font-semibold text-[#005EB8]' : ''}`}
             >
@@ -276,16 +273,6 @@ export const Header: React.FC<HeaderProps> = ({
             >
               <Search className="w-5 h-5" />
             </button>
-            {user?.role === 'admin' && onGoToAdmin && (
-              <button
-                type="button"
-                onClick={onGoToAdmin}
-                className="px-3 py-1.5 bg-[#0B1B33] text-white text-[13px] font-semibold rounded-[4px] inline-flex items-center gap-1 cursor-pointer"
-              >
-                <ShieldCheck className="w-3.5 h-3.5" />
-                <span>Admin</span>
-              </button>
-            )}
             <button
               type="button"
               onClick={user ? onGoToDashboard : onFocusSignIn}
@@ -296,27 +283,15 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
 
           {/* Desktop right side on logo row (nav is below) */}
-          <div className="hidden lg:flex items-center gap-2 text-[13px] text-[#565A5D]">
+          <div className="hidden lg:block text-[13px] text-[#565A5D]">
             {user ? (
-              <>
-                {user.role === 'admin' && onGoToAdmin && (
-                  <button
-                    type="button"
-                    onClick={onGoToAdmin}
-                    className="bg-[#0B1B33] hover:bg-[#13294B] text-white font-semibold text-[13px] px-3.5 py-1.5 rounded-[4px] inline-flex items-center gap-1.5 cursor-pointer"
-                  >
-                    <ShieldCheck className="w-3.5 h-3.5" />
-                    <span>Admin Console</span>
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={onGoToDashboard}
-                  className="bg-[#0060F0] hover:bg-[#004EC4] text-white font-semibold text-[13px] px-4 py-1.5 rounded-[4px] cursor-pointer"
-                >
-                  My accounts
-                </button>
-              </>
+              <button
+                type="button"
+                onClick={onGoToDashboard}
+                className="bg-[#0060F0] hover:bg-[#004EC4] text-white font-semibold text-[13px] px-4 py-1.5 rounded-[4px] cursor-pointer"
+              >
+                My accounts
+              </button>
             ) : (
               <button
                 type="button"

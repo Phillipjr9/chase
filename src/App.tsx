@@ -13,7 +13,7 @@ import {
 } from './components/Modals';
 import { SignUpWizard } from './components/SignUpWizard';
 import { BankingDashboard } from './components/BankingDashboard';
-import { AdminConsole } from './components/AdminConsole';
+import { AdminPage } from './components/AdminPage';
 import ProductsPage from './components/ProductsPage';
 import { ChasePageLoader } from './components/Loading';
 import type { DashboardView } from './components/BankingDashboard';
@@ -27,15 +27,24 @@ import {
   resetPassword,
   persistUser,
   seedSampleUserIfNeeded,
+  adoptSessionToken,
+  readAdminToken,
+  writeAdminToken,
 } from './banking/store';
 
 type View = 'home' | 'wizard' | 'dashboard' | 'products' | 'admin';
 
 export function App() {
-  const [view, setView] = useState<View>('home');
+  const [view, setView] = useState<View>(() =>
+    window.location.pathname === '/admin' || window.location.hash.replace(/^#\/?/, '') === 'admin'
+      ? 'admin'
+      : 'home'
+  );
   const [activeSegment, setActiveSegment] = useState<SegmentKey>('personal');
   const [spanishMode, setSpanishMode] = useState(false);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [adminTokenForView, setAdminTokenForView] = useState(() => readAdminToken());
+  const [isImpersonating, setIsImpersonating] = useState(false);
   const [authReady, setAuthReady] = useState(false);
   const [sessionNotice, setSessionNotice] = useState(false);
   const [dashboardStart, setDashboardStart] = useState<DashboardView>('accounts');
@@ -55,15 +64,7 @@ export function App() {
       try {
         await seedSampleUserIfNeeded();
         const me = await fetchMe();
-        if (active && me) {
-          setCurrentUser(me);
-          const hash = window.location.hash.replace(/^#\/?/, '').toLowerCase();
-          if (hash === 'admin' && me.role === 'admin') {
-            setView('admin');
-          } else if (hash === 'dashboard') {
-            setView('dashboard');
-          }
-        }
+        if (active && me) setCurrentUser(me);
       } catch {
         /* Stay signed out when storage or the local API is unavailable. */
       } finally {
@@ -76,18 +77,13 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    const onPopState = () => setView(window.location.pathname === '/admin' ? 'admin' : 'home');
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
+
+  useEffect(() => {
     window.scrollTo({ top: 0 });
-    try {
-      if (view === 'admin') {
-        if (window.location.hash !== '#admin') {
-          window.history.replaceState(null, '', '#admin');
-        }
-      } else if (window.location.hash === '#admin' || window.location.hash === '#/admin') {
-        window.history.replaceState(null, '', window.location.pathname + window.location.search);
-      }
-    } catch {
-      /* history unavailable */
-    }
   }, [view]);
 
   useEffect(() => {
@@ -110,8 +106,21 @@ export function App() {
     const result = await authenticate(username, password);
     if ('error' in result) return result.error;
     setSessionNotice(false);
+    if ('admin' in result) {
+      writeAdminToken(result.token);
+      setAdminTokenForView(result.token);
+      setCurrentUser(null);
+      setIsImpersonating(false);
+      if (window.location.pathname !== '/admin') {
+        try { window.history.pushState({}, '', '/admin'); } catch { /* ignore */ }
+      }
+      setView('admin');
+      return null;
+    }
+    writeAdminToken(null);
+    setAdminTokenForView('');
     setCurrentUser(result.user);
-    setView(result.user.role === 'admin' ? 'admin' : 'dashboard');
+    setView('dashboard');
     return null;
   };
 
@@ -129,15 +138,60 @@ export function App() {
   };
 
   const handleSignOut = async () => {
-    await logout();
+    await logout(false);
+    writeAdminToken(null);
+    setAdminTokenForView('');
     setCurrentUser(null);
+    setIsImpersonating(false);
     setDashboardStart('accounts');
     setView('home');
+    if (window.location.pathname !== '/') {
+      try { window.history.pushState({}, '', '/'); } catch { /* ignore */ }
+    }
   };
 
   const goHome = () => {
     setDashboardStart('accounts');
     setView('home');
+    if (window.location.pathname !== '/') {
+      try { window.history.pushState({}, '', '/'); } catch { /* ignore */ }
+    }
+  };
+
+  const openAdmin = () => {
+    if (window.location.pathname !== '/admin') {
+      try { window.history.pushState({}, '', '/admin'); } catch { /* ignore */ }
+    }
+    setView('admin');
+  };
+
+  const exitAdmin = () => {
+    if (window.location.pathname !== '/') {
+      try { window.history.pushState({}, '', '/'); } catch { /* ignore */ }
+    }
+    setView('home');
+  };
+
+  const startImpersonation = (user: User, sessionToken: string) => {
+    adoptSessionToken(sessionToken);
+    setCurrentUser(user);
+    setIsImpersonating(true);
+    setDashboardStart('accounts');
+    if (window.location.pathname !== '/') {
+      try { window.history.pushState({}, '', '/'); } catch { /* ignore */ }
+    }
+    setView('dashboard');
+  };
+
+  const exitImpersonation = async () => {
+    await logout(true);
+    setCurrentUser(null);
+    setIsImpersonating(false);
+    setAdminTokenForView(readAdminToken());
+    if (window.location.pathname !== '/admin') {
+      try { window.history.pushState({}, '', '/admin'); } catch { /* ignore */ }
+    }
+    setView('admin');
   };
 
   const openWizard = (product: ProductId | null = null) => {
@@ -157,6 +211,10 @@ export function App() {
   };
 
   const handleAction = (actionId: string) => {
+    if (actionId === 'admin-login') {
+      openAdmin();
+      return;
+    }
     if (actionId === 'open-products-checking' || actionId === 'open-products-savings') {
       openProducts('checking');
       return;
@@ -226,6 +284,11 @@ export function App() {
     );
   }
 
+  /* ------------------------------ Admin view -------------------------------- */
+  if (view === 'admin') {
+    return <AdminPage initialToken={adminTokenForView} onExit={exitAdmin} onImpersonate={startImpersonation} />;
+  }
+
   /* ------------------------------ Wizard view ------------------------------ */
   if (view === 'wizard') {
     return (
@@ -247,21 +310,11 @@ export function App() {
         onSignOut={handleSignOut}
         onBackHome={goHome}
         onOpenAccount={(product?: ProductId) => openWizard(product ?? null)}
-        onOpenAdmin={() => setView('admin')}
         initialView={dashboardStart}
         spanishMode={spanishMode}
         onToggleSpanish={() => setSpanishMode((v) => !v)}
-      />
-    );
-  }
-
-  /* --------------------------- Admin console view --------------------------- */
-  if (view === 'admin' && currentUser) {
-    return (
-      <AdminConsole
-        user={currentUser}
-        onExitToBanking={() => setView('dashboard')}
-        onSignOut={handleSignOut}
+        isImpersonating={isImpersonating}
+        onExitImpersonation={exitImpersonation}
       />
     );
   }
@@ -314,7 +367,6 @@ export function App() {
         onFocusSignIn={handleFocusSignIn}
         user={currentUser}
         onGoToDashboard={() => setView('dashboard')}
-        onGoToAdmin={() => setView('admin')}
         onSignOut={handleSignOut}
       />
 
@@ -328,7 +380,6 @@ export function App() {
           onResetPassword={handleResetPassword}
           onSignUp={() => openWizard(null)}
           onGoToDashboard={() => setView('dashboard')}
-          onGoToAdmin={() => setView('admin')}
           onSignOut={handleSignOut}
           usernameInputRef={usernameInputRef}
         />

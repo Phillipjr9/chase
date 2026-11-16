@@ -43,12 +43,12 @@ const fmtDate = (iso: string) =>
 const fmtShortDate = (iso: string) =>
   new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 
+// VantageScore® 3.0 consumer ranges (not generic FICO® ranges).
 const BANDS = [
-  { label: 'Very poor', min: 300, max: 579, color: '#B42318' },
-  { label: 'Poor', min: 580, max: 669, color: '#D97706' },
-  { label: 'Fair', min: 670, max: 739, color: '#C2A400' },
-  { label: 'Good', min: 740, max: 799, color: '#138842' },
-  { label: 'Excellent', min: 800, max: 850, color: '#0B6B33' },
+  { label: 'Subprime', min: 300, max: 600, color: '#B42318' },
+  { label: 'Near prime', min: 601, max: 660, color: '#D97706' },
+  { label: 'Prime', min: 661, max: 780, color: '#138842' },
+  { label: 'Superprime', min: 781, max: 850, color: '#0B6B33' },
 ];
 
 const bandFor = (score: number) =>
@@ -263,16 +263,16 @@ export const CreditJourney: React.FC<Props> = ({ user, onUpdateUser }) => {
           <div className="flex items-center gap-2">
             <h1 className="text-[26px] font-light" style={{ color: INK }}>Credit Journey®</h1>
             <span className="text-[10.5px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full" style={{ background: '#EAF2FA', color: BLUE }}>
-              Free
+              Sample profile
             </span>
           </div>
           <p className="mt-0.5 text-[13px]" style={{ color: MUTED }}>
-            Your {credit.model} score from {credit.bureau}®, updated weekly. Checking never affects your score.
+            Simulated {credit.model} score based on a sample {credit.bureau}® file. Checking a score does not affect it.
           </p>
         </div>
         <div className="text-right">
-          <p className="text-[11.5px]" style={{ color: FAINT }}>Last updated</p>
-          <p className="text-[13px] font-semibold" style={{ color: INK }}>{fmtDate(new Date().toISOString())}</p>
+          <p className="text-[11.5px]" style={{ color: FAINT }}>Sample file updated</p>
+          <p className="text-[13px] font-semibold" style={{ color: INK }}>{fmtDate(credit.report.pulledAt)}</p>
         </div>
       </div>
 
@@ -483,7 +483,7 @@ export const CreditJourney: React.FC<Props> = ({ user, onUpdateUser }) => {
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div className="flex items-center gap-2">
                         <span className="w-8 h-8 rounded-full flex items-center justify-center" style={{ background: '#EAF2FA', color: BLUE }}>
-                          {factor.weight === 'High impact' ? <TrendingUp className="w-4 h-4" /> : <FileText className="w-4 h-4" />}
+                          {factor.weight === 'Extremely influential' || factor.weight === 'Highly influential' ? <TrendingUp className="w-4 h-4" /> : <FileText className="w-4 h-4" />}
                         </span>
                         <div>
                           <p className="text-[14px] font-semibold" style={{ color: INK }}>{factor.label}</p>
@@ -504,9 +504,10 @@ export const CreditJourney: React.FC<Props> = ({ user, onUpdateUser }) => {
             <Panel className="p-5" style={{ background: '#F7FAFD', borderColor: '#CFE0F0' }}>
               <h2 className="text-[14px] font-semibold" style={{ color: INK }}>How factors are weighted</h2>
               <ul className="mt-2 space-y-2 text-[12.5px]" style={{ color: MUTED }}>
-                <li><strong style={{ color: INK }}>High:</strong> payment history and utilization have the biggest effect.</li>
-                <li><strong style={{ color: INK }}>Medium:</strong> balances and length of credit history.</li>
-                <li><strong style={{ color: INK }}>Low:</strong> new credit checks and available credit.</li>
+                <li><strong style={{ color: INK }}>Extremely influential:</strong> payment history.</li>
+                <li><strong style={{ color: INK }}>Highly influential:</strong> age and type of credit, and percent of credit used.</li>
+                <li><strong style={{ color: INK }}>Moderately influential:</strong> total balances and debt.</li>
+                <li><strong style={{ color: INK }}>Less influential:</strong> recent credit behavior and available credit.</li>
               </ul>
               <p className="mt-3 text-[11px] leading-relaxed" style={{ color: FAINT }}>
                 Lenders may use different scoring models, such as FICO® or scores from another bureau.

@@ -1,7 +1,7 @@
 #!/bin/bash
 # Chase Clone — fullstack launcher
 # Builds the frontend, then starts the API + static server.
-# Open http://localhost:3000 and sign in with demo / chase123
+# Open http://localhost:3000 and sign in with admin / chaseadmin123
 set -e
 echo "Building frontend..."
 npm run build
