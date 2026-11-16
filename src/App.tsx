@@ -23,7 +23,6 @@ import {
   fetchMe,
   logout,
   authenticate,
-  switchToAdmin,
   resetPassword,
   persistUser,
   seedSampleUserIfNeeded,
@@ -52,9 +51,6 @@ export function App() {
     linkedUserId?: string | null;
   } | null>(null);
   const [isImpersonating, setIsImpersonating] = useState(false);
-  const [workspaceChooserOpen, setWorkspaceChooserOpen] = useState(false);
-  const [switchError, setSwitchError] = useState('');
-  const [switchingWorkspace, setSwitchingWorkspace] = useState(false);
   const [sessionNotice, setSessionNotice] = useState(false);
   const [dashboardStart, setDashboardStart] = useState<DashboardView>('accounts');
   const [productTab, setProductTab] = useState<'checking' | 'cards' | 'rates'>('checking');
@@ -119,14 +115,12 @@ export function App() {
     if ('error' in result) return result.error;
     authMutationSeqRef.current += 1;
     setSessionNotice(false);
-    setSwitchError('');
     if ('admin' in result) {
       writeAdminToken(result.token);
       setAdminTokenForView(result.token);
       setAdminSessionInfo(result.admin);
       setCurrentUser(null);
       setIsImpersonating(false);
-      setWorkspaceChooserOpen(false);
       if (window.location.pathname !== '/admin') {
         try { window.history.pushState({}, '', '/admin'); } catch { /* ignore */ }
       }
@@ -138,33 +132,8 @@ export function App() {
     setAdminSessionInfo(null);
     setCurrentUser(result.user);
     setIsImpersonating(false);
-    if (result.linkedAdmin) {
-      setWorkspaceChooserOpen(true);
-    } else {
-      setView('dashboard');
-    }
+    setView('dashboard');
     return null;
-  };
-
-  const handleSwitchToAdmin = async () => {
-    setSwitchingWorkspace(true);
-    setSwitchError('');
-    try {
-      const switched = await switchToAdmin();
-      writeAdminToken(switched.token);
-      setAdminTokenForView(switched.token);
-      setAdminSessionInfo(switched.admin);
-      setIsImpersonating(false);
-      setWorkspaceChooserOpen(false);
-      if (window.location.pathname !== '/admin') {
-        try { window.history.pushState({}, '', '/admin'); } catch { /* ignore */ }
-      }
-      setView('admin');
-    } catch (e) {
-      setSwitchError(e instanceof Error ? e.message : 'Could not open administrator console.');
-    } finally {
-      setSwitchingWorkspace(false);
-    }
   };
 
   const handleSwitchToCustomer = (user: User, sessionToken: string) => {
@@ -172,7 +141,6 @@ export function App() {
     adoptSessionToken(sessionToken);
     setCurrentUser(user);
     setIsImpersonating(false);
-    setWorkspaceChooserOpen(false);
     setDashboardStart('accounts');
     if (window.location.pathname !== '/') {
       try { window.history.pushState({}, '', '/'); } catch { /* ignore */ }
@@ -214,14 +182,6 @@ export function App() {
     if (window.location.pathname !== '/') {
       try { window.history.pushState({}, '', '/'); } catch { /* ignore */ }
     }
-  };
-
-  const openAdmin = () => {
-    setAdminTokenForView(readAdminToken());
-    if (window.location.pathname !== '/admin') {
-      try { window.history.pushState({}, '', '/admin'); } catch { /* ignore */ }
-    }
-    setView('admin');
   };
 
   const exitAdmin = () => {
@@ -276,10 +236,6 @@ export function App() {
   };
 
   const handleAction = (actionId: string) => {
-    if (actionId === 'admin-login') {
-      openAdmin();
-      return;
-    }
     if (actionId === 'open-products-checking' || actionId === 'open-products-savings') {
       openProducts('checking');
       return;
@@ -383,7 +339,6 @@ export function App() {
         onToggleSpanish={() => setSpanishMode((v) => !v)}
         isImpersonating={isImpersonating}
         onExitImpersonation={exitImpersonation}
-        onSwitchToAdmin={currentUser.linkedAdmin ? () => void handleSwitchToAdmin() : undefined}
       />
     );
   }
@@ -493,73 +448,6 @@ export function App() {
         onUpdateUser={updateCurrentUser}
         onEnroll={() => openWizard(null)}
       />
-
-      {/* Unified Workspace Chooser Modal for Linked Admin/Customer Identities */}
-      {workspaceChooserOpen && currentUser?.linkedAdmin && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="workspace-chooser-title"
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-        >
-          <div className="w-full max-w-[460px] rounded-xl bg-white shadow-2xl border border-[#E4E6E8] overflow-hidden">
-            <div className="bg-[#081427] px-6 py-4 text-white">
-              <p className="text-[11px] font-semibold uppercase tracking-wider text-blue-200">
-                Linked Identity Detected
-              </p>
-              <h2 id="workspace-chooser-title" className="mt-0.5 text-[18px] font-bold">
-                Choose your workspace, {currentUser.fullName.split(' ')[0]}
-              </h2>
-            </div>
-            <div className="p-6 space-y-4">
-              <p className="text-[13px] text-[#5C5C5C]">
-                Your account (<strong>@{currentUser.username}</strong>) has both personal Chase banking and{' '}
-                <strong>
-                  {currentUser.linkedAdmin.role === 'auditor' ? 'Read-Only Auditor' : 'Limited Administrator'}
-                </strong>{' '}
-                access. You can switch between views at any time.
-              </p>
-              {switchError && (
-                <p role="alert" className="rounded bg-[#FEF2F2] border border-[#F5C2C7] px-3 py-2 text-[12.5px] text-[#B42318]">
-                  {switchError}
-                </p>
-              )}
-              <div className="grid grid-cols-1 gap-3">
-                <button
-                  type="button"
-                  disabled={switchingWorkspace}
-                  onClick={() => {
-                    setWorkspaceChooserOpen(false);
-                    setView('dashboard');
-                  }}
-                  className="w-full rounded-lg border border-[#D0D5DD] hover:border-[#1A4488] hover:bg-[#F7FAFD] p-4 text-left transition-colors cursor-pointer"
-                >
-                  <span className="block text-[14.5px] font-semibold text-[#131313]">
-                    Personal Banking Dashboard
-                  </span>
-                  <span className="block mt-0.5 text-[12px] text-[#5C5C5C]">
-                    View your personal accounts, cards, transfers, and statements.
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  disabled={switchingWorkspace}
-                  onClick={() => void handleSwitchToAdmin()}
-                  className="w-full rounded-lg bg-[#1A4488] hover:bg-[#143669] p-4 text-left text-white transition-colors cursor-pointer disabled:opacity-60"
-                >
-                  <span className="block text-[14.5px] font-semibold">
-                    {switchingWorkspace ? 'Opening Administrator Console…' : 'Administrator Console'}
-                  </span>
-                  <span className="block mt-0.5 text-[12px] text-blue-100">
-                    Open your{' '}
-                    {currentUser.linkedAdmin.role === 'auditor' ? 'read-only auditor' : 'staff operator'} workspace for assigned customers.
-                  </span>
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

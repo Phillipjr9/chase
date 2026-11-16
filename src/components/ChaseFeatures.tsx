@@ -1459,7 +1459,7 @@ export const SecureMessagesView: React.FC<{ user: User; onUpdateUser: (user: Use
       setMessages(updated.messages || []);
       setSubject('');
       setBody('');
-      setNotice('Your message was sent to your administrator’s inbox.');
+      setNotice('Your message has been sent to Support.');
     } catch (err) {
       setNotice(err instanceof Error ? err.message : 'Unable to send secure message.');
     } finally {
@@ -1488,7 +1488,7 @@ export const SecureMessagesView: React.FC<{ user: User; onUpdateUser: (user: Use
               Send a new inquiry
             </h2>
             <p className="mt-1 text-[12px]" style={{ color: MUT }}>
-              Messages typically appear in the administrator inbox within a few seconds while it is open.
+              Messages are delivered securely to Support within a few seconds.
             </p>
             {supportContact && (supportContact.email || supportContact.phone) && <div className="mt-3 text-sm"><strong>Support contact:</strong>{supportContact.email && <p>Email: <a className="underline" href={`mailto:${supportContact.email}`}>{supportContact.email}</a></p>}{supportContact.phone && <p>Phone: <a className="underline" href={`tel:${supportContact.phone.replace(/[^+0-9]/g, '')}`}>{supportContact.phone}</a></p>}</div>}
             {refreshError && <p role="status" className="mt-3 text-sm text-red-700">Unable to refresh messages. Retrying.</p>}
