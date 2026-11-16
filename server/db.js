@@ -134,7 +134,11 @@ export async function ensureDbReady() {
   try {
     res = await fetch(`${SUPABASE_URL}/rest/v1/chase_simulator_state?id=eq.${encodeURIComponent(SUPABASE_ROW_ID)}&select=state,updated_at`, { headers: remoteHeaders() });
   } catch (cause) { throw Object.assign(new Error('Database connection unavailable'), { status: 503, cause }); }
-  if (!res.ok) throw Object.assign(new Error(`Database returned HTTP ${res.status}`), { status: 503 });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}));
+    const code = typeof detail.code === 'string' && /^[A-Za-z0-9_-]{1,40}$/.test(detail.code) ? `, code ${detail.code}` : '';
+    throw Object.assign(new Error(`Database returned HTTP ${res.status}${code}`), { status: 503 });
+  }
   const rows = await res.json();
   if (!Array.isArray(rows) || rows.length > 1) throw Object.assign(new Error('Invalid database response'), { status: 503 });
   cache = sanitizeLoadedDb(rows[0]?.state || {});
