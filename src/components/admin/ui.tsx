@@ -266,7 +266,7 @@ export const Td: React.FC<{ children: React.ReactNode; className?: string; colSp
 );
 
 export const TableShell: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-  <div className="overflow-x-auto admin-scroll">
+  <div className="min-w-0 max-w-full overflow-x-auto admin-scroll">
     <table className="w-full border-collapse min-w-[720px]">{children}</table>
   </div>
 );
@@ -416,7 +416,7 @@ export const Modal: React.FC<{
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4" role="dialog" aria-modal="true">
       <div className="absolute inset-0 bg-gray-900/45 dark:bg-black/60 admin-fade" onClick={onClose} />
-      <div className={cn('relative w-full rounded-2xl bg-white dark:bg-[#101D31] border border-gray-200 dark:border-gray-800 shadow-2xl admin-fade-up', width)}>
+      <div className={cn('relative w-full max-h-[calc(100dvh-2rem)] flex flex-col overflow-hidden rounded-2xl bg-white dark:bg-[#101D31] border border-gray-200 dark:border-gray-800 shadow-2xl admin-fade-up', width)}>
         <div className="flex items-center justify-between px-5 pt-5 pb-3">
           <h3 className="text-[15px] font-semibold text-gray-800 dark:text-white/90">{title}</h3>
           <button
@@ -428,8 +428,8 @@ export const Modal: React.FC<{
             <X className="w-[17px] h-[17px]" />
           </button>
         </div>
-        <div className="px-5 pb-5">{children}</div>
-        {footer && <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-gray-200 dark:border-gray-800">{footer}</div>}
+        <div className="min-h-0 overflow-y-auto px-5 pb-5">{children}</div>
+        {footer && <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 px-5 py-4 border-t border-gray-200 dark:border-gray-800">{footer}</div>}
       </div>
     </div>
   );

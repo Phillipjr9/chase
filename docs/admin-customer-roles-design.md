@@ -1,14 +1,14 @@
 # Linked administrator and customer identities
 
-Status: design only; no role conversion or account migration has been implemented.
+Status: customer-to-limited-admin promotion implemented on the working branch; reverse conversion, migration of existing administrators and a unified view chooser remain incomplete. No live accounts have been changed.
 
 ## Requested behavior
 
 - Super-admin-created administrators also have customer profiles. They appear in the Customers area and can access both their customer and administrator views.
 - The super administrator can grant or remove administrator access for a customer.
-- A linked administrator and customer use one password and choose the desired view at sign-in.
+- A linked administrator and customer use one password. The current implementation uses separate customer and administrator sign-in pages; a single post-login view chooser is not implemented.
 - For existing administrators, the super administrator reviews each account and links an existing customer or creates a new profile; do not automatically merge records.
-- Before removing administrator access, the super administrator must choose an active replacement administrator for the affected administrator's customers. Preserve customer accounts, messages, private notes, and history during reassignment.
+- Before removing administrator access, the super administrator must choose an active replacement administrator for the affected administrator's customers. Preserve customer accounts, messages, private notes, and history during reassignment. Current deletion is blocked while customers remain assigned; a guided reassignment-and-removal workflow remains to be implemented.
 
 ## Requirements before release
 

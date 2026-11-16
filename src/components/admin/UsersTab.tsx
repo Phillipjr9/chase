@@ -43,6 +43,9 @@ interface Props {
   isReadOnly: boolean;
   canCreateUsers: boolean;
   canGenerateActivity: boolean;
+  isSuperAdmin: boolean;
+  isLinkedAdmin: boolean;
+  onPromote: () => Promise<boolean>;
   busy: boolean;
   onSelectUser: (id: string) => void;
   onCreateUser: (payload: {
@@ -80,6 +83,9 @@ export const UsersTab: React.FC<Props> = ({
   isReadOnly,
   canCreateUsers,
   canGenerateActivity,
+  isSuperAdmin,
+  isLinkedAdmin,
+  onPromote,
   busy,
   onSelectUser,
   onCreateUser,
@@ -419,6 +425,7 @@ export const UsersTab: React.FC<Props> = ({
 
                 {!isReadOnly && (
                   <div className="flex flex-wrap items-center gap-2">
+                    {isSuperAdmin && <Btn variant="secondary" size="sm" disabled={busy || isLinkedAdmin || selectedUser.status === 'suspended'} onClick={() => { if (window.confirm(`Grant limited test administrator access to ${selectedUser.username}? Their customer account and password remain unchanged.`)) void onPromote(); }}>{isLinkedAdmin ? 'Administrator access enabled' : 'Promote to administrator'}</Btn>}
                     <Btn variant="primary" size="sm" disabled={busy} onClick={onImpersonate}>
                       <Eye className="w-4 h-4" />
                       Preview as Customer

@@ -400,6 +400,19 @@ export const AdminPage: React.FC<{
   /* --------------------------- Mutation Handlers -------------------------- */
 
 
+  const handlePromote = async (): Promise<boolean> => {
+    if (!selectedUser || !isSuperAdmin) return false;
+    setBusy(true);
+    try {
+      await api(`/api/admin/users/${encodeURIComponent(selectedUser.id)}/promote`, { method: 'POST', body: JSON.stringify({ confirm: true }) });
+      const result = await api<{ admins: AdminAccountRow[] }>('/api/admin/admins');
+      setAdminAccounts(result.admins);
+      notify('success', 'Limited test administrator access enabled. Use the administrator sign-in with the existing username and password.');
+      return true;
+    } catch (err) { notify('error', err instanceof Error ? err.message : 'Could not promote customer.'); return false; }
+    finally { setBusy(false); }
+  };
+
   const handleCreateUser = async (payload: {
     username: string;
     fullName: string;
@@ -1629,11 +1642,11 @@ export const AdminPage: React.FC<{
                 <button
                   type="button"
                   onClick={() => void impersonateById(selectedUser.id, selectedUser.fullName)}
-                  className="font-semibold text-[#1A4488] hover:underline cursor-pointer"
+                  className="hidden sm:inline font-semibold text-[#1A4488] hover:underline cursor-pointer"
                 >
                   {t(`Preview ${selectedUser.fullName.split(' ')[0]}’s Banking`, `Ver banca de ${selectedUser.fullName.split(' ')[0]}`)}
                 </button>
-                <span className="text-[#C9CDD1]">|</span>
+                <span className="hidden sm:inline text-[#C9CDD1]">|</span>
               </>
             )}
             <button type="button" onClick={() => setTab('audit')} className="hover:underline cursor-pointer">
@@ -2066,6 +2079,9 @@ export const AdminPage: React.FC<{
             isReadOnly={isReadOnly}
             busy={busy}
             onSelectUser={(id) => void selectUserAndMaybeGo(id)}
+            isSuperAdmin={isSuperAdmin}
+            isLinkedAdmin={adminAccounts.some(a => a.linkedUserId === selectedUser?.id)}
+            onPromote={handlePromote}
             canCreateUsers={permissions.createUsers}
             canGenerateActivity={permissions.generateActivity}
             onCreateUser={handleCreateUser}
