@@ -80,6 +80,28 @@ try {
   await api(`/api/admin/admins/${encodeURIComponent(createdOperator.admin.id)}`, { method: 'DELETE', token: adminToken, body: { confirm: true } });
 }
 
+const promotedUsername = `promoted-admin-${Date.now()}`;
+const promotedAdmin = await api('/api/admin/admins', {
+  method: 'POST', token: adminToken, expected: 201,
+  body: { username: promotedUsername, fullName: 'Promoted Admin User', password: 'promotepass123', role: 'auditor' },
+});
+try {
+  const promotedLogin = await api('/api/admin/login', { method: 'POST', body: { username: promotedUsername, password: 'promotepass123' } });
+  const beforePromotion = await api('/api/admin/me', { token: promotedLogin.token });
+  assert.equal(beforePromotion.admin.role, 'auditor');
+  const promotion = await api(`/api/admin/admins/${encodeURIComponent(promotedAdmin.admin.id)}`, {
+    method: 'PUT', token: adminToken,
+    body: { role: 'admin' },
+  });
+  assert.equal(promotion.needsReLogin, true, 'role promotion requires the admin to sign in again');
+  await api('/api/admin/me', { token: promotedLogin.token, expected: 401 });
+  const reLogin = await api('/api/admin/login', { method: 'POST', body: { username: promotedUsername, password: 'promotepass123' } });
+  const afterPromotion = await api('/api/admin/me', { token: reLogin.token });
+  assert.equal(afterPromotion.admin.role, 'admin', 'the promoted admin can access the admin dashboard after re-login');
+} finally {
+  await api(`/api/admin/admins/${encodeURIComponent(promotedAdmin.admin.id)}`, { method: 'DELETE', token: adminToken, body: { confirm: true } });
+}
+
 const normalLogin = await api('/api/auth/login', {
   method: 'POST', body: { username: 'chase', password: 'chase123' },
 });

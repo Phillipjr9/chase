@@ -593,9 +593,10 @@ async function handleApi(req, res, url) {
           if (String(body.password).length < 10) return sendJson(res, 400, { error: 'Admin password must be at least 10 characters.' });
           patch.passwordHash = hashPassword(String(body.password));
         }
+        const needsReLogin = patch.passwordHash !== undefined || patch.role !== undefined || patch.status === 'disabled';
         const updated = updateAdminAccount(adminId, patch);
-        recordAdminAudit('Updated simulator administrator', { adminId, fields: Object.keys(patch) });
-        return sendJson(res, 200, { admin: updated });
+        recordAdminAudit('Updated simulator administrator', { adminId, fields: Object.keys(patch), needsReLogin });
+        return sendJson(res, 200, { admin: updated, needsReLogin });
       }
       if (method === 'DELETE') {
         const body = await readBody(req);

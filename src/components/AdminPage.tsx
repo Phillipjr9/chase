@@ -674,9 +674,16 @@ export const AdminPage: React.FC<{
   const updateAdminAccount = async (admin: AdminAccountRow, patch: { role?: AdminAccountRow['role']; status?: AdminAccountRow['status']; password?: string }) => {
     setBusy(true);
     try {
-      const result = await api<{ admin: AdminAccountRow }>(`/api/admin/admins/${encodeURIComponent(admin.id)}`, { method: 'PUT', body: JSON.stringify({ ...patch, ...(patch.password ? { confirm: true } : {}) }) });
+      const result = await api<{ admin: AdminAccountRow; needsReLogin?: boolean }>(`/api/admin/admins/${encodeURIComponent(admin.id)}`, { method: 'PUT', body: JSON.stringify({ ...patch, ...(patch.password ? { confirm: true } : {}) }) });
       setAdminAccounts((items) => items.map((item) => item.id === admin.id ? result.admin : item));
-      setNotice({ kind: 'success', text: `Updated administrator ${admin.username}.` });
+      if (result.needsReLogin && admin.username === currentAdminUsername) {
+        try { sessionStorage.removeItem(ADMIN_TOKEN_KEY); } catch { /* unavailable */ }
+        setToken('');
+        setCurrentAdminRole('admin');
+        setNotice({ kind: 'success', text: `Updated administrator ${admin.username}. Sign in again to access the admin dashboard with the new role.` });
+      } else {
+        setNotice({ kind: 'success', text: `Updated administrator ${admin.username}.` });
+      }
     } catch (error) {
       setNotice({ kind: 'error', text: error instanceof Error ? error.message : 'Could not update admin account.' });
     } finally { setBusy(false); }
@@ -1267,7 +1274,7 @@ export const AdminPage: React.FC<{
           </div>
         )}
 
-        <div className="mt-5 flex flex-wrap items-center justify-between gap-2 text-[11.5px]" style={{ color: FAINT }}><span>Secure testing environment · no real funds or external payment services</span><button type="button" onClick={onExit} className="font-semibold hover:underline" style={{ color: BLUE }}><ArrowLeft className="inline w-3.5 h-3.5" /> Return to Chase.com</button></div>
+        <div className="mt-5 flex flex-wrap items-center justify-between gap-2 text-[11.5px]" style={{ color: FAINT }}><button type="button" onClick={onExit} className="font-semibold hover:underline" style={{ color: BLUE }}><ArrowLeft className="inline w-3.5 h-3.5" /> Return to Chase.com</button></div>
       </div>
       </div>
       </div>
