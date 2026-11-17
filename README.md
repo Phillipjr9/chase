@@ -1,9 +1,7 @@
-# Chase.com Clone — Fullstack Banking App
+# Chase.com Banking App
 
-A pixel-faithful recreation of the **chase.com homepage** built as a complete
-fullstack application: a React + TypeScript + Tailwind frontend and a
-zero-dependency Node.js backend serving a REST API and the built site from a
-single origin.
+A fullstack banking application inspired by the **chase.com homepage** built as a complete
+React + TypeScript + Tailwind frontend with a zero-dependency Node.js backend serving a REST API and the built site from a single origin.
 
 > This is a front-end/back-end design showcase for a Chase-inspired banking experience.
 > No real accounts are opened and no data leaves your machine.
@@ -163,7 +161,7 @@ to the same browser-local mode as the banking app, so it never dead-ends.
 
 ## Features
 
-**Homepage (chase.com clone)**
+**Homepage (banking experience)**
 - Three-row header: utility bar (Personal/Business/Commercial, Español,
   search), logo row, primary nav with mega-dropdowns
 - Solid-blue hero with the $400 Total Checking offer + authentic sign-in card

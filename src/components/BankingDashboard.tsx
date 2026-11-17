@@ -219,7 +219,7 @@ export const BankingDashboard: React.FC<Props> = ({
   const [alertsOpen, setAlertsOpen] = useState(false);
   const [alertsRead, setAlertsRead] = useState(() => {
     try {
-      return localStorage.getItem(`chase_clone_alerts_read_${user.id}`) === '1';
+      return localStorage.getItem(`chase_app_alerts_read_${user.id}`) === '1';
     } catch {
       return false;
     }
@@ -592,7 +592,7 @@ export const BankingDashboard: React.FC<Props> = ({
   const markAlertsRead = () => {
     setAlertsRead(true);
     try {
-      localStorage.setItem(`chase_clone_alerts_read_${user.id}`, '1');
+      localStorage.setItem(`chase_app_alerts_read_${user.id}`, '1');
     } catch {
       /* Browser storage is unavailable. */
     }

@@ -1,5 +1,5 @@
 /* -------------------------------------------------------------------------- */
-/* Chase Clone — fullstack server                                              */
+/* Chase banking app server                                                   */
 /*                                                                           */
 /* Serves the built frontend (dist/) AND a REST API on the same origin:        */
 /*   npm run build          (build the frontend into dist/)                    */
@@ -3624,7 +3624,7 @@ const server = http.createServer(async (req, res) => {
 const HOST = process.env.HOST || '0.0.0.0';
 if (process.env.VERCEL !== '1') {
   server.listen(PORT, HOST, () => {
-    console.log(`Chase clone fullstack server running at http://${HOST}:${PORT}`);
+    console.log(`Chase banking app server running at http://${HOST}:${PORT}`);
     console.log(`API health: http://${HOST}:${PORT}/api/health`);
   });
 }

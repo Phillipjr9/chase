@@ -1,5 +1,5 @@
 /* -------------------------------------------------------------------------- */
-/* Chase Clone — JSON file database (users, sessions, admins & audit log)     */
+/* Chase banking app data store (users, sessions, admins & audit log)          */
 /* Swap this module for SQLite/Postgres in production; the API stays the same. */
 /* -------------------------------------------------------------------------- */
 import fs from 'node:fs';

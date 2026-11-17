@@ -1,5 +1,5 @@
 /* -------------------------------------------------------------------------- */
-/* Chase Clone — fullstack banking API client + local fallback                */
+/* Chase banking app API client + local fallback                              */
 /* -------------------------------------------------------------------------- */
 
 export interface Transaction {
@@ -581,9 +581,9 @@ export function defaultBudgets(): Record<string, number> {
 
 /* ------------------------------ API client -------------------------------- */
 
-const TOKEN_KEY = 'chase_clone_token_v1';
-const USERS_KEY = 'chase_clone_users_v2';
-const SESSION_KEY = 'chase_clone_session_v2';
+const TOKEN_KEY = 'chase_app_token_v1';
+const USERS_KEY = 'chase_app_users_v2';
+const SESSION_KEY = 'chase_app_session_v2';
 export const ADMIN_TOKEN_KEY = 'chase_sim_admin_token';
 
 function readCustomerToken(): string | null {

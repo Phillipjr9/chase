@@ -49,7 +49,7 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
 
   useEffect(() => {
     try {
-      const saved = localStorage.getItem('chase_clone_remembered_username');
+      const saved = localStorage.getItem('chase_app_remembered_username');
       if (saved) {
         setUsername(saved);
         setRememberMe(true);
@@ -77,8 +77,8 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
         return;
       }
       try {
-        if (rememberMe) localStorage.setItem('chase_clone_remembered_username', username.trim());
-        else localStorage.removeItem('chase_clone_remembered_username');
+        if (rememberMe) localStorage.setItem('chase_app_remembered_username', username.trim());
+        else localStorage.removeItem('chase_app_remembered_username');
       } catch {
         /* Browser storage is unavailable. */
       }
