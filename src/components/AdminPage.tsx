@@ -789,6 +789,7 @@ export const AdminPage: React.FC<{
     endDate: string;
     cadence: 'daily' | 'weekly' | 'monthly' | 'yearly';
     perPeriod: number;
+    accountId?: string | null;
   }) => {
     if (!selectedUser) return;
     setBusy(true);

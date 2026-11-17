@@ -207,6 +207,7 @@ export const BankingDashboard: React.FC<Props> = ({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showDetails, setShowDetails] = useState(false);
   const [showAllTx, setShowAllTx] = useState(false);
+  const [detailTx, setDetailTx] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [payStart, setPayStart] = useState<PayPage>('overview');
   const [settingsStart, setSettingsStart] = useState<SettingsSection>('overview');
@@ -1455,15 +1456,23 @@ export const BankingDashboard: React.FC<Props> = ({
                     ) : (
                       <ul className="px-4">
                         {visibleTxns.map((t, i) => (
-                          <li key={t.id} className={`flex items-center gap-3 py-3 ${i > 0 ? 'border-t' : ''}`} style={{ borderColor: '#EFF0F1' }}>
-                            <span className="w-[76px] shrink-0 text-[12px]" style={{ color: MUTED }}>{fmtDate(t.date)}</span>
-                            <span className="flex-1 min-w-0">
-                              <span className="block text-[13.5px] truncate" style={{ color: INK }}>{t.description}</span>
-                              <span className="block text-[11px]" style={{ color: '#8A929A' }}>{t.category}</span>
-                            </span>
-                            <span className={`text-[13.5px] font-medium shrink-0 ${t.amount < 0 ? '' : 'text-[#138842]'}`}>
-                              {t.amount < 0 ? `-${fmtMoney(Math.abs(t.amount))}` : fmtMoney(t.amount)}
-                            </span>
+                          <li key={t.id} className={`${i > 0 ? 'border-t' : ''}`} style={{ borderColor: '#EFF0F1' }}>
+                            <button
+                              type="button"
+                              onClick={() => setDetailTx(t.id)}
+                              className="w-full flex items-center gap-3 py-3 text-left hover:bg-[#F7FAFD] cursor-pointer"
+                              aria-label={`View transaction ${t.description}`}
+                            >
+                              <span className="w-[76px] shrink-0 text-[12px]" style={{ color: MUTED }}>{fmtDate(t.date)}</span>
+                              <span className="flex-1 min-w-0">
+                                <span className="block text-[13.5px] truncate" style={{ color: INK }}>{t.description}</span>
+                                <span className="block text-[11px]" style={{ color: '#8A929A' }}>{t.category}</span>
+                              </span>
+                              <span className={`text-[13.5px] font-medium shrink-0 ${t.amount < 0 ? '' : 'text-[#138842]'}`}>
+                                {t.amount < 0 ? `-${fmtMoney(Math.abs(t.amount))}` : fmtMoney(t.amount)}
+                              </span>
+                              <ChevronRight className="w-4 h-4 shrink-0" style={{ color: '#8A929A' }} />
+                            </button>
                           </li>
                         ))}
                       </ul>
@@ -1667,6 +1676,46 @@ export const BankingDashboard: React.FC<Props> = ({
         onUpdateUser={onUpdateUser}
         onEnroll={() => onOpenAccount()}
       />
+      {detailTx && selected && (() => {
+        const tx = selected.transactions.find((item) => item.id === detailTx);
+        if (!tx) return null;
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setDetailTx(null)}>
+            <div className="w-full max-w-[520px] bg-white rounded-[6px] shadow-xl" onClick={(e) => e.stopPropagation()}>
+              <div className="flex items-center justify-between gap-3 px-5 py-4 border-b" style={{ borderColor: LINE }}>
+                <div>
+                  <p className="text-[11px] font-bold uppercase tracking-wide" style={{ color: '#8A929A' }}>Transaction details</p>
+                  <h2 className="text-[18px] font-semibold" style={{ color: INK }}>{tx.description}</h2>
+                </div>
+                <button type="button" onClick={() => setDetailTx(null)} aria-label="Close transaction details" className="p-2 cursor-pointer" style={{ color: MUTED }}>
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <div className="px-5 py-4">
+                <dl className="space-y-2 text-[13px]">
+                  {[
+                    { k: 'Amount', v: tx.amount < 0 ? `-${fmtMoney(Math.abs(tx.amount))}` : fmtMoney(tx.amount) },
+                    { k: 'Date', v: new Date(tx.date).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }) },
+                    { k: 'Category', v: tx.category },
+                    { k: 'Status', v: tx.status === 'pending' ? 'Pending' : 'Posted' },
+                    { k: 'Account', v: `${selected.name} (…${selected.mask})` },
+                  ].map((row) => (
+                    <div key={row.k} className="flex justify-between gap-3 border-b pb-2 last:border-b-0" style={{ borderColor: '#EFF0F1' }}>
+                      <dt style={{ color: MUTED }}>{row.k}</dt>
+                      <dd className="text-right font-medium" style={{ color: INK }}>{row.v}</dd>
+                    </div>
+                  ))}
+                </dl>
+                <div className="mt-4 flex flex-wrap gap-2.5">
+                  <button type="button" onClick={() => setDetailTx(null)} className="text-[13px] font-semibold px-3 cursor-pointer" style={{ color: BTN_BLUE }}>
+                    Close
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
       {statementModal && (
         <StatementModal
           user={user}

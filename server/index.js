@@ -2327,6 +2327,7 @@ async function handleApi(req, res, url) {
         const cadenceDays = { daily: 1, weekly: 7 };
         const allowedCadences = new Set(['daily', 'weekly', 'monthly', 'yearly']);
         const perPeriod = Number(body.perPeriod);
+        const requestedAccountId = typeof body.accountId === 'string' ? body.accountId : null;
         if (!allowedCadences.has(cadence) || !Number.isInteger(perPeriod) || perPeriod < 1 || perPeriod > 5) {
           return sendJson(res, 400, { error: 'Choose a supported cadence and 1–5 transactions per period.' });
         }
@@ -2363,9 +2364,13 @@ async function handleApi(req, res, url) {
 
         const updated = JSON.parse(JSON.stringify(target));
         const accounts = updated.accounts || [];
-        const checking = accounts.find((a) => a.type === 'checking');
-        const savings = accounts.find((a) => a.type === 'savings');
-        const creditCards = accounts.filter((a) => a.type === 'credit-card');
+        const selectedAccounts = requestedAccountId ? accounts.filter((a) => a.id === requestedAccountId) : accounts;
+        if (requestedAccountId && selectedAccounts.length === 0) {
+          return sendJson(res, 400, { error: 'The selected account is not part of this customer profile.' });
+        }
+        const checking = selectedAccounts.find((a) => a.type === 'checking');
+        const savings = selectedAccounts.find((a) => a.type === 'savings');
+        const creditCards = selectedAccounts.filter((a) => a.type === 'credit-card');
         const purchases = [
           { merchant: 'Whole Foods Market', category: 'Groceries', min: 18, max: 185 },
           { merchant: 'Local Market', category: 'Groceries', min: 12, max: 92 },
