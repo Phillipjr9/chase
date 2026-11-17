@@ -997,6 +997,7 @@ export const AdminPage: React.FC<{
     toAccountId: string;
     amount: number;
     description: string;
+    transferType?: string;
   }): Promise<boolean> => {
     if (!selectedUser) return false;
     setBusy(true);
@@ -2704,7 +2705,7 @@ export const AdminPage: React.FC<{
                 const ok = await handleCreateLedgerEntry({
                   userId: selectedUser.id,
                   accountId: acct.id,
-                  description: quickMemo.trim() || 'Admin balance adjustment',
+                  description: quickMemo.trim() || 'Balance adjustment',
                   amount: signed,
                   category: quickDir === 'credit' ? 'Income' : 'Bills',
                   date: inputDate(0),

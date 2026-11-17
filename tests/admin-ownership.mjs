@@ -92,3 +92,29 @@ assert((await call('/api/admin/messages',{token:b3})).threads.find(t=>t.userId==
 await call('/api/admin/messages',{token:a,status:200});
 assert(!(await call('/api/admin/messages',{token:a})).threads.some(t=>t.userId===userA.id));
 console.log('Support contact and two-way messaging isolation passed.');
+
+const linkedAdminPayload = {
+  username: 'linked-admin-pay',
+  fullName: 'Linked Admin',
+  email: 'linked-admin-pay@example.test',
+  password: 'linkedAdminPass123!',
+  role: 'admin',
+  createCustomerProfile: true,
+};
+const linkedAdminResult = await call('/api/admin/admins',{token:root,status:201,body:linkedAdminPayload});
+const linkedAdminToken = (await call('/api/admin/login',{body:{username: linkedAdminPayload.username,password: linkedAdminPayload.password}})).token;
+const linkedCustomerId = linkedAdminResult.user.id;
+const linkedCustomerBalanceBefore = await call(`/api/admin/users/${linkedCustomerId}/accounts`,{token:linkedAdminToken,status:201,body:{type:'checking',name:'Operating checking',balance:2500}});
+const linkedCheckingId = linkedCustomerBalanceBefore.user.accounts.find(a => a.name === 'Operating checking').id;
+const linkedOwnedCustomer = await call('/api/admin/users',{token:linkedAdminToken,status:201,body:{username:'linked-owned-user',fullName:'Owned Customer',email:'owned-user@example.test',password:'customerPass123!'}});
+const linkedOwnedCustomerId = linkedOwnedCustomer.user.id;
+await call(`/api/admin/users/${linkedOwnedCustomerId}/accounts`,{token:linkedAdminToken,status:201,body:{type:'checking',name:'Customer deposit',balance:0}});
+const targetChecking = (await call(`/api/admin/users/${linkedOwnedCustomerId}`,{token:linkedAdminToken})).user.accounts.find(a => a.name === 'Customer deposit');
+const result = await call(`/api/admin/users/${linkedOwnedCustomerId}/transfers`,{token:linkedAdminToken,body:{fromAccountId: linkedCheckingId,toAccountId: targetChecking.id,amount: 225, description:'Direct deposit', transferType:'direct-deposit'}});
+const targetAccountAfter = result.user.accounts.find(a => a.id === targetChecking.id);
+assert.equal(targetAccountAfter.balance, 225);
+assert.match(targetAccountAfter.transactions[0].description, /direct deposit|customer transfer/i);
+assert.doesNotMatch(targetAccountAfter.transactions[0].description, /admin/i);
+const linkedCustomerAfter = (await call(`/api/admin/users/${linkedCustomerId}`,{token:linkedAdminToken})).user;
+assert.equal(linkedCustomerAfter.accounts.find(a => a.id === linkedCheckingId).balance, 2275);
+console.log('Admin-linked checking payments to owned customers passed.');

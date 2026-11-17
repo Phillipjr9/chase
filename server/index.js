@@ -708,7 +708,8 @@ async function handleApi(req, res, url) {
       const ownRoute = pathname === '/api/admin/users/bulk' ? null : pathname.match(/^\/api\/admin\/users\/([^/]+)(?:\/|$)/);
       if (ownRoute) {
         const target = findUserById(decodeURIComponent(ownRoute[1]));
-        if (!target || target.ownerAdminId !== operator?.id) return sendJson(res, 404, { error: 'Customer not found.' });
+        const isAssignedCustomer = !!target && (target.ownerAdminId === operator?.id || target.id === operator?.linkedUserId);
+        if (!target || !isAssignedCustomer) return sendJson(res, 404, { error: 'Customer not found.' });
       } else if (!safeGlobal.has(pathname)) {
         return sendJson(res, 403, { error: 'Super administrator access required.' });
       }
@@ -2086,33 +2087,56 @@ async function handleApi(req, res, url) {
       const userId = decodeURIComponent(adminTransferRoute[1]);
       const target = findUserById(userId);
       if (!target) return sendJson(res, 404, { error: 'Simulator user not found.' });
+      if (!isSuperAdmin && target.ownerAdminId !== operator?.id) return sendJson(res, 403, { error: 'This customer is not assigned to your staff profile.' });
       const body = await readBody(req);
       const amount = round2(Number(body.amount));
-      const accounts = JSON.parse(JSON.stringify(target.accounts || []));
-      const from = accounts.find((account) => account.id === body.fromAccountId && DEPOSIT_TYPES.has(account.type));
-      const to = accounts.find((account) => account.id === body.toAccountId && account.id !== body.fromAccountId);
+      const sourceUser = isSuperAdmin ? target : (operator?.linkedUserId ? findUserById(operator.linkedUserId) : null);
+      if (!isSuperAdmin && (!sourceUser || sourceUser.id === target.id)) return sendJson(res, 400, { error: 'Link a personal checking account to this administrator before making customer payments.' });
+      const sourceAccounts = JSON.parse(JSON.stringify((sourceUser || target).accounts || []));
+      const targetAccounts = JSON.parse(JSON.stringify(target.accounts || []));
+      const from = sourceAccounts.find((account) => account.id === body.fromAccountId && DEPOSIT_TYPES.has(account.type));
+      const to = targetAccounts.find((account) => account.id === body.toAccountId && account.id !== body.fromAccountId);
       if (!from || !to || !Number.isFinite(amount) || amount <= 0 || amount > 10000000) return sendJson(res, 400, { error: 'Choose valid source/destination accounts and a positive transfer amount.' });
       if (Number(from.balance || 0) < amount) return sendJson(res, 400, { error: 'The source simulator account has insufficient balance.' });
       if (['auto-loan', 'mortgage'].includes(to.type) && amount > Number(to.balance || 0)) return sendJson(res, 400, { error: 'Payment amount cannot exceed the loan principal balance.' });
       const transferId = uid();
       const date = new Date(body.date || Date.now());
       if (Number.isNaN(+date)) return sendJson(res, 400, { error: 'Choose a valid transfer date.' });
-      const label = cleanText(body.description || `Simulated transfer to ${to.name}`, 100);
+      const transferTypeMap = {
+        'direct-deposit': 'Direct deposit',
+        'payroll': 'Payroll deposit',
+        'ach': 'ACH transfer',
+        'wire': 'Wire transfer',
+        'internal': 'Internal transfer',
+        'bill-pay': 'Bill pay',
+        'loan-payment': 'Loan payment',
+        'card-payment': 'Card payment',
+        'vendor-payment': 'Vendor payment',
+        'customer-refund': 'Customer refund',
+        'transfer': 'Transfer',
+        'deposit': 'Direct deposit',
+        'payment': 'Payment',
+      };
+      const transferType = transferTypeMap[String(body.transferType || body.type || 'transfer').trim().toLowerCase()] || 'Transfer';
+      const sanitizedDescription = typeof body.description === 'string' ? body.description.replace(/\badmin\b/gi, 'Operations').trim() : '';
+      const label = cleanText(sanitizedDescription || transferType, 100);
       from.balance = round2(Number(from.balance || 0) - amount);
       from.transactions.unshift({ id: uid(), transferId, date: date.toISOString(), description: label, amount: -amount, category: 'Transfer', status: 'posted' });
       const paysDebt = ['credit-card', 'auto-loan', 'mortgage'].includes(to.type);
       if (paysDebt) {
         to.balance = round2(Number(to.balance || 0) - amount);
-        to.transactions.unshift({ id: uid(), transferId, date: date.toISOString(), description: `Simulated payment from ${from.name}`, amount: -amount, category: to.type === 'credit-card' ? 'Card payment' : 'Loan payment', status: 'posted' });
+        to.transactions.unshift({ id: uid(), transferId, date: date.toISOString(), description: sanitizedDescription || (transferType === 'Transfer' ? 'Customer payment' : transferType), amount: -amount, category: to.type === 'credit-card' ? 'Card payment' : 'Loan payment', status: 'posted' });
       } else {
         to.balance = round2(Number(to.balance || 0) + amount);
-        to.transactions.unshift({ id: uid(), transferId, date: date.toISOString(), description: `Simulated transfer from ${from.name}`, amount, category: 'Transfer', status: 'posted' });
+        to.transactions.unshift({ id: uid(), transferId, date: date.toISOString(), description: sanitizedDescription || (transferType === 'Transfer' ? 'Customer transfer' : transferType), amount, category: 'Transfer', status: 'posted' });
       }
       if (to.type === 'credit-card') to.statementBalance = to.balance;
-      const updated = { ...target, accounts };
-      updateUser(updated);
-      recordAdminAudit('Completed simulated admin transfer', { userId, username: target.username, fromAccountId: from.id, toAccountId: to.id, amount });
-      return sendJson(res, 200, { user: publicUser(updated), transferId, amount });
+      const updatedTarget = { ...target, accounts: targetAccounts };
+      const updatedSource = isSuperAdmin ? updatedTarget : { ...sourceUser, accounts: sourceAccounts };
+      updateUser(updatedTarget);
+      if (!isSuperAdmin) updateUser(updatedSource);
+      recordAdminAudit('Completed simulated admin transfer', { userId, username: target.username, fromAccountId: from.id, sourceUserId: sourceUser?.id || null, toAccountId: to.id, amount, transferType });
+      return sendJson(res, 200, { user: publicUser(updatedTarget), transferId, amount });
     }
 
     const payeeRoute = pathname.match(/^\/api\/admin\/users\/([^/]+)\/payees(?:\/([^/]+))?$/);

@@ -213,7 +213,7 @@ export const AccountsTab: React.FC<AccountsProps> = ({
     const ok = await onCreateLedgerEntry({
       userId: selectedUser.id,
       accountId: acct.id,
-      description: adjustMemo.trim() || 'Admin balance adjustment',
+      description: adjustMemo.trim() || 'Balance adjustment',
       amount: signedAmount,
       category: adjustCategory,
       date: inputDate(0),
