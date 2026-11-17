@@ -37,7 +37,8 @@ import { Spinner } from './Loading';
 import { AccountPatchPayload, AccountsTab, LedgerTab } from './admin/AccountsLedgerTab';
 import { CustomerSupportTools } from './admin/CustomerSupportTools';
 import { AdminMessageThread, MessagesSupportTab } from './admin/MessagesSupportTab';
-import { AuditTab, OperationsTab, SettingsTab } from './admin/OperationsSettingsTab';
+import { AuditTrailTab } from './admin/AuditTrailTab';
+import { OperationsTab, SettingsTab } from './admin/OperationsSettingsTab';
 import { OverviewTab } from './admin/OverviewTab';
 import { UsersTab } from './admin/UsersTab';
 import { WealthCreditTab } from './admin/WealthCreditTab';
@@ -50,6 +51,8 @@ import {
   AdminTab,
   AdminUserRow,
   AuditEntry,
+  AuditIntegrity,
+  AuditStats,
   CashflowRange,
   DEFAULT_ADMIN_CAPABILITIES,
   DEFAULT_ADMIN_PERMISSIONS,
@@ -143,6 +146,8 @@ export const AdminPage: React.FC<{
   const [analytics, setAnalytics] = useState<OverviewAnalytics | null>(null);
   const [users, setUsers] = useState<AdminUserRow[]>([]);
   const [audit, setAudit] = useState<AuditEntry[]>([]);
+  const [auditIntegrity, setAuditIntegrity] = useState<AuditIntegrity | null>(null);
+  const [auditStats, setAuditStats] = useState<AuditStats | null>(null);
   const [globalTransactions, setGlobalTransactions] = useState<GlobalTransaction[]>([]);
   const [messageThreads, setMessageThreads] = useState<AdminMessageThread[]>([]);
   const [simulatorSettings, setSimulatorSettings] = useState<SimulatorSettings>({
@@ -213,7 +218,7 @@ export const AdminPage: React.FC<{
           activeToken
         ),
         api<{ users: AdminUserRow[] }>('/api/admin/users', {}, activeToken),
-        api<{ audit: AuditEntry[] }>('/api/admin/audit?limit=5000', {}, activeToken),
+        api<{ audit: AuditEntry[]; integrity?: AuditIntegrity; stats?: AuditStats }>('/api/admin/audit?limit=5000', {}, activeToken),
         api<{ transactions: GlobalTransaction[] }>(
           '/api/admin/transactions?limit=5000',
           {},
@@ -230,6 +235,8 @@ export const AdminPage: React.FC<{
       if (overviewRes.analytics) setAnalytics(overviewRes.analytics);
       setUsers(userRes.users);
       setAudit(auditRes.audit);
+      setAuditIntegrity(auditRes.integrity ?? null);
+      setAuditStats(auditRes.stats ?? null);
       setGlobalTransactions(txRes.transactions);
       setMessageThreads(msgRes.threads || []);
       if (adminsRes.admins.length > 0) setAdminAccounts(adminsRes.admins);
@@ -295,7 +302,7 @@ export const AdminPage: React.FC<{
             resolvedTok
           ),
           adminFetch<{ users: AdminUserRow[] }>('/api/admin/users', {}, resolvedTok),
-          adminFetch<{ audit: AuditEntry[] }>('/api/admin/audit?limit=5000', {}, resolvedTok),
+          adminFetch<{ audit: AuditEntry[]; integrity?: AuditIntegrity; stats?: AuditStats }>('/api/admin/audit?limit=5000', {}, resolvedTok),
           adminFetch<{ transactions: GlobalTransaction[] }>(
             '/api/admin/transactions?limit=5000',
             {},
@@ -313,6 +320,8 @@ export const AdminPage: React.FC<{
         if (overviewRes.analytics) setAnalytics(overviewRes.analytics);
         setUsers(userRes.users);
         setAudit(auditRes.audit);
+        setAuditIntegrity(auditRes.integrity ?? null);
+        setAuditStats(auditRes.stats ?? null);
         setGlobalTransactions(txRes.transactions);
         setMessageThreads(msgRes.threads || []);
 
@@ -1708,13 +1717,37 @@ export const AdminPage: React.FC<{
       esLabel: 'Mensajes y avisos',
       badge: unreadMessagesCount > 0 ? unreadMessagesCount : undefined,
     },
-    { id: 'audit', label: 'Audit log', esLabel: 'Auditoría' },
+    {
+      id: 'audit',
+      label: 'Audit log',
+      esLabel: 'Auditoría',
+      badge:
+        isSuperAdmin && auditStats && auditStats.failedCount + auditStats.blockedCount > 0
+          ? auditStats.failedCount + auditStats.blockedCount
+          : undefined,
+    },
     ...(isSuperAdmin ? [{ id: 'settings' as const, label: 'Settings & backup', esLabel: 'Configuración y respaldo' }] : []),
   ];
 
   // Live Alerts (identical pattern to BankingDashboard.tsx)
   const adminAlerts = useMemo(() => {
     const list: { id: string; title: string; detail: string; action: () => void }[] = [];
+    if (isSuperAdmin) {
+      const recentSecurityIssues = audit
+        .filter((e) => (e.outcome === 'failed' || e.outcome === 'blocked') && Date.now() - Date.parse(e.createdAt || '') <= 24 * 60 * 60 * 1000)
+        .slice(0, 4);
+      for (const issue of recentSecurityIssues) {
+        list.push({
+          id: `audit-alert-${issue.id}`,
+          title: `${issue.outcome === 'blocked' ? 'Blocked' : 'Failed'}: ${issue.action}`,
+          detail: issue.reason || issue.summary || `Actor: ${issue.actor}`,
+          action: () => {
+            setTab('audit');
+            setAlertsOpen(false);
+          },
+        });
+      }
+    }
     for (const thread of messageThreads.filter(t => t.unreadForAdmin > 0).slice(0, 5)) {
       list.push({ id: `message-${thread.userId}`, title: `${thread.unreadForAdmin} unread message(s) · ${thread.fullName}`, detail: 'Open the customer support conversation.', action: () => { void selectUserAndMaybeGo(thread.userId, 'messages'); } });
     }
@@ -2587,7 +2620,18 @@ export const AdminPage: React.FC<{
           </>
         )}
 
-        {tab === 'audit' && <AuditTab audit={audit} isSuperAdmin={isSuperAdmin} />}
+        {tab === 'audit' && (
+          <AuditTrailTab
+            audit={audit}
+            isSuperAdmin={isSuperAdmin}
+            integrity={auditIntegrity}
+            stats={auditStats}
+            onRefresh={async () => {
+              await loadData(token, range);
+            }}
+            busy={busy}
+          />
+        )}
 
         {tab === 'settings' && isSuperAdmin && (
           <SettingsTab

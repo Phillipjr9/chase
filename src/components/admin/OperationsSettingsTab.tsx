@@ -23,7 +23,6 @@ import {
   Plus,
   RefreshCw,
   RotateCcw,
-  Search,
   Send,
   Server,
   ShieldAlert,
@@ -43,15 +42,12 @@ import {
   CardHeader,
   Checkbox,
   EmptyState,
-  ExportBtn,
   Modal,
-  Pagination,
   SelectInput,
   TableShell,
   Td,
   TextInput,
   Th,
-  downloadCsv,
   fmtBytes,
   fmtDateShort,
   fmtDateTime,
@@ -62,7 +58,6 @@ import {
   AdminAccountRow,
   AdminCapabilities,
   AdminUserRow,
-  AuditEntry,
   DEFAULT_ADMIN_CAPABILITIES,
   GlobalDispute,
   OverviewAnalytics,
@@ -1320,120 +1315,7 @@ export const OperationsTab: React.FC<OperationsProps> = ({
 };
 
 /* ============================== 2. AUDIT LOG TAB =========================== */
-
-export const AuditTab: React.FC<{ audit: AuditEntry[]; isSuperAdmin?: boolean }> = ({
-  audit,
-  isSuperAdmin = true,
-}) => {
-  const [query, setQuery] = useState('');
-  const [page, setPage] = useState(1);
-  const pageSize = 30;
-
-  const filtered = useMemo(
-    () =>
-      audit.filter((entry) =>
-        `${entry.actor} ${entry.action} ${JSON.stringify(entry.details || {})}`
-          .toLowerCase()
-          .includes(query.trim().toLowerCase())
-      ),
-    [audit, query]
-  );
-
-  const pages = Math.max(1, Math.ceil(filtered.length / pageSize));
-  const paged = filtered.slice((page - 1) * pageSize, page * pageSize);
-
-  return (
-    <Card className="overflow-hidden">
-      <div className="p-4 border-b border-gray-200 dark:border-gray-800 flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h3 className="text-[15.5px] font-semibold text-gray-900 dark:text-white">
-            {isSuperAdmin
-              ? `Immutable Administrator Audit Trail (${filtered.length.toLocaleString()})`
-              : `Your Activity Audit Trail (${filtered.length.toLocaleString()})`}
-          </h3>
-          <p className="text-[12px] text-gray-500 dark:text-gray-400">
-            {isSuperAdmin
-              ? 'Retains up to 5,000 administrative mutations, logins, failed attempts, backups, and impersonation sessions'
-              : 'Shows administrative actions and sign-ins recorded under your operator identity'}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="relative w-[260px]">
-            <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
-            <TextInput
-              placeholder="Filter actor, action, details…"
-              value={query}
-              onChange={(e) => {
-                setQuery(e.target.value);
-                setPage(1);
-              }}
-              className="pl-9"
-            />
-          </div>
-          <ExportBtn
-            label="Export Audit CSV"
-            onClick={() =>
-              downloadCsv(
-                'chase-admin-audit.csv',
-                ['Timestamp', 'Actor', 'Action', 'Details'],
-                filtered.map((e) => [
-                  e.createdAt,
-                  e.actor,
-                  e.action,
-                  JSON.stringify(e.details || {}),
-                ])
-              )
-            }
-          />
-        </div>
-      </div>
-
-      {paged.length === 0 ? (
-        <EmptyState title="No audit events match this filter" />
-      ) : (
-        <TableShell>
-          <thead>
-            <tr className="border-b border-gray-200 dark:border-gray-800 bg-gray-50/70 dark:bg-white/[0.02]">
-              <Th>Timestamp</Th>
-              <Th>Operator</Th>
-              <Th>Action</Th>
-              <Th>Context / Metadata</Th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-100 dark:divide-gray-800/70">
-            {paged.map((entry) => (
-              <tr key={entry.id} className="hover:bg-gray-50/70 dark:hover:bg-white/[0.03]">
-                <Td className="whitespace-nowrap text-[12px] text-gray-500">
-                  {fmtDateTime(entry.createdAt)}
-                </Td>
-                <Td>
-                  <Badge tone="primary">{entry.actor}</Badge>
-                </Td>
-                <Td className="font-semibold text-gray-900 dark:text-white">{entry.action}</Td>
-                <Td className="font-mono text-[11.5px] text-gray-500 dark:text-gray-400 max-w-[420px] truncate">
-                  {Object.keys(entry.details || {}).length > 0
-                    ? Object.entries(entry.details)
-                        .map(([k, v]) => `${k}=${typeof v === 'object' ? JSON.stringify(v) : String(v)}`)
-                        .join(' · ')
-                    : '—'}
-                </Td>
-              </tr>
-            ))}
-          </tbody>
-        </TableShell>
-      )}
-
-      <Pagination
-        page={page}
-        pages={pages}
-        total={filtered.length}
-        pageSize={pageSize}
-        onPage={setPage}
-        noun="audit events"
-      />
-    </Card>
-  );
-};
+export { AuditTrailTab as AuditTab } from './AuditTrailTab';
 
 /* ====================== 3. SETTINGS, STAFF & BACKUP TAB ==================== */
 

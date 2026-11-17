@@ -77,12 +77,66 @@ export interface AdminMetrics {
   transactions: number;
 }
 
+export type AuditCategory =
+  | 'auth'
+  | 'security'
+  | 'money'
+  | 'accounts'
+  | 'customers'
+  | 'staff'
+  | 'support'
+  | 'system';
+
+export type AuditOutcome = 'success' | 'failed' | 'blocked' | 'warning';
+export type AuditSeverity = 'info' | 'low' | 'medium' | 'high' | 'critical';
+export type AuditActorType = 'super_admin' | 'admin' | 'auditor' | 'customer' | 'anonymous' | 'system';
+
 export interface AuditEntry {
   id: string;
+  seq?: number | null;
   actor: string;
+  actorType?: AuditActorType;
   action: string;
+  summary?: string;
+  reason?: string | null;
+  category?: AuditCategory;
+  outcome?: AuditOutcome;
+  severity?: AuditSeverity;
+  target?: { type?: string; id?: string; label?: string } | null;
+  ip?: string | null;
+  userAgent?: string | null;
+  path?: string | null;
+  method?: string | null;
   details: Record<string, unknown>;
   createdAt: string;
+  prevHash?: string | null;
+  entryHash?: string | null;
+  chained?: boolean;
+  tampered?: boolean;
+}
+
+export interface AuditIntegrity {
+  valid: boolean;
+  status: 'verified' | 'tampered' | 'legacy_only';
+  totalEntries: number;
+  chainedCount: number;
+  legacyCount: number;
+  tamperedIds: string[];
+  lastSeq: number;
+  lastHash: string | null;
+  chainStartedAt: string | null;
+}
+
+export interface AuditStats {
+  total: number;
+  last24h: number;
+  failedCount: number;
+  blockedCount: number;
+  authEvents: number;
+  moneyEvents: number;
+  securityAlerts: number;
+  customerEvents: number;
+  adminEvents: number;
 }
 
 export interface AdminAccountRow {
@@ -192,6 +246,7 @@ export async function adminFetch<T>(
 ): Promise<T> {
   const response = await fetch(path, {
     ...init,
+    cache: 'no-store',
     credentials: init.credentials || 'same-origin',
     headers: {
       'Content-Type': 'application/json',
