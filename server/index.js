@@ -1,5 +1,5 @@
 /* -------------------------------------------------------------------------- */
-/* Chase Clone — fullstack server                                              */
+/* Chase banking app server                                                   */
 /*                                                                           */
 /* Serves the built frontend (dist/) AND a REST API on the same origin:        */
 /*   npm run build          (build the frontend into dist/)                    */
@@ -65,6 +65,7 @@ import {
   restoreBackupAtomic,
   appendAudit,
   getAuditLog,
+  verifyAuditIntegrity,
   getSimulatorSettings,
   updateSimulatorSettings,
   bumpSuperAdminSessionVersion,
@@ -87,6 +88,15 @@ import {
   flushRemoteSave,
   isSupabaseEnabled,
 } from './db.js';
+import {
+  describeUserAgent,
+  inferCategory,
+  inferOutcome,
+  inferSeverity,
+  buildAuditContext,
+  enrichAuditEntry,
+  computeAuditStats,
+} from './audit.js';
 
 const __dirname = import.meta.url ? path.dirname(fileURLToPath(import.meta.url)) : '/tmp';
 const ROOT = path.join(__dirname, '..');
@@ -117,6 +127,9 @@ function syncRuntimeEnv(env) {
     'VITE_SUPABASE_URL',
     'SUPABASE_SERVICE_ROLE_KEY',
     'SUPABASE_SECRET_KEY',
+    'SUPABASE_ANON_KEY',
+    'SUPABASE_PUBLISHABLE_KEY',
+    'VITE_SUPABASE_ANON_KEY',
     'CHASE_SUPABASE_ROW_ID',
   ]) {
     if (typeof env[key] === 'string' && env[key].length > 0) {
@@ -245,9 +258,65 @@ function sessionCookieHeader(req, token = '', role = 'user') {
   return { 'Set-Cookie': cookie };
 }
 
+function normalizeOpenedDate(value) {
+  if (value === undefined || value === null || value === '') return undefined;
+  const raw = String(value).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    const parsed = new Date(`${raw}T12:00:00.000Z`);
+    return !Number.isNaN(+parsed) && parsed.toISOString().slice(0, 10) === raw ? raw : null;
+  }
+  const parsed = new Date(raw);
+  return Number.isNaN(+parsed) ? null : parsed.toISOString().slice(0, 10);
+}
+
+function effectiveAccountOpenIso(account) {
+  if (account?.openedDate) {
+    const normalized = normalizeOpenedDate(account.openedDate);
+    if (normalized) return `${normalized}T00:00:00.000Z`;
+  }
+  return account?.createdAt || null;
+}
+
+function sortTransactionsDesc(list) {
+  if (!Array.isArray(list)) return [];
+  return [...list].sort((a, b) => {
+    const ta = new Date(a?.date || 0).getTime();
+    const tb = new Date(b?.date || 0).getTime();
+    if (Number.isFinite(tb) && Number.isFinite(ta) && tb !== ta) return tb - ta;
+    return String(b?.date || '').localeCompare(String(a?.date || ''));
+  });
+}
+
+function sanitizeCustomerDescription(text, fallback) {
+  const cleaned = cleanText(String(text || '').replace(/\badmin\b/gi, 'Operations').replace(/\s+/g, ' '), 120);
+  return cleaned || fallback;
+}
+
+const TRANSFER_TYPE_CONFIG = {
+  internal: { label: 'Internal Transfer', fromCategory: 'Transfer', toCategory: 'Transfer' },
+  wire: { label: 'Wire Transfer', fromCategory: 'Wire Transfer', toCategory: 'Wire Transfer' },
+  ach: { label: 'ACH Transfer', fromCategory: 'ACH Transfer', toCategory: 'ACH Transfer' },
+  zelle: { label: 'Zelle®', fromCategory: 'Zelle', toCategory: 'Zelle' },
+  'direct-deposit': { label: 'Direct Deposit', fromCategory: 'Transfer', toCategory: 'Income' },
+  payroll: { label: 'Payroll Deposit', fromCategory: 'Transfer', toCategory: 'Income' },
+  'bill-pay': { label: 'Bill Pay', fromCategory: 'Bills', toCategory: 'Bills' },
+  'vendor-payment': { label: 'Vendor Payment', fromCategory: 'Business', toCategory: 'Business' },
+  'customer-refund': { label: 'Customer Refund', fromCategory: 'Refund', toCategory: 'Refund' },
+  check: { label: 'Check Deposit', fromCategory: 'Check', toCategory: 'Check Deposit' },
+  'card-payment': { label: 'Card Payment', fromCategory: 'Credit card payment', toCategory: 'Card payment' },
+  'loan-payment': { label: 'Loan Payment', fromCategory: 'Loan payment', toCategory: 'Loan payment' },
+  adjustment: { label: 'Balance Adjustment', fromCategory: 'Adjustment', toCategory: 'Adjustment' },
+};
+
 function publicUser(user) {
   if (!user) return null;
   const { passwordHash, staffNotes, supportStatus, ...rest } = user;
+  if (Array.isArray(rest.accounts)) {
+    rest.accounts = rest.accounts.map((account) => ({
+      ...account,
+      transactions: sortTransactionsDesc(account.transactions),
+    }));
+  }
   return rest;
 }
 
@@ -341,8 +410,58 @@ function getAdminSession(req, url) {
   return null;
 }
 
-function auditAdmin(action, details = {}, actor = 'Chase administrator') {
-  appendAudit({ id: uid(), actor, action, details, createdAt: new Date().toISOString() });
+let currentRequestMeta = null;
+
+function formatUsdSimple(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return String(value ?? '');
+  const sign = num < 0 ? '-' : '';
+  return `${sign}$${Math.abs(num).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function recordAuditEvent({
+  actor = 'Chase administrator',
+  actorType = null,
+  action,
+  summary = null,
+  reason = null,
+  category = null,
+  outcome = null,
+  severity = null,
+  target = null,
+  details = {},
+} = {}) {
+  const meta = currentRequestMeta || {};
+  const resolvedCategory = category || inferCategory(action, details);
+  const resolvedOutcome = outcome || inferOutcome(action, details);
+  const resolvedSeverity = severity || inferSeverity(action, resolvedOutcome, resolvedCategory);
+  return appendAudit({
+    id: uid(),
+    actor: actor || 'unknown',
+    actorType,
+    action,
+    summary,
+    reason,
+    category: resolvedCategory,
+    outcome: resolvedOutcome,
+    severity: resolvedSeverity,
+    target,
+    ip: meta.ip || null,
+    userAgent: meta.userAgent || null,
+    path: meta.path || null,
+    method: meta.method || null,
+    details,
+    createdAt: new Date().toISOString(),
+  });
+}
+
+function auditAdmin(action, details = {}, actor = 'Chase administrator', extra = {}) {
+  return recordAuditEvent({
+    actor,
+    action,
+    details,
+    ...extra,
+  });
 }
 
 function newToken() {
@@ -411,6 +530,8 @@ const DEPOSIT_TYPES = new Set(['checking', 'savings', 'cd']);
 const loginAttempts = new Map();
 
 function clientKey(req) {
+  const cfIp = String(req.headers['cf-connecting-ip'] || '').trim();
+  if (cfIp) return cfIp;
   const forwarded = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
   return forwarded || String(req.socket?.remoteAddress || 'unknown');
 }
@@ -448,9 +569,10 @@ function recordFailure(req, bucket, windowMs) {
   const current = loginAttempts.get(key);
   if (!current || current.resetAt <= now) {
     loginAttempts.set(key, { count: 1, resetAt: now + windowMs });
-  } else {
-    current.count += 1;
+    return 1;
   }
+  current.count += 1;
+  return current.count;
 }
 
 function clearFailures(req, bucket) {
@@ -473,6 +595,12 @@ function cleanText(value, max = 120) {
 }
 
 async function handleApi(req, res, url) {
+  currentRequestMeta = {
+    ip: clientKey(req),
+    userAgent: describeUserAgent(req.headers['user-agent']),
+    path: url.pathname,
+    method: req.method,
+  };
   await ensureDbReady();
   const method = req.method;
   const pathname = url.pathname;
@@ -535,27 +663,94 @@ async function handleApi(req, res, url) {
   if (pathname === '/api/admin/login' && method === 'POST') {
     const body = await readBody(req);
     const username = String(body.username || '').trim();
+    const password = String(body.password || '');
     const failBucket = `admin-login:${username.toLowerCase() || '*'}`;
     if (tooManyFailures(req, failBucket, 10)) {
+      auditAdmin(
+        'Blocked admin sign-in (rate limit)',
+        { username: username || '(empty)', path: '/api/admin/login', lockoutMinutes: 15, maxAttempts: 10 },
+        username || 'unknown',
+        {
+          actorType: 'anonymous',
+          category: 'security',
+          outcome: 'blocked',
+          severity: 'high',
+          reason: 'Too many failed sign-in attempts (10 or more within 15 minutes from this IP address). Temporarily locked for 15 minutes.',
+          summary: `Blocked admin sign-in attempt for "${username || '(empty)'}" because the 15-minute failed attempt limit was reached.`,
+        }
+      );
       return sendJson(res, 429, { error: 'Too many unsuccessful admin sign-in attempts. Try again later.' });
     }
     const storedAdmin = findAdminByUsername(username);
+    const rootNameMatch = username.toLowerCase() === CHASE_ADMIN_USERNAME.toLowerCase();
     const rootHash = getRootAdminPasswordHash();
-    const isRootAdmin = !!rootHash && username.toLowerCase() === CHASE_ADMIN_USERNAME.toLowerCase() && verifyPassword(String(body.password || ''), rootHash);
-    const validStoredPassword = storedAdmin && verifyPassword(String(body.password || ''), storedAdmin.passwordHash);
+    const isRootAdmin = !!rootHash && rootNameMatch && verifyPassword(password, rootHash);
+    const validStoredPassword = storedAdmin && verifyPassword(password, storedAdmin.passwordHash);
     const linkedCustomer = storedAdmin?.linkedUserId ? findUserById(storedAdmin.linkedUserId) : null;
     if (validStoredPassword && storedAdmin.status === 'disabled') {
-      auditAdmin('Blocked admin sign-in (disabled)', { username: storedAdmin.username }, storedAdmin.username);
+      auditAdmin(
+        'Blocked admin sign-in (disabled)',
+        { username: storedAdmin.username, adminId: storedAdmin.id, role: storedAdmin.role },
+        storedAdmin.username,
+        {
+          actorType: storedAdmin.role === 'auditor' ? 'auditor' : 'admin',
+          category: 'security',
+          outcome: 'blocked',
+          severity: 'high',
+          reason: storedAdmin.lockMessage || 'This administrator account is currently disabled by the Super Administrator.',
+          summary: `Blocked sign-in for @${storedAdmin.username} because this administrator account is disabled.`,
+          target: { type: 'admin', id: storedAdmin.id, label: `${storedAdmin.fullName} (@${storedAdmin.username})` },
+        }
+      );
       return sendJson(res, 403, { error: storedAdmin.lockMessage || 'This administrator account is disabled. Contact the super administrator.' });
     }
     if (validStoredPassword && storedAdmin.linkedUserId && (!linkedCustomer || linkedCustomer.status !== 'active')) {
-      auditAdmin('Blocked admin sign-in (linked customer suspended)', { username: storedAdmin.username }, storedAdmin.username);
+      auditAdmin(
+        'Blocked admin sign-in (linked customer suspended)',
+        { username: storedAdmin.username, adminId: storedAdmin.id, userId: storedAdmin.linkedUserId },
+        storedAdmin.username,
+        {
+          actorType: storedAdmin.role === 'auditor' ? 'auditor' : 'admin',
+          category: 'security',
+          outcome: 'blocked',
+          severity: 'high',
+          reason: 'The linked customer banking account is suspended, so linked administrator sign-in is blocked.',
+          summary: `Blocked admin sign-in for @${storedAdmin.username} because their linked customer account is suspended.`,
+          target: { type: 'admin', id: storedAdmin.id, label: `${storedAdmin.fullName} (@${storedAdmin.username})` },
+        }
+      );
       return sendJson(res, 403, { error: 'The linked customer account is suspended. Contact the super administrator.' });
     }
     const isStoredAdmin = validStoredPassword && storedAdmin.status === 'active' && (!storedAdmin.linkedUserId || (linkedCustomer && linkedCustomer.status === 'active' && linkedCustomer.passwordHash === storedAdmin.passwordHash));
     if (!isRootAdmin && !isStoredAdmin) {
-      recordFailure(req, failBucket, 15 * 60 * 1000);
-      auditAdmin('Failed admin sign-in attempt', { username: username || '(empty)', path: '/api/admin/login' }, username || 'unknown');
+      const attemptCount = recordFailure(req, failBucket, 15 * 60 * 1000);
+      let failReason = 'Unknown username — no administrator account exists with this username.';
+      let actorType = 'anonymous';
+      if (!username || !password) {
+        failReason = !username ? 'Username field was left blank.' : 'Password field was left blank.';
+      } else if (rootNameMatch) {
+        failReason = 'Incorrect password entered for the Super Administrator account.';
+        actorType = 'super_admin';
+      } else if (storedAdmin && validStoredPassword && storedAdmin.linkedUserId && linkedCustomer && linkedCustomer.passwordHash !== storedAdmin.passwordHash) {
+        failReason = 'Linked customer and administrator passwords are out of sync.';
+        actorType = storedAdmin.role === 'auditor' ? 'auditor' : 'admin';
+      } else if (storedAdmin) {
+        failReason = `Incorrect password entered for ${storedAdmin.role === 'auditor' ? 'read-only auditor' : 'administrator'} account @${storedAdmin.username}.`;
+        actorType = storedAdmin.role === 'auditor' ? 'auditor' : 'admin';
+      }
+      auditAdmin(
+        'Failed admin sign-in attempt',
+        { username: username || '(empty)', path: '/api/admin/login', attemptCount, attemptsRemaining: Math.max(0, 10 - attemptCount) },
+        username || 'unknown',
+        {
+          actorType,
+          category: 'auth',
+          outcome: 'failed',
+          severity: attemptCount >= 5 ? 'high' : 'medium',
+          reason: `${failReason} (Attempt ${attemptCount} of 10 before lockout.)`,
+          summary: `Admin sign-in failed for "${username || '(empty)'}" on the Admin Console login page.`,
+        }
+      );
       return sendJson(res, 401, { error: 'Admin username or password is incorrect.' });
     }
     clearFailures(req, failBucket);
@@ -563,7 +758,18 @@ async function handleApi(req, res, url) {
     const adminUsername = isRootAdmin ? CHASE_ADMIN_USERNAME : storedAdmin.username;
     const token = createAdminToken(adminUsername, role);
     createSession(token, isRootAdmin ? '__chase_admin__' : `admin:${storedAdmin.username}`, role);
-    auditAdmin('Admin sign-in', { username: adminUsername, role, isSuperAdmin: isRootAdmin }, adminUsername);
+    auditAdmin(
+      'Admin sign-in',
+      { username: adminUsername, role, isSuperAdmin: isRootAdmin },
+      adminUsername,
+      {
+        actorType: isRootAdmin ? 'super_admin' : role === 'auditor' ? 'auditor' : 'admin',
+        category: 'auth',
+        outcome: 'success',
+        severity: 'low',
+        summary: `${isRootAdmin ? 'Super Administrator' : role === 'auditor' ? 'Read-Only Auditor' : 'Administrator'} ${adminUsername} signed in to the Admin Console.`,
+      }
+    );
     return sendJson(res, 200, {
       token,
       admin: {
@@ -579,39 +785,85 @@ async function handleApi(req, res, url) {
   }
 
   if (pathname === '/api/auth/register' && method === 'POST') {
-    if (!getSimulatorSettings().allowEnrollment) return sendJson(res, 403, { error: 'Online enrollment is temporarily disabled in this simulator.' });
-    if (limited(req, res, 'register', 20, 60 * 60 * 1000, 'Too many enrollment attempts. Please wait and try again.')) return;
+    if (!getSimulatorSettings().allowEnrollment) {
+      recordAuditEvent({
+        actor: 'anonymous',
+        actorType: 'anonymous',
+        action: 'Blocked customer enrollment',
+        category: 'security',
+        outcome: 'blocked',
+        severity: 'medium',
+        reason: 'Online customer enrollment is currently turned off in Super Admin settings.',
+        summary: 'A visitor tried to enroll a new account, but online enrollment is disabled.',
+      });
+      return sendJson(res, 403, { error: 'Online enrollment is temporarily disabled in this simulator.' });
+    }
+    if (limited(req, res, 'register', 20, 60 * 60 * 1000, 'Too many enrollment attempts. Please wait and try again.')) {
+      recordAuditEvent({
+        actor: 'anonymous',
+        actorType: 'anonymous',
+        action: 'Blocked customer enrollment (rate limit)',
+        category: 'security',
+        outcome: 'blocked',
+        severity: 'high',
+        reason: 'More than 20 enrollment requests within 1 hour from this IP address.',
+        summary: 'Blocked a customer enrollment request due to rate limiting.',
+      });
+      return;
+    }
     const body = await readBody(req);
+    const attemptedUsername = String(body.username || '').trim();
+    const logEnrollFail = (reasonText, extra = {}) => recordAuditEvent({
+      actor: attemptedUsername || 'anonymous',
+      actorType: 'anonymous',
+      action: 'Failed customer enrollment',
+      category: 'customers',
+      outcome: 'failed',
+      severity: 'low',
+      reason: reasonText,
+      summary: `Customer enrollment for "${attemptedUsername || '(no username)'}" did not complete.`,
+      details: { username: attemptedUsername || '(empty)', product: body.product || null, ...extra },
+    });
     const required = ['firstName', 'lastName', 'email', 'username', 'password', 'product'];
     for (const field of required) {
       if (!body[field] || !String(body[field]).trim()) {
+        logEnrollFail(`Required field "${field}" was left empty.`);
         return sendJson(res, 400, { error: `${field} is required` });
       }
     }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(body.email).trim())) {
+      logEnrollFail('The email address entered was not in a valid format.');
       return sendJson(res, 400, { error: 'Enter a valid email address' });
     }
-    if (String(body.username).trim().length < 4 || String(body.username).trim().length > 32) {
+    if (attemptedUsername.length < 4 || attemptedUsername.length > 32) {
+      logEnrollFail('Username must be between 4 and 32 characters long.');
       return sendJson(res, 400, { error: 'Username must be 4–32 characters' });
     }
     if (String(body.password).length < 8) {
+      logEnrollFail('Password was shorter than the 8-character minimum.');
       return sendJson(res, 400, { error: 'Password must be at least 8 characters' });
     }
-    if (String(body.username).trim().toLowerCase() === CHASE_ADMIN_USERNAME.toLowerCase()) {
+    if (attemptedUsername.toLowerCase() === CHASE_ADMIN_USERNAME.toLowerCase()) {
+      logEnrollFail('Attempted to register using the reserved Super Administrator username.');
       return sendJson(res, 400, { error: 'That username is reserved for the separate administrator sign-in.' });
     }
     if (findUserByUsername(body.username) || findAdminByUsername(body.username)) {
+      logEnrollFail(`Username "@${attemptedUsername}" is already taken by an existing account.`);
       return sendJson(res, 400, { error: 'That username is already taken' });
     }
     const product = PRODUCTS.find((p) => p.id === body.product);
-    if (!product) return sendJson(res, 400, { error: 'Invalid product' });
+    if (!product) {
+      logEnrollFail(`Invalid banking product "${String(body.product || '')}" selected.`);
+      return sendJson(res, 400, { error: 'Invalid product' });
+    }
     const deposit = openingDeposit(body.openingDeposit, product.type === 'credit-card');
     if (deposit === null) {
+      logEnrollFail('Opening deposit amount was outside the allowed $0 to $100,000 range.');
       return sendJson(res, 400, { error: 'Opening deposit must be between $0 and $100,000' });
     }
     const user = {
       id: uid(),
-      username: String(body.username).trim(),
+      username: attemptedUsername,
       passwordHash: hashPassword(String(body.password)),
       fullName: `${body.firstName} ${body.lastName}`.trim(),
       email: String(body.email).trim(),
@@ -633,31 +885,86 @@ async function handleApi(req, res, url) {
     insertUser(user);
     const token = newToken();
     createSession(token, user.id);
+    recordAuditEvent({
+      actor: user.username,
+      actorType: 'customer',
+      action: 'New customer enrolled',
+      category: 'customers',
+      outcome: 'success',
+      severity: 'info',
+      summary: `New customer ${user.fullName} (@${user.username}) enrolled with ${product.name} (${formatUsdSimple(deposit)} opening deposit).`,
+      target: { type: 'customer', id: user.id, label: `${user.fullName} (@${user.username})` },
+      details: { userId: user.id, username: user.username, product: product.name, openingDeposit: deposit },
+    });
     return sendJson(res, 201, { user: publicUser(user), token }, sessionCookieHeader(req, token));
   }
 
   if (pathname === '/api/auth/login' && method === 'POST') {
     const body = await readBody(req);
     const adminUsername = String(body.username || '').trim();
+    const password = String(body.password || '');
     const storedAdmin = findAdminByUsername(adminUsername);
     const rootNameMatch = adminUsername.toLowerCase() === CHASE_ADMIN_USERNAME.toLowerCase();
     const rootHash = getRootAdminPasswordHash();
-    const isRootAdmin = !!rootHash && rootNameMatch && verifyPassword(String(body.password || ''), rootHash);
-    const validStoredPassword = storedAdmin && verifyPassword(String(body.password || ''), storedAdmin.passwordHash);
+    const isRootAdmin = !!rootHash && rootNameMatch && verifyPassword(password, rootHash);
+    const validStoredPassword = storedAdmin && verifyPassword(password, storedAdmin.passwordHash);
     const linkedCustomer = storedAdmin?.linkedUserId ? findUserById(storedAdmin.linkedUserId) : null;
     const isStoredAdmin = validStoredPassword && storedAdmin.status === 'active' && (!storedAdmin.linkedUserId || (linkedCustomer && linkedCustomer.status === 'active' && linkedCustomer.passwordHash === storedAdmin.passwordHash));
     if (rootNameMatch || (storedAdmin && !storedAdmin.linkedUserId)) {
       const failBucket = `admin-login:${adminUsername.toLowerCase() || '*'}`;
       if (tooManyFailures(req, failBucket, 10)) {
+        auditAdmin(
+          'Blocked admin sign-in (rate limit)',
+          { username: adminUsername || '(empty)', path: '/api/auth/login', lockoutMinutes: 15, maxAttempts: 10 },
+          adminUsername || 'unknown',
+          {
+            actorType: rootNameMatch ? 'super_admin' : 'admin',
+            category: 'security',
+            outcome: 'blocked',
+            severity: 'high',
+            reason: 'Too many failed sign-in attempts (10 or more within 15 minutes from this IP address). Temporarily locked for 15 minutes.',
+            summary: `Blocked admin sign-in for "${adminUsername || '(empty)'}" on the main login page due to repeated failures.`,
+          }
+        );
         return sendJson(res, 429, { error: 'Too many unsuccessful admin sign-in attempts. Try again later.' });
       }
       if (validStoredPassword && storedAdmin.status === 'disabled') {
-        auditAdmin('Blocked admin sign-in through customer login (disabled)', { username: storedAdmin.username }, storedAdmin.username);
+        auditAdmin(
+          'Blocked admin sign-in through customer login (disabled)',
+          { username: storedAdmin.username, adminId: storedAdmin.id, role: storedAdmin.role },
+          storedAdmin.username,
+          {
+            actorType: storedAdmin.role === 'auditor' ? 'auditor' : 'admin',
+            category: 'security',
+            outcome: 'blocked',
+            severity: 'high',
+            reason: storedAdmin.lockMessage || 'This administrator account is currently disabled by the Super Administrator.',
+            summary: `Blocked sign-in for @${storedAdmin.username} on the main sign-in page because the administrator account is disabled.`,
+            target: { type: 'admin', id: storedAdmin.id, label: `${storedAdmin.fullName} (@${storedAdmin.username})` },
+          }
+        );
         return sendJson(res, 403, { error: storedAdmin.lockMessage || 'This administrator account is disabled. Contact the super administrator.' });
       }
       if (!isRootAdmin && !isStoredAdmin) {
-        recordFailure(req, failBucket, 15 * 60 * 1000);
-        auditAdmin('Failed admin sign-in attempt', { username: adminUsername || '(empty)', path: '/api/auth/login' }, adminUsername || 'unknown');
+        const attemptCount = recordFailure(req, failBucket, 15 * 60 * 1000);
+        const failReason = !password
+          ? 'Password field was left blank.'
+          : rootNameMatch
+            ? 'Incorrect password entered for the Super Administrator account.'
+            : `Incorrect password entered for ${storedAdmin?.role === 'auditor' ? 'read-only auditor' : 'administrator'} account @${storedAdmin?.username || adminUsername}.`;
+        auditAdmin(
+          'Failed admin sign-in attempt',
+          { username: adminUsername || '(empty)', path: '/api/auth/login', attemptCount, attemptsRemaining: Math.max(0, 10 - attemptCount) },
+          adminUsername || 'unknown',
+          {
+            actorType: rootNameMatch ? 'super_admin' : storedAdmin?.role === 'auditor' ? 'auditor' : 'admin',
+            category: 'auth',
+            outcome: 'failed',
+            severity: attemptCount >= 5 ? 'high' : 'medium',
+            reason: `${failReason} (Attempt ${attemptCount} of 10 before lockout.)`,
+            summary: `Admin sign-in failed for "${adminUsername || '(empty)'}" on the main Chase sign-in page.`,
+          }
+        );
         return sendJson(res, 401, { error: 'The username or password you entered is incorrect. Please try again.' });
       }
       clearFailures(req, failBucket);
@@ -665,7 +972,18 @@ async function handleApi(req, res, url) {
       const resolvedUsername = isRootAdmin ? CHASE_ADMIN_USERNAME : storedAdmin.username;
       const token = createAdminToken(resolvedUsername, role);
       createSession(token, isRootAdmin ? '__chase_admin__' : `admin:${storedAdmin.username}`, role);
-      auditAdmin('Admin sign-in through customer login', { username: resolvedUsername, role, isSuperAdmin: isRootAdmin }, resolvedUsername);
+      auditAdmin(
+        'Admin sign-in through customer login',
+        { username: resolvedUsername, role, isSuperAdmin: isRootAdmin },
+        resolvedUsername,
+        {
+          actorType: isRootAdmin ? 'super_admin' : role === 'auditor' ? 'auditor' : 'admin',
+          category: 'auth',
+          outcome: 'success',
+          severity: 'low',
+          summary: `${isRootAdmin ? 'Super Administrator' : role === 'auditor' ? 'Read-Only Auditor' : 'Administrator'} ${resolvedUsername} signed in via the main Chase sign-in page.`,
+        }
+      );
       return sendJson(res, 200, {
         admin: {
           username: resolvedUsername,
@@ -679,29 +997,111 @@ async function handleApi(req, res, url) {
         token,
       }, sessionCookieHeader(req, token, role));
     }
-    const bucket = `login:${String(body.username || '').trim().toLowerCase()}`;
+    const bucket = `login:${adminUsername.toLowerCase()}`;
     if (tooManyFailures(req, bucket, 10)) {
+      const rateLimitedUser = findUserByUsername(adminUsername);
+      recordAuditEvent({
+        actor: adminUsername || 'unknown',
+        actorType: rateLimitedUser ? 'customer' : 'anonymous',
+        action: 'Blocked customer sign-in (rate limit)',
+        category: 'security',
+        outcome: 'blocked',
+        severity: 'high',
+        reason: 'Too many failed sign-in attempts (10 or more within 15 minutes from this IP address). Temporarily locked for 15 minutes.',
+        summary: `Blocked customer sign-in for "${adminUsername || '(empty)'}" after too many consecutive failed attempts.`,
+        target: rateLimitedUser ? { type: 'customer', id: rateLimitedUser.id, label: `${rateLimitedUser.fullName} (@${rateLimitedUser.username})` } : null,
+        details: { username: adminUsername || '(empty)', lockoutMinutes: 15, maxAttempts: 10 },
+      });
       return sendJson(res, 429, { error: 'Too many unsuccessful sign-in attempts. Please wait 15 minutes and try again.' });
     }
-    const user = findUserByUsername(body.username || '');
-    if (!user || !verifyPassword(String(body.password || ''), user.passwordHash)) {
-      recordFailure(req, bucket, 15 * 60 * 1000);
+    const user = findUserByUsername(adminUsername);
+    if (!user || !verifyPassword(password, user.passwordHash)) {
+      const attemptCount = recordFailure(req, bucket, 15 * 60 * 1000);
+      let failReason = 'Unknown username — no customer or administrator account matches this username.';
+      if (!adminUsername || !password) {
+        failReason = !adminUsername ? 'Username field was left blank.' : 'Password field was left blank.';
+      } else if (user) {
+        failReason = `Incorrect password entered for customer ${user.fullName} (@${user.username}).`;
+      }
+      recordAuditEvent({
+        actor: user ? user.username : (adminUsername || 'unknown'),
+        actorType: user ? 'customer' : 'anonymous',
+        action: 'Failed customer sign-in attempt',
+        category: 'auth',
+        outcome: 'failed',
+        severity: attemptCount >= 5 ? 'high' : 'medium',
+        reason: `${failReason} (Attempt ${attemptCount} of 10 before 15-minute lockout.)`,
+        summary: user
+          ? `Customer ${user.fullName} (@${user.username}) failed to sign in because the password was wrong.`
+          : `Sign-in failed for unrecognized username "${adminUsername || '(empty)'}".`,
+        target: user ? { type: 'customer', id: user.id, label: `${user.fullName} (@${user.username})` } : null,
+        details: {
+          username: adminUsername || '(empty)',
+          ...(user ? { userId: user.id, customerName: user.fullName } : {}),
+          attemptCount,
+          attemptsRemaining: Math.max(0, 10 - attemptCount),
+        },
+      });
       return sendJson(
         res,
         401,
         { error: 'The username or password you entered is incorrect. Please try again.' }
       );
     }
-    if (user.status === 'suspended') return sendJson(res, 403, { error: 'This simulated account is suspended. Contact the Chase administrator.' });
+    if (user.status === 'suspended') {
+      recordAuditEvent({
+        actor: user.username,
+        actorType: 'customer',
+        action: 'Blocked customer sign-in (account suspended)',
+        category: 'security',
+        outcome: 'blocked',
+        severity: 'high',
+        reason: 'This customer account is currently suspended by an administrator.',
+        summary: `Blocked sign-in for ${user.fullName} (@${user.username}) because their account is suspended.`,
+        target: { type: 'customer', id: user.id, label: `${user.fullName} (@${user.username})` },
+        details: { userId: user.id, username: user.username, status: user.status },
+      });
+      return sendJson(res, 403, { error: 'This simulated account is suspended. Contact the Chase administrator.' });
+    }
     clearFailures(req, bucket);
     const token = newToken();
     createSession(token, user.id);
     const linkedAdmin = buildLinkedAdminSummary(user.id);
+    recordAuditEvent({
+      actor: user.username,
+      actorType: 'customer',
+      action: 'Customer signed in',
+      category: 'auth',
+      outcome: 'success',
+      severity: 'low',
+      summary: `Customer ${user.fullName} (@${user.username}) signed in to online banking${linkedAdmin ? ' (linked staff account)' : ''}.`,
+      target: { type: 'customer', id: user.id, label: `${user.fullName} (@${user.username})` },
+      details: { userId: user.id, username: user.username, linkedAdmin: Boolean(linkedAdmin) },
+    });
     return sendJson(res, 200, { user: publicUser(user), token, ...(linkedAdmin ? { linkedAdmin } : {}) }, sessionCookieHeader(req, token));
   }
 
   if (pathname === '/api/auth/logout' && method === 'POST') {
-    for (const tok of requestSessionTokens(req, url, 'user')) deleteSession(tok);
+    const tokens = requestSessionTokens(req, url, 'user');
+    let loggedOutUser = null;
+    for (const tok of tokens) {
+      const sess = getSession(tok);
+      if (sess?.userId && !loggedOutUser) loggedOutUser = findUserById(sess.userId);
+      deleteSession(tok);
+    }
+    if (loggedOutUser) {
+      recordAuditEvent({
+        actor: loggedOutUser.username,
+        actorType: 'customer',
+        action: 'Customer signed out',
+        category: 'auth',
+        outcome: 'success',
+        severity: 'info',
+        summary: `Customer ${loggedOutUser.fullName} (@${loggedOutUser.username}) signed out of online banking.`,
+        target: { type: 'customer', id: loggedOutUser.id, label: `${loggedOutUser.fullName} (@${loggedOutUser.username})` },
+        details: { userId: loggedOutUser.id, username: loggedOutUser.username },
+      });
+    }
     return sendJson(res, 200, { ok: true }, sessionCookieHeader(req));
   }
 
@@ -711,42 +1111,159 @@ async function handleApi(req, res, url) {
   }
 
   if (pathname === '/api/auth/reset-password' && method === 'POST') {
-    if (!getSimulatorSettings().allowCustomerPasswordReset) return sendJson(res, 403, { error: 'Password reset is temporarily disabled in this simulator.' });
-    if (limited(req, res, 'reset', 10, 60 * 60 * 1000, 'Too many password reset attempts. Please wait and try again.')) return;
+    if (!getSimulatorSettings().allowCustomerPasswordReset) {
+      recordAuditEvent({
+        actor: 'anonymous',
+        actorType: 'anonymous',
+        action: 'Blocked password reset',
+        category: 'security',
+        outcome: 'blocked',
+        severity: 'medium',
+        reason: 'Customer self-service password reset is currently turned off in Super Admin settings.',
+        summary: 'A password reset request was blocked because self-service resets are disabled.',
+      });
+      return sendJson(res, 403, { error: 'Password reset is temporarily disabled in this simulator.' });
+    }
+    if (limited(req, res, 'reset', 10, 60 * 60 * 1000, 'Too many password reset attempts. Please wait and try again.')) {
+      recordAuditEvent({
+        actor: 'anonymous',
+        actorType: 'anonymous',
+        action: 'Blocked password reset (rate limit)',
+        category: 'security',
+        outcome: 'blocked',
+        severity: 'high',
+        reason: 'More than 10 password reset requests within 1 hour from this IP address.',
+        summary: 'Blocked a password reset attempt due to rate limiting.',
+      });
+      return;
+    }
     const body = await readBody(req);
+    const reqUsername = String(body.username || '').trim();
+    const user = findUserByUsername(reqUsername);
     if (String(body.newPassword || '').length < 8) {
+      recordAuditEvent({
+        actor: user ? user.username : (reqUsername || 'unknown'),
+        actorType: user ? 'customer' : 'anonymous',
+        action: 'Failed password reset attempt',
+        category: 'auth',
+        outcome: 'failed',
+        severity: 'low',
+        reason: 'The new password entered was shorter than 8 characters.',
+        summary: `Password reset failed for "${reqUsername || '(empty)'}" because the new password was too short.`,
+        target: user ? { type: 'customer', id: user.id, label: `${user.fullName} (@${user.username})` } : null,
+        details: { username: reqUsername || '(empty)' },
+      });
       return sendJson(res, 400, { error: 'New password must be at least 8 characters' });
     }
-    const user = findUserByUsername(body.username || '');
     const emailMatches =
       user && String(user.email || '').trim().toLowerCase() === String(body.email || '').trim().toLowerCase();
     if (!emailMatches) {
+      const failReason = !user
+        ? `No customer account exists with username "${reqUsername || '(empty)'}".`
+        : 'The email address entered did not match the email address on file for this customer.';
+      recordAuditEvent({
+        actor: user ? user.username : (reqUsername || 'unknown'),
+        actorType: user ? 'customer' : 'anonymous',
+        action: 'Failed password reset attempt',
+        category: 'auth',
+        outcome: 'failed',
+        severity: 'medium',
+        reason: failReason,
+        summary: user
+          ? `Self-service password reset failed for ${user.fullName} (@${user.username}) due to mismatched email verification.`
+          : `Self-service password reset failed for unknown username "${reqUsername || '(empty)'}".`,
+        target: user ? { type: 'customer', id: user.id, label: `${user.fullName} (@${user.username})` } : null,
+        details: { username: reqUsername || '(empty)', ...(user ? { userId: user.id } : {}) },
+      });
       return sendJson(res, 400, { error: "We couldn't verify that username and email. Check them and try again." });
     }
-    if (listAdminAccounts().some(a => a.linkedUserId === user.id)) return sendJson(res, 403, { error: 'Contact the super administrator to reset this account password.' });
+    if (listAdminAccounts().some(a => a.linkedUserId === user.id)) {
+      recordAuditEvent({
+        actor: user.username,
+        actorType: 'customer',
+        action: 'Blocked password reset (linked admin)',
+        category: 'security',
+        outcome: 'blocked',
+        severity: 'high',
+        reason: 'Accounts with linked administrator access cannot use public password reset and must be reset by the Super Administrator.',
+        summary: `Blocked self-service password reset for ${user.fullName} (@${user.username}) because this account has linked admin access.`,
+        target: { type: 'customer', id: user.id, label: `${user.fullName} (@${user.username})` },
+        details: { userId: user.id, username: user.username },
+      });
+      return sendJson(res, 403, { error: 'Contact the super administrator to reset this account password.' });
+    }
     const updated = { ...user, passwordHash: hashPassword(String(body.newPassword)) };
     updateUser(updated);
     deleteSessionsForUser(user.id);
+    recordAuditEvent({
+      actor: user.username,
+      actorType: 'customer',
+      action: 'Customer reset password',
+      category: 'auth',
+      outcome: 'success',
+      severity: 'high',
+      summary: `Customer ${user.fullName} (@${user.username}) completed a self-service password reset and all prior sessions were signed out.`,
+      target: { type: 'customer', id: user.id, label: `${user.fullName} (@${user.username})` },
+      details: { userId: user.id, username: user.username },
+    });
     return sendJson(res, 200, { ok: true });
   }
 
   /* -------------------------- Admin simulator API ------------------------- */
   if (pathname.startsWith('/api/admin/')) {
     const adminSession = getAdminSession(req, url);
-    if (!adminSession) return sendJson(res, 401, { error: 'Admin sign-in required.' });
+    if (!adminSession) {
+      if (method !== 'GET') {
+        recordAuditEvent({
+          actor: 'anonymous',
+          actorType: 'anonymous',
+          action: 'Blocked unauthenticated admin request',
+          category: 'security',
+          outcome: 'blocked',
+          severity: 'high',
+          reason: 'No valid or active administrator session token was provided.',
+          summary: `Blocked an unauthenticated ${method} request to ${pathname}.`,
+          details: { endpoint: pathname, method },
+        });
+      }
+      return sendJson(res, 401, { error: 'Admin sign-in required.' });
+    }
+    const isSuperAdmin = adminSession.userId === '__chase_admin__';
+    const auditActor = isSuperAdmin ? CHASE_ADMIN_USERNAME : String(adminSession.userId || '').replace(/^admin:/, '');
+    const actorRoleType = isSuperAdmin ? 'super_admin' : adminSession.role === 'auditor' ? 'auditor' : 'admin';
     const isAuditorSelfAction =
       (pathname === '/api/admin/logout' && method === 'POST') ||
       (pathname === '/api/admin/me/password' && method === 'PUT') ||
       (pathname === '/api/admin/switch-to-customer' && method === 'POST');
     if (adminSession.role === 'auditor' && method !== 'GET' && !isAuditorSelfAction) {
+      auditAdmin(
+        'Blocked auditor write attempt',
+        { endpoint: pathname, method },
+        auditActor,
+        {
+          actorType: 'auditor',
+          category: 'security',
+          outcome: 'blocked',
+          severity: 'medium',
+          reason: 'Read-only auditor accounts are only permitted to view data and cannot make changes.',
+          summary: `Blocked read-only auditor @${auditActor} from performing ${method} ${pathname}.`,
+        }
+      );
       return sendJson(res, 403, { error: 'This auditor account has read-only access.' });
     }
-    const isSuperAdmin = adminSession.userId === '__chase_admin__';
-    const auditActor = isSuperAdmin ? CHASE_ADMIN_USERNAME : String(adminSession.userId || '').replace(/^admin:/, '');
     const operator = isSuperAdmin ? null : findAdminByUsername(auditActor);
     if (!isSuperAdmin && !operator?.id) return sendJson(res, 401, { error: 'Admin sign-in required.' });
     const visibleUsers = () => isSuperAdmin ? findAllUsers() : findAllUsers().filter(u => u.ownerAdminId === operator.id);
     if (!isSuperAdmin) {
+      const logPermissionBlock = (actionName, reasonText, extraDetails = {}, severityLevel = 'medium') =>
+        auditAdmin(actionName, { endpoint: pathname, method, ...extraDetails }, auditActor, {
+          actorType: actorRoleType,
+          category: 'security',
+          outcome: 'blocked',
+          severity: severityLevel,
+          reason: reasonText,
+          summary: `Blocked @${auditActor} from ${method} ${pathname}: ${reasonText}`,
+        });
       // Deny global operations by default. Never rely on hidden client controls for isolation.
       const safeGlobal = new Set([
         '/api/admin/me',
@@ -767,40 +1284,84 @@ async function handleApi(req, res, url) {
       const ownRoute = pathname === '/api/admin/users/bulk' ? null : pathname.match(/^\/api\/admin\/users\/([^/]+)(?:\/|$)/);
       if (ownRoute) {
         const target = findUserById(decodeURIComponent(ownRoute[1]));
-        if (!target || target.ownerAdminId !== operator?.id) return sendJson(res, 404, { error: 'Customer not found.' });
+        const isSelfFundingRoute =
+          Boolean(operator?.linkedUserId && target?.id === operator.linkedUserId) &&
+          (
+            (method === 'GET' && pathname === `/api/admin/users/${ownRoute[1]}`) ||
+            /^\/api\/admin\/users\/[^/]+\/accounts(?:\/|$)/.test(pathname)
+          );
+        if (!target || (target.ownerAdminId !== operator?.id && !isSelfFundingRoute)) {
+          if (target) {
+            logPermissionBlock(
+              'Blocked cross-tenant customer access',
+              `Customer ${target.fullName} (@${target.username}) is not assigned to administrator @${auditActor}.`,
+              { targetUserId: target.id, targetUsername: target.username },
+              'high'
+            );
+          }
+          return sendJson(res, 404, { error: 'Customer not found.' });
+        }
       } else if (!safeGlobal.has(pathname)) {
+        logPermissionBlock(
+          'Blocked unauthorized admin action',
+          'Only the Super Administrator is allowed to access this system-wide endpoint.',
+          {},
+          'high'
+        );
         return sendJson(res, 403, { error: 'Super administrator access required.' });
       }
       if ((pathname === '/api/admin/admins' || pathname === '/api/admin/settings') && method !== 'GET') {
+        logPermissionBlock(
+          'Blocked unauthorized admin action',
+          'Only the Super Administrator can change staff accounts or global access settings.',
+          {},
+          'high'
+        );
         return sendJson(res, 403, { error: 'Super administrator access required.' });
       }
       const permissions = normalizePermissions(operator.permissions);
       const capabilities = normalizeCapabilities(operator.capabilities);
-      if (pathname === '/api/admin/users' && method === 'POST' && !permissions.createUsers) return sendJson(res, 403, { error: 'Customer creation permission required.' });
-      if (/\/generate-transactions$/.test(pathname) && method === 'POST' && !permissions.generateActivity) return sendJson(res, 403, { error: 'Activity generation permission required.' });
-      if (/\/messages$/.test(pathname) && method === 'POST' && !permissions.sendMessages) return sendJson(res, 403, { error: 'Message sending permission required.' });
+      if (pathname === '/api/admin/users' && method === 'POST' && !permissions.createUsers) {
+        logPermissionBlock('Blocked admin action (missing permission)', 'This administrator does not have "Create Customers" permission enabled.');
+        return sendJson(res, 403, { error: 'Customer creation permission required.' });
+      }
+      if (/\/generate-transactions$/.test(pathname) && method === 'POST' && !permissions.generateActivity) {
+        logPermissionBlock('Blocked admin action (missing permission)', 'This administrator does not have "Generate Activity" permission enabled.');
+        return sendJson(res, 403, { error: 'Activity generation permission required.' });
+      }
+      if (/\/messages$/.test(pathname) && method === 'POST' && !permissions.sendMessages) {
+        logPermissionBlock('Blocked admin action (missing permission)', 'This administrator does not have "Send Messages" permission enabled.');
+        return sendJson(res, 403, { error: 'Message sending permission required.' });
+      }
       if (method !== 'GET') {
         if (/^\/api\/admin\/users\/[^/]+\/(accounts|transfers|payees|scheduled|send-from-checking)(?:\/|$)/.test(pathname) && !capabilities.manageAccounts) {
+          logPermissionBlock('Blocked admin action (missing permission)', 'This administrator does not have "Manage Accounts & Payments" capability enabled.');
           return sendJson(res, 403, { error: 'Account and payment management permission required.' });
         }
         if (/^\/api\/admin\/users\/[^/]+\/transactions(?:\/|$)/.test(pathname) && !capabilities.editLedger) {
+          logPermissionBlock('Blocked admin action (missing permission)', 'This administrator does not have "Edit Ledger Transactions" capability enabled.');
           return sendJson(res, 403, { error: 'Ledger editing permission required.' });
         }
         if (/^\/api\/admin\/users\/[^/]+\/impersonate$/.test(pathname) && !capabilities.impersonateUsers) {
+          logPermissionBlock('Blocked admin action (missing permission)', 'This administrator does not have "Customer Preview / Impersonation" capability enabled.');
           return sendJson(res, 403, { error: 'Customer preview permission required.' });
         }
         if ((/^\/api\/admin\/users\/[^/]+(?:\/(reset-password|revoke-sessions))?$/.test(pathname) || pathname === '/api/admin/users/bulk') && !capabilities.manageCustomerAccess) {
+          logPermissionBlock('Blocked admin action (missing permission)', 'This administrator does not have "Manage Customer Profile & Access" capability enabled.');
           return sendJson(res, 403, { error: 'Customer profile & access management permission required.' });
         }
         if (/^\/api\/admin\/users\/[^/]+\/disputes(?:\/|$)/.test(pathname) && !capabilities.manageDisputes) {
+          logPermissionBlock('Blocked admin action (missing permission)', 'This administrator does not have "Manage Disputes" capability enabled.');
           return sendJson(res, 403, { error: 'Dispute management permission required.' });
         }
         if (/^\/api\/admin\/users\/[^/]+\/notice$/.test(pathname) && !capabilities.publishNotices) {
+          logPermissionBlock('Blocked admin action (missing permission)', 'This administrator does not have "Publish Dashboard Notices" capability enabled.');
           return sendJson(res, 403, { error: 'Dashboard banner publishing permission required.' });
         }
       }
     }
-    const recordAdminAudit = (action, details = {}) => auditAdmin(action, details, auditActor);
+    const recordAdminAudit = (action, details = {}, extra = {}) =>
+      auditAdmin(action, details, auditActor, { actorType: actorRoleType, ...extra });
 
     if (pathname === '/api/admin/replies' && method === 'GET') {
       const replies = isSuperAdmin ? getSimulatorSettings().superAdminReplies : operator.savedReplies;
@@ -865,11 +1426,29 @@ async function handleApi(req, res, url) {
       const body = await readBody(req);
       const username = String(adminSession.userId || '').replace(/^admin:/, '');
       const storedAdmin = findAdminByUsername(username);
-      if (!storedAdmin || !verifyPassword(String(body.currentPassword || ''), storedAdmin.passwordHash)) return sendJson(res, 400, { error: 'Current admin password is incorrect.' });
+      if (!storedAdmin || !verifyPassword(String(body.currentPassword || ''), storedAdmin.passwordHash)) {
+        recordAdminAudit(
+          'Failed admin password change',
+          { username },
+          {
+            category: 'auth',
+            outcome: 'failed',
+            severity: 'medium',
+            reason: 'The current administrator password entered was incorrect.',
+            summary: `@${username} tried to change their admin password, but entered the wrong current password.`,
+          }
+        );
+        return sendJson(res, 400, { error: 'Current admin password is incorrect.' });
+      }
       if (body.confirm !== true || String(body.newPassword || '').length < 10) return sendJson(res, 400, { error: 'Confirm the change and provide a new password of at least 10 characters.' });
       updateAdminAccount(storedAdmin.id, { passwordHash: hashPassword(String(body.newPassword)) });
       for (const tok of requestSessionTokens(req, url, 'admin')) revokeSession(tok);
-      recordAdminAudit('Changed own simulator admin password', { username });
+      recordAdminAudit('Changed own simulator admin password', { username }, {
+        category: 'auth',
+        outcome: 'success',
+        severity: 'high',
+        summary: `@${username} changed their own administrator password and all prior sessions were signed out.`,
+      });
       return sendJson(res, 200, { ok: true }, sessionCookieHeader(req, '', adminSession.role));
     }
 
@@ -879,12 +1458,22 @@ async function handleApi(req, res, url) {
       if (!contact) return sendJson(res, 400, { error: 'Provide a valid support email and phone number.' });
       if (isSuperAdmin) {
         updateSimulatorSettings({ rootSupportContact: contact });
-        recordAdminAudit('Updated own super administrator support contact', { after: contact });
+        recordAdminAudit('Updated own super administrator support contact', { after: contact }, {
+          category: 'admin',
+          outcome: 'success',
+          severity: 'low',
+          summary: `${auditActor} updated their customer support contact (${contact.email} · ${contact.phone}).`,
+        });
         return sendJson(res, 200, { supportContact: contact });
       }
       if (!operator?.id) return sendJson(res, 401, { error: 'Admin sign-in required.' });
       updateAdminAccount(operator.id, { supportContact: contact });
-      recordAdminAudit('Updated own simulator admin support contact', { username: operator.username, after: contact });
+      recordAdminAudit('Updated own simulator admin support contact', { username: operator.username, after: contact }, {
+        category: 'admin',
+        outcome: 'success',
+        severity: 'low',
+        summary: `${auditActor} updated their customer support contact (${contact.email} · ${contact.phone}).`,
+      });
       return sendJson(res, 200, { supportContact: contact });
     }
 
@@ -1391,9 +1980,17 @@ async function handleApi(req, res, url) {
           openDisputes: allDisputes.filter((d) => d.status === 'open').length,
           transactions: transactions.length,
         },
-        recentAudit: isSuperAdmin
-          ? getAuditLog(10)
-          : getAuditLog(5000).filter((entry) => entry.actor === auditActor).slice(0, 10),
+        recentAudit: (() => {
+          const auditCtx = buildAuditContext({
+            users: isSuperAdmin ? findAllUsers() : users,
+            adminAccounts: isSuperAdmin ? listAdminAccounts() : [],
+            rootAdminUsername: CHASE_ADMIN_USERNAME,
+          });
+          const rawRecent = isSuperAdmin
+            ? getAuditLog(10)
+            : getAuditLog(5000).filter((entry) => entry.actor === auditActor).slice(0, 10);
+          return rawRecent.map((entry) => enrichAuditEntry(entry, auditCtx));
+        })(),
         analytics: {
           range,
           cashflow,
@@ -1482,13 +2079,47 @@ async function handleApi(req, res, url) {
     }
 
     if (pathname === '/api/admin/audit' && method === 'GET') {
-      const allAudit = isSuperAdmin
-        ? getAuditLog(5000)
-        : getAuditLog(5000).filter((entry) => entry.actor === auditActor);
+      const rawAll = getAuditLog(5000);
+      const scopedRaw = isSuperAdmin
+        ? rawAll
+        : rawAll.filter((entry) => entry.actor === auditActor);
+      const integrity = isSuperAdmin ? verifyAuditIntegrity(rawAll) : null;
+      const tamperedSet = new Set(integrity?.tamperedIds || []);
+      const auditCtx = buildAuditContext({
+        users: isSuperAdmin ? findAllUsers() : visibleUsers(),
+        adminAccounts: isSuperAdmin ? listAdminAccounts() : [],
+        rootAdminUsername: CHASE_ADMIN_USERNAME,
+      });
+      const enriched = scopedRaw.map((entry) => enrichAuditEntry(entry, auditCtx, tamperedSet));
+      const stats = computeAuditStats(enriched);
+
+      // Optional server-side filtering for programmatic queries
+      const categoryFilter = String(url.searchParams.get('category') || '').trim().toLowerCase();
+      const outcomeFilter = String(url.searchParams.get('outcome') || '').trim().toLowerCase();
+      const actorTypeFilter = String(url.searchParams.get('actorType') || '').trim().toLowerCase();
+      const qFilter = String(url.searchParams.get('q') || '').trim().toLowerCase();
+      const filtered = enriched.filter((entry) => {
+        if (categoryFilter && categoryFilter !== 'all' && entry.category !== categoryFilter) return false;
+        if (outcomeFilter && outcomeFilter !== 'all' && entry.outcome !== outcomeFilter) return false;
+        if (actorTypeFilter && actorTypeFilter !== 'all' && entry.actorType !== actorTypeFilter) return false;
+        if (qFilter) {
+          const hay = `${entry.actor} ${entry.action} ${entry.summary || ''} ${entry.reason || ''} ${entry.target?.label || ''} ${entry.ip || ''} ${JSON.stringify(entry.details || {})}`.toLowerCase();
+          if (!hay.includes(qFilter)) return false;
+        }
+        return true;
+      });
+
       const offset = Math.max(0, Number(url.searchParams.get('offset')) || 0);
       const requestedLimit = Number(url.searchParams.get('limit')) || 100;
       const limit = Math.max(1, Math.min(5000, requestedLimit));
-      return sendJson(res, 200, { audit: allAudit.slice(offset, offset + limit), total: allAudit.length, offset, limit });
+      return sendJson(res, 200, {
+        audit: filtered.slice(offset, offset + limit),
+        total: filtered.length,
+        offset,
+        limit,
+        stats,
+        ...(isSuperAdmin ? { integrity } : {}),
+      });
     }
 
     if (pathname === '/api/admin/settings' && method === 'GET') {
@@ -2025,17 +2656,34 @@ async function handleApi(req, res, url) {
         const name = cleanText(body.name, 80);
         const balance = Number(body.balance);
         const creditLimit = body.creditLimit === '' || body.creditLimit == null ? undefined : Number(body.creditLimit);
+        const openedDate = normalizeOpenedDate(body.openedDate);
+        if (openedDate === null) return sendJson(res, 400, { error: 'Provide a valid account opening date (YYYY-MM-DD).' });
         if (!allowed.has(type) || !name || !Number.isFinite(balance) || Math.abs(balance) > 100000000 || (creditLimit !== undefined && (!Number.isFinite(creditLimit) || creditLimit < 0 || creditLimit > 100000000))) {
           return sendJson(res, 400, { error: 'Provide a valid account type, name, balance, and optional credit limit.' });
         }
+        const nowIso = new Date().toISOString();
         const account = {
           id: uid(), type, name, mask: mask4(), balance: round2(balance),
           ...(creditLimit !== undefined ? { creditLimit: round2(creditLimit) } : {}),
-          locked: false, autopay: false, transactions: [], createdAt: new Date().toISOString(),
+          ...(openedDate ? { openedDate } : {}),
+          locked: false, autopay: false, transactions: [], createdAt: nowIso,
         };
         const updated = { ...target, accounts: [...accounts, account] };
         updateUser(updated);
-        recordAdminAudit('Created simulator account', { userId, username: target.username, accountId: account.id, type });
+        recordAdminAudit('Created simulator account', {
+          userId,
+          username: target.username,
+          accountId: account.id,
+          accountName: account.name,
+          accountMask: account.mask,
+          type,
+          balance: account.balance,
+          ...(account.openedDate ? { openedDate: account.openedDate } : {}),
+        }, {
+          category: 'accounts',
+          summary: `${auditActor} created ${account.name} (…${account.mask}) for ${target.fullName} (@${target.username}) with starting balance ${formatUsdSimple(account.balance)}.`,
+          target: { type: 'account', id: account.id, label: `${account.name} (…${account.mask}) · ${target.fullName}` },
+        });
         return sendJson(res, 201, { user: publicUser(updated), account });
       }
 
@@ -2053,6 +2701,12 @@ async function handleApi(req, res, url) {
         if (patch.nickname !== undefined) next.nickname = cleanText(patch.nickname, 60);
         if (patch.mask !== undefined && /^\d{4}$/.test(String(patch.mask))) next.mask = String(patch.mask);
         if (patch.replacedAt !== undefined) next.replacedAt = String(patch.replacedAt);
+        if (patch.openedDate !== undefined) {
+          const normalized = normalizeOpenedDate(patch.openedDate);
+          if (normalized === null) return sendJson(res, 400, { error: 'Provide a valid account opening date (YYYY-MM-DD).' });
+          if (normalized === undefined) delete next.openedDate;
+          else next.openedDate = normalized;
+        }
         for (const field of ['balance', 'creditLimit', 'statementBalance', 'apr', 'monthlyPayment', 'rewardsPoints']) {
           if ((field === 'creditLimit' || field === 'statementBalance') && patch[field] === null) {
             delete next[field];
@@ -2067,15 +2721,45 @@ async function handleApi(req, res, url) {
         for (const field of ['locked', 'autopay', 'hidden', 'favorite', 'isPrimary']) if (patch[field] !== undefined) next[field] = !!patch[field];
         const updated = { ...target, accounts: accounts.map((account, i) => i === index ? next : account) };
         updateUser(updated);
-        recordAdminAudit('Updated simulator account', { userId, username: target.username, accountId, fields: Object.keys(patch) });
+        const balanceChanged = Number(existing.balance) !== Number(next.balance);
+        recordAdminAudit('Updated simulator account', {
+          userId,
+          username: target.username,
+          accountId,
+          accountName: next.name,
+          accountMask: next.mask,
+          fields: Object.keys(patch),
+          ...(balanceChanged ? { previousBalance: existing.balance, newBalance: next.balance } : {}),
+        }, {
+          category: balanceChanged ? 'money' : 'accounts',
+          severity: balanceChanged ? 'high' : 'low',
+          summary: balanceChanged
+            ? `${auditActor} changed ${next.name} (…${next.mask}) balance for ${target.fullName} (@${target.username}) from ${formatUsdSimple(existing.balance)} to ${formatUsdSimple(next.balance)}.`
+            : `${auditActor} updated ${next.name} (…${next.mask}) settings for ${target.fullName} (@${target.username}).`,
+          target: { type: 'account', id: next.id, label: `${next.name} (…${next.mask}) · ${target.fullName}` },
+        });
         return sendJson(res, 200, { user: publicUser(updated), account: next });
       }
       if (method === 'DELETE') {
         const body = await readBody(req);
         if (body.confirm !== true) return sendJson(res, 400, { error: 'Confirm account deletion.' });
+        const removed = accounts[index];
         const updated = { ...target, accounts: accounts.filter((account) => account.id !== accountId) };
         updateUser(updated);
-        recordAdminAudit('Deleted simulator account', { userId, username: target.username, accountId });
+        recordAdminAudit('Deleted simulator account', {
+          userId,
+          username: target.username,
+          accountId,
+          accountName: removed?.name,
+          accountMask: removed?.mask,
+          previousBalance: removed?.balance,
+        }, {
+          category: 'accounts',
+          outcome: 'warning',
+          severity: 'high',
+          summary: `${auditActor} deleted ${removed?.name || 'account'} (…${removed?.mask || '????'}) from ${target.fullName} (@${target.username}).`,
+          target: { type: 'account', id: accountId, label: `${removed?.name || 'Account'} (…${removed?.mask || '????'}) · ${target.fullName}` },
+        });
         return sendJson(res, 200, { user: publicUser(updated), ok: true });
       }
     }
@@ -2101,16 +2785,35 @@ async function handleApi(req, res, url) {
         const transaction = body.transaction || {};
         const amount = Number(transaction.amount);
         const date = new Date(transaction.date || Date.now());
-        const description = cleanText(transaction.description, 120);
+        const description = sanitizeCustomerDescription(transaction.description, '');
         const category = cleanText(transaction.category || 'Other', 48);
         if (!account || !description || !Number.isFinite(amount) || Math.abs(amount) > 10000000 || Number.isNaN(+date) || !['posted', 'pending'].includes(transaction.status || 'posted')) return sendJson(res, 400, { error: 'Choose an account and provide valid transaction details.' });
+        const previousBalance = Number(account.balance || 0);
         const created = { id: uid(), date: date.toISOString(), description, amount: round2(amount), category, status: transaction.status || 'posted' };
         account.transactions.push(created);
-        account.balance = round2(Number(account.balance || 0) + created.amount);
+        account.transactions = sortTransactionsDesc(account.transactions);
+        account.balance = round2(previousBalance + created.amount);
         if (account.type === 'credit-card') account.statementBalance = account.balance;
         const updated = { ...target, accounts };
         updateUser(updated);
-        recordAdminAudit('Created simulator ledger transaction', { userId, username: target.username, accountId: account.id, transactionId: created.id, amount: created.amount });
+        recordAdminAudit('Created simulator ledger transaction', {
+          userId,
+          username: target.username,
+          accountId: account.id,
+          accountName: account.name,
+          accountMask: account.mask,
+          transactionId: created.id,
+          description: created.description,
+          category: created.category,
+          amount: created.amount,
+          previousBalance,
+          newBalance: account.balance,
+        }, {
+          category: 'money',
+          severity: Math.abs(created.amount) >= 10000 ? 'high' : 'medium',
+          summary: `${auditActor} added ${formatUsdSimple(created.amount)} ("${created.description}") on ${account.name} (…${account.mask}) for ${target.fullName} — balance ${formatUsdSimple(previousBalance)} → ${formatUsdSimple(account.balance)}.`,
+          target: { type: 'account', id: account.id, label: `${account.name} (…${account.mask}) · ${target.fullName}` },
+        });
         return sendJson(res, 201, { user: publicUser(updated), transaction: { ...created, accountId: account.id, accountName: account.name, accountType: account.type } });
       }
       if (matches.length !== 1) return sendJson(res, matches.length ? 409 : 404, { error: matches.length ? 'Transaction ID is not unique.' : 'Simulator transaction not found.' });
@@ -2119,8 +2822,9 @@ async function handleApi(req, res, url) {
         const body = await readBody(req);
         const patch = body.transaction || {};
         const existing = account.transactions[index];
+        const previousBalance = Number(account.balance || 0);
         const updatedTransaction = { ...existing };
-        if (patch.description !== undefined) updatedTransaction.description = cleanText(patch.description, 120);
+        if (patch.description !== undefined) updatedTransaction.description = sanitizeCustomerDescription(patch.description, '');
         if (patch.category !== undefined) updatedTransaction.category = cleanText(patch.category, 48) || 'Other';
         if (patch.amount !== undefined) {
           const amount = Number(patch.amount);
@@ -2137,23 +2841,59 @@ async function handleApi(req, res, url) {
           updatedTransaction.status = patch.status;
         }
         if (!updatedTransaction.description) return sendJson(res, 400, { error: 'Transaction description is required.' });
-        account.balance = round2(Number(account.balance || 0) + updatedTransaction.amount - Number(existing.amount || 0));
+        account.balance = round2(previousBalance + updatedTransaction.amount - Number(existing.amount || 0));
         if (account.type === 'credit-card') account.statementBalance = account.balance;
         account.transactions[index] = updatedTransaction;
+        account.transactions = sortTransactionsDesc(account.transactions);
         const updated = { ...target, accounts };
         updateUser(updated);
-        recordAdminAudit('Updated simulator ledger transaction', { userId, username: target.username, accountId: account.id, transactionId });
+        recordAdminAudit('Updated simulator ledger transaction', {
+          userId,
+          username: target.username,
+          accountId: account.id,
+          accountName: account.name,
+          accountMask: account.mask,
+          transactionId,
+          description: updatedTransaction.description,
+          previousAmount: existing.amount,
+          newAmount: updatedTransaction.amount,
+          previousBalance,
+          newBalance: account.balance,
+        }, {
+          category: 'money',
+          severity: 'medium',
+          summary: `${auditActor} edited "${updatedTransaction.description}" on ${account.name} (…${account.mask}) for ${target.fullName} (amount ${formatUsdSimple(existing.amount)} → ${formatUsdSimple(updatedTransaction.amount)}, balance ${formatUsdSimple(previousBalance)} → ${formatUsdSimple(account.balance)}).`,
+          target: { type: 'account', id: account.id, label: `${account.name} (…${account.mask}) · ${target.fullName}` },
+        });
         return sendJson(res, 200, { user: publicUser(updated), transaction: { ...updatedTransaction, accountId: account.id, accountName: account.name, accountType: account.type } });
       }
       if (method === 'DELETE') {
         const body = await readBody(req);
         if (body.confirm !== true) return sendJson(res, 400, { error: 'Confirm transaction deletion.' });
+        const previousBalance = Number(account.balance || 0);
         const [deletedTransaction] = account.transactions.splice(index, 1);
-        account.balance = round2(Number(account.balance || 0) - Number(deletedTransaction.amount || 0));
+        account.balance = round2(previousBalance - Number(deletedTransaction.amount || 0));
         if (account.type === 'credit-card') account.statementBalance = account.balance;
         const updated = { ...target, accounts };
         updateUser(updated);
-        recordAdminAudit('Deleted simulator ledger transaction', { userId, username: target.username, accountId: account.id, transactionId });
+        recordAdminAudit('Deleted simulator ledger transaction', {
+          userId,
+          username: target.username,
+          accountId: account.id,
+          accountName: account.name,
+          accountMask: account.mask,
+          transactionId,
+          description: deletedTransaction.description,
+          reversedAmount: deletedTransaction.amount,
+          previousBalance,
+          newBalance: account.balance,
+        }, {
+          category: 'money',
+          outcome: 'warning',
+          severity: 'high',
+          summary: `${auditActor} deleted ${formatUsdSimple(deletedTransaction.amount)} ("${deletedTransaction.description}") from ${account.name} (…${account.mask}) for ${target.fullName} — balance automatically reversed from ${formatUsdSimple(previousBalance)} to ${formatUsdSimple(account.balance)}.`,
+          target: { type: 'account', id: account.id, label: `${account.name} (…${account.mask}) · ${target.fullName}` },
+        });
         return sendJson(res, 200, { user: publicUser(updated), ok: true });
       }
     }
@@ -2165,31 +2905,112 @@ async function handleApi(req, res, url) {
       if (!target) return sendJson(res, 404, { error: 'Simulator user not found.' });
       const body = await readBody(req);
       const amount = round2(Number(body.amount));
+      const transferTypeKey = TRANSFER_TYPE_CONFIG[body.transferType] ? body.transferType : 'internal';
+      const transferMeta = TRANSFER_TYPE_CONFIG[transferTypeKey];
       const accounts = JSON.parse(JSON.stringify(target.accounts || []));
-      const from = accounts.find((account) => account.id === body.fromAccountId && DEPOSIT_TYPES.has(account.type));
-      const to = accounts.find((account) => account.id === body.toAccountId && account.id !== body.fromAccountId);
-      if (!from || !to || !Number.isFinite(amount) || amount <= 0 || amount > 10000000) return sendJson(res, 400, { error: 'Choose valid source/destination accounts and a positive transfer amount.' });
-      if (Number(from.balance || 0) < amount) return sendJson(res, 400, { error: 'The source simulator account has insufficient balance.' });
-      if (['auto-loan', 'mortgage'].includes(to.type) && amount > Number(to.balance || 0)) return sendJson(res, 400, { error: 'Payment amount cannot exceed the loan principal balance.' });
-      const transferId = uid();
+      const to = accounts.find((account) => account.id === body.toAccountId);
       const date = new Date(body.date || Date.now());
       if (Number.isNaN(+date)) return sendJson(res, 400, { error: 'Choose a valid transfer date.' });
-      const label = cleanText(body.description || `Simulated transfer to ${to.name}`, 100);
-      from.balance = round2(Number(from.balance || 0) - amount);
-      from.transactions.unshift({ id: uid(), transferId, date: date.toISOString(), description: label, amount: -amount, category: 'Transfer', status: 'posted' });
+      if (!to || !Number.isFinite(amount) || amount <= 0 || amount > 10000000) {
+        return sendJson(res, 400, { error: 'Choose valid accounts and a positive transfer amount.' });
+      }
+      if (['auto-loan', 'mortgage'].includes(to.type) && amount > Number(to.balance || 0)) {
+        return sendJson(res, 400, { error: 'Payment amount cannot exceed the loan principal balance.' });
+      }
+
+      const transferId = uid();
+      const customNote = cleanText(body.description, 100);
+      const customerFrom = accounts.find((account) => account.id === body.fromAccountId && DEPOSIT_TYPES.has(account.type));
+
+      if (!isSuperAdmin && !customerFrom && operator?.linkedUserId && operator.linkedUserId !== target.id) {
+        const linkedOwner = findUserById(operator.linkedUserId);
+        if (!linkedOwner) return sendJson(res, 400, { error: 'Linked personal funding account is unavailable.' });
+        const ownerCopy = JSON.parse(JSON.stringify(linkedOwner));
+        const fundingAccount = (ownerCopy.accounts || []).find(
+          (account) => account.type === 'checking' && (!body.fromAccountId || account.id === body.fromAccountId)
+        );
+        if (!fundingAccount) {
+          return sendJson(res, 400, { error: 'You must have an active personal checking account to fund transfers.' });
+        }
+        if (Number(fundingAccount.balance || 0) < amount) {
+          return sendJson(res, 400, { error: 'Your linked personal checking account has insufficient funds.' });
+        }
+        const debitLabel = sanitizeCustomerDescription(customNote || `${transferMeta.label} to ${target.fullName}`, `${transferMeta.label} to ${target.fullName}`);
+        const creditLabel = sanitizeCustomerDescription(customNote || `${transferMeta.label} from ${linkedOwner.fullName}`, `${transferMeta.label} from ${linkedOwner.fullName}`);
+        fundingAccount.balance = round2(Number(fundingAccount.balance || 0) - amount);
+        fundingAccount.transactions = sortTransactionsDesc([
+          { id: uid(), transferId, date: date.toISOString(), description: debitLabel, amount: -amount, category: transferMeta.fromCategory, status: 'posted' },
+          ...(fundingAccount.transactions || []),
+        ]);
+        const paysDebt = ['credit-card', 'auto-loan', 'mortgage'].includes(to.type);
+        if (paysDebt) {
+          to.balance = round2(Number(to.balance || 0) - amount);
+          to.transactions = sortTransactionsDesc([
+            { id: uid(), transferId, date: date.toISOString(), description: creditLabel, amount: -amount, category: to.type === 'credit-card' ? 'Card payment' : 'Loan payment', status: 'posted' },
+            ...(to.transactions || []),
+          ]);
+        } else {
+          to.balance = round2(Number(to.balance || 0) + amount);
+          to.transactions = sortTransactionsDesc([
+            { id: uid(), transferId, date: date.toISOString(), description: creditLabel, amount, category: transferMeta.toCategory, status: 'posted' },
+            ...(to.transactions || []),
+          ]);
+        }
+        if (to.type === 'credit-card') to.statementBalance = to.balance;
+        updateUser(ownerCopy);
+        const updated = { ...target, accounts };
+        updateUser(updated);
+        recordAdminAudit('Completed funded transfer', { userId, username: target.username, fromOwnerId: linkedOwner.id, fromAccountId: fundingAccount.id, toAccountId: to.id, amount, transferType: transferTypeKey }, {
+          category: 'money',
+          outcome: 'success',
+          severity: 'medium',
+          summary: `${auditActor} sent ${formatUsdSimple(amount)} (${transferMeta.label}) from ${fundingAccount.name} (…${fundingAccount.mask}) to ${target.fullName}'s ${to.name} (…${to.mask}).`,
+          target: { type: 'customer', id: target.id, label: `${target.fullName} (@${target.username})` },
+        });
+        return sendJson(res, 200, { user: publicUser(updated), transferId, amount, transferType: transferTypeKey });
+      }
+
+      if (!customerFrom || customerFrom.id === to.id) {
+        return sendJson(res, 400, { error: 'Choose valid source/destination accounts and a positive transfer amount.' });
+      }
+      if (Number(customerFrom.balance || 0) < amount) {
+        return sendJson(res, 400, { error: 'The source simulator account has insufficient balance.' });
+      }
+      const fromLabel = sanitizeCustomerDescription(customNote || `${transferMeta.label} to ${to.name}`, `${transferMeta.label} to ${to.name}`);
+      const toLabel = sanitizeCustomerDescription(
+        customNote || `${transferMeta.label} from ${customerFrom.name}`,
+        `${transferMeta.label} from ${customerFrom.name}`
+      );
+      customerFrom.balance = round2(Number(customerFrom.balance || 0) - amount);
+      customerFrom.transactions = sortTransactionsDesc([
+        { id: uid(), transferId, date: date.toISOString(), description: fromLabel, amount: -amount, category: transferMeta.fromCategory, status: 'posted' },
+        ...(customerFrom.transactions || []),
+      ]);
       const paysDebt = ['credit-card', 'auto-loan', 'mortgage'].includes(to.type);
       if (paysDebt) {
         to.balance = round2(Number(to.balance || 0) - amount);
-        to.transactions.unshift({ id: uid(), transferId, date: date.toISOString(), description: `Simulated payment from ${from.name}`, amount: -amount, category: to.type === 'credit-card' ? 'Card payment' : 'Loan payment', status: 'posted' });
+        to.transactions = sortTransactionsDesc([
+          { id: uid(), transferId, date: date.toISOString(), description: toLabel, amount: -amount, category: to.type === 'credit-card' ? 'Card payment' : 'Loan payment', status: 'posted' },
+          ...(to.transactions || []),
+        ]);
       } else {
         to.balance = round2(Number(to.balance || 0) + amount);
-        to.transactions.unshift({ id: uid(), transferId, date: date.toISOString(), description: `Simulated transfer from ${from.name}`, amount, category: 'Transfer', status: 'posted' });
+        to.transactions = sortTransactionsDesc([
+          { id: uid(), transferId, date: date.toISOString(), description: toLabel, amount, category: transferMeta.toCategory, status: 'posted' },
+          ...(to.transactions || []),
+        ]);
       }
       if (to.type === 'credit-card') to.statementBalance = to.balance;
       const updated = { ...target, accounts };
       updateUser(updated);
-      recordAdminAudit('Completed simulated admin transfer', { userId, username: target.username, fromAccountId: from.id, toAccountId: to.id, amount });
-      return sendJson(res, 200, { user: publicUser(updated), transferId, amount });
+      recordAdminAudit('Completed simulated admin transfer', { userId, username: target.username, fromAccountId: customerFrom.id, toAccountId: to.id, amount, transferType: transferTypeKey }, {
+        category: 'money',
+        outcome: 'success',
+        severity: 'medium',
+        summary: `${auditActor} posted a ${formatUsdSimple(amount)} ${transferMeta.label} from ${customerFrom.name} (…${customerFrom.mask}) to ${to.name} (…${to.mask}) for ${target.fullName}.`,
+        target: { type: 'customer', id: target.id, label: `${target.fullName} (@${target.username})` },
+      });
+      return sendJson(res, 200, { user: publicUser(updated), transferId, amount, transferType: transferTypeKey });
     }
 
     const sendFromCheckingRoute = pathname.match(/^\/api\/admin\/users\/([^/]+)\/send-from-checking$/);
@@ -2236,36 +3057,45 @@ async function handleApi(req, res, url) {
         return sendJson(res, 400, { error: 'Choose a valid transfer date.' });
       }
       const dateIso = date.toISOString();
-      const memo = cleanText(body.memo || '', 100);
+      const transferTypeKey = TRANSFER_TYPE_CONFIG[body.transferType] ? body.transferType : 'internal';
+      const transferMeta = TRANSFER_TYPE_CONFIG[transferTypeKey];
+      const rawMemo = cleanText(body.memo || '', 100);
+      const memo = rawMemo ? sanitizeCustomerDescription(rawMemo, '') : '';
       const transferId = uid();
+      const prevFromBal = round2(Number(fromAccount.balance || 0));
+      const prevToBal = round2(Number(toAccount.balance || 0));
 
-      fromAccount.balance = round2(Number(fromAccount.balance || 0) - amount);
-      if (!Array.isArray(fromAccount.transactions)) fromAccount.transactions = [];
-      fromAccount.transactions.unshift({
-        id: uid(),
-        transferId,
-        date: dateIso,
-        description: memo
-          ? `Transfer to ${target.fullName} (@${target.username}) — ${memo}`
-          : `Transfer to ${target.fullName} (@${target.username})`,
-        amount: -amount,
-        category: 'Transfer',
-        status: 'posted',
-      });
+      fromAccount.balance = round2(prevFromBal - amount);
+      fromAccount.transactions = sortTransactionsDesc([
+        {
+          id: uid(),
+          transferId,
+          date: dateIso,
+          description: memo
+            ? `Transfer to ${target.fullName} (@${target.username}) — ${memo}`
+            : `Transfer to ${target.fullName} (@${target.username})`,
+          amount: -amount,
+          category: transferMeta.fromCategory,
+          status: 'posted',
+        },
+        ...(fromAccount.transactions || []),
+      ]);
 
-      toAccount.balance = round2(Number(toAccount.balance || 0) + amount);
-      if (!Array.isArray(toAccount.transactions)) toAccount.transactions = [];
-      toAccount.transactions.unshift({
-        id: uid(),
-        transferId,
-        date: dateIso,
-        description: memo
-          ? `Transfer from ${sender.fullName} — ${memo}`
-          : `Transfer from ${sender.fullName}`,
-        amount,
-        category: 'Transfer',
-        status: 'posted',
-      });
+      toAccount.balance = round2(prevToBal + amount);
+      toAccount.transactions = sortTransactionsDesc([
+        {
+          id: uid(),
+          transferId,
+          date: dateIso,
+          description: memo
+            ? `Transfer from ${sender.fullName} — ${memo}`
+            : `Transfer from ${sender.fullName}`,
+          amount,
+          category: transferMeta.toCategory,
+          status: 'posted',
+        },
+        ...(toAccount.transactions || []),
+      ]);
 
       const senderUpdated = { ...sender, accounts: senderAccounts };
       const targetUpdated = { ...target, accounts: targetAccounts };
@@ -2279,7 +3109,17 @@ async function handleApi(req, res, url) {
         toUsername: target.username,
         toAccountId: toAccount.id,
         amount,
+        previousSenderBalance: prevFromBal,
+        newSenderBalance: fromAccount.balance,
+        previousRecipientBalance: prevToBal,
+        newRecipientBalance: toAccount.balance,
         transferId,
+      }, {
+        category: 'money',
+        outcome: 'success',
+        severity: 'medium',
+        summary: `${auditActor} sent ${formatUsdSimple(amount)} from linked checking ${fromAccount.name} (…${fromAccount.mask}) to ${target.fullName}'s ${toAccount.name} (…${toAccount.mask}).`,
+        target: { type: 'customer', id: target.id, label: `${target.fullName} (@${target.username})` },
       });
       return sendJson(res, 200, {
         user: publicUser(targetUpdated),
@@ -2505,9 +3345,16 @@ async function handleApi(req, res, url) {
 
         const updated = JSON.parse(JSON.stringify(target));
         const accounts = updated.accounts || [];
-        const checking = accounts.find((a) => a.type === 'checking');
-        const savings = accounts.find((a) => a.type === 'savings');
-        const creditCards = accounts.filter((a) => a.type === 'credit-card');
+        const requestedAccountId = typeof body.accountId === 'string' && body.accountId.trim() ? body.accountId.trim() : 'all';
+        const selectedAccounts = requestedAccountId === 'all'
+          ? accounts
+          : accounts.filter((a) => a.id === requestedAccountId);
+        if (!selectedAccounts.length) {
+          return sendJson(res, 404, { error: 'Selected simulator account not found.' });
+        }
+        const checkingAccounts = selectedAccounts.filter((a) => a.type === 'checking');
+        const savingsAccounts = selectedAccounts.filter((a) => a.type === 'savings');
+        const creditCards = selectedAccounts.filter((a) => a.type === 'credit-card');
         const purchases = [
           { merchant: 'Whole Foods Market', category: 'Groceries', min: 18, max: 185 },
           { merchant: 'Local Market', category: 'Groceries', min: 12, max: 92 },
@@ -2532,14 +3379,18 @@ async function handleApi(req, res, url) {
         let eventsGenerated = 0;
         let transactionCount = 0;
         let eventRowStartCount = 0;
-        const isOpenOnDate = (account, date) => !account.createdAt || String(account.createdAt).slice(0, 10) <= date.toISOString().slice(0, 10);
+        const isOpenOnDate = (account, date) => {
+          const openIso = effectiveAccountOpenIso(account);
+          return !openIso || String(openIso).slice(0, 10) <= date.toISOString().slice(0, 10);
+        };
         const addTransaction = (account, description, amount, category, date) => {
           if (transactionCount === eventRowStartCount) eventsGenerated += 1;
           if (!Array.isArray(account.transactions)) account.transactions = [];
           const occurredAt = new Date(date);
           occurredAt.setUTCHours(8 + Math.floor(Math.random() * 12), Math.floor(Math.random() * 60), 0, 0);
-          const opened = new Date(account.createdAt);
-          if (!Number.isNaN(+opened) && occurredAt < opened) occurredAt.setTime(opened.getTime());
+          const openIso = effectiveAccountOpenIso(account);
+          const opened = openIso ? new Date(openIso) : null;
+          if (opened && !Number.isNaN(+opened) && occurredAt < opened) occurredAt.setTime(opened.getTime());
           account.transactions.push({
             id: uid(),
             date: occurredAt.toISOString(),
@@ -2559,11 +3410,13 @@ async function handleApi(req, res, url) {
             date.setUTCHours(Math.min(21, 9 + slot * 3), 0, 0, 0);
             eventIndex += 1;
             const roll = Math.random();
-            const eligibleChecking = checking && isOpenOnDate(checking, date);
-            const eligibleSavings = savings && isOpenOnDate(savings, date);
+            const eligibleCheckings = checkingAccounts.filter((a) => isOpenOnDate(a, date));
+            const eligibleChecking = eligibleCheckings.length ? eligibleCheckings[eventIndex % eligibleCheckings.length] : null;
+            const eligibleSavingsList = savingsAccounts.filter((a) => isOpenOnDate(a, date));
+            const eligibleSavings = eligibleSavingsList.length ? eligibleSavingsList[eventIndex % eligibleSavingsList.length] : null;
             const eligibleCards = creditCards.filter((card) => isOpenOnDate(card, date) && Number(card.balance) < Number(card.creditLimit || 100000));
-            const eligibleYieldAccount = accounts.find((account) => ['savings', 'cd'].includes(account.type) && isOpenOnDate(account, date));
-            const eligibleLoan = accounts.find((account) => ['mortgage', 'auto-loan'].includes(account.type) && isOpenOnDate(account, date) && Number(account.balance || 0) > 0);
+            const eligibleYieldAccount = selectedAccounts.find((account) => ['savings', 'cd'].includes(account.type) && isOpenOnDate(account, date));
+            const eligibleLoan = selectedAccounts.find((account) => ['mortgage', 'auto-loan'].includes(account.type) && isOpenOnDate(account, date) && Number(account.balance || 0) > 0);
 
             if (roll < 0.36 && eligibleCards.length) {
               const card = eligibleCards[Math.floor(Math.random() * eligibleCards.length)];
@@ -2580,38 +3433,38 @@ async function handleApi(req, res, url) {
 
             if (roll < 0.68 && eligibleChecking) {
               const purchase = purchases[Math.floor(Math.random() * purchases.length)];
-              const amount = Math.min(amountBetween(purchase.min, purchase.max), Math.max(0, Number(checking.balance || 0) - 5));
+              const amount = Math.min(amountBetween(purchase.min, purchase.max), Math.max(0, Number(eligibleChecking.balance || 0) - 5));
               if (amount >= 1) {
-                checking.balance = roundAmount(Number(checking.balance || 0) - amount);
-                addTransaction(checking, `${purchase.merchant} · simulated debit`, -amount, purchase.category, date);
+                eligibleChecking.balance = roundAmount(Number(eligibleChecking.balance || 0) - amount);
+                addTransaction(eligibleChecking, `${purchase.merchant} · simulated debit`, -amount, purchase.category, date);
                 continue;
               }
             }
 
             if (roll < 0.83 && eligibleChecking) {
               const amount = amountBetween(850, 3400);
-              checking.balance = roundAmount(Number(checking.balance || 0) + amount);
-              addTransaction(checking, 'Direct deposit · Northstar Payroll', amount, 'Income', date);
+              eligibleChecking.balance = roundAmount(Number(eligibleChecking.balance || 0) + amount);
+              addTransaction(eligibleChecking, 'Direct deposit · Northstar Payroll', amount, 'Income', date);
               continue;
             }
 
-            if (roll < 0.93 && eligibleChecking && eligibleSavings && Number(checking.balance || 0) > 100) {
-              const amount = Math.min(amountBetween(50, 425), Number(checking.balance || 0) - 25);
-              checking.balance = roundAmount(Number(checking.balance || 0) - amount);
-              savings.balance = roundAmount(Number(savings.balance || 0) + amount);
-              addTransaction(checking, `Transfer to ${savings.name} · simulated`, -amount, 'Transfer', date);
-              addTransaction(savings, `Transfer from ${checking.name} · simulated`, amount, 'Transfer', date);
+            if (roll < 0.93 && eligibleChecking && eligibleSavings && Number(eligibleChecking.balance || 0) > 100) {
+              const amount = Math.min(amountBetween(50, 425), Number(eligibleChecking.balance || 0) - 25);
+              eligibleChecking.balance = roundAmount(Number(eligibleChecking.balance || 0) - amount);
+              eligibleSavings.balance = roundAmount(Number(eligibleSavings.balance || 0) + amount);
+              addTransaction(eligibleChecking, `Transfer to ${eligibleSavings.name} · simulated`, -amount, 'Transfer', date);
+              addTransaction(eligibleSavings, `Transfer from ${eligibleChecking.name} · simulated`, amount, 'Transfer', date);
               continue;
             }
 
             if (eligibleChecking && eligibleCards.length) {
               const card = creditCards.filter((item) => isOpenOnDate(item, date) && Number(item.balance || 0) > 0)[0];
               if (card) {
-                const amount = Math.min(amountBetween(35, 250), Number(card.balance), Number(checking.balance || 0));
+                const amount = Math.min(amountBetween(35, 250), Number(card.balance), Number(eligibleChecking.balance || 0));
                 if (amount >= 1) {
-                  checking.balance = roundAmount(Number(checking.balance || 0) - amount);
+                  eligibleChecking.balance = roundAmount(Number(eligibleChecking.balance || 0) - amount);
                   card.balance = roundAmount(Number(card.balance || 0) - amount);
-                  addTransaction(checking, `Payment to ${card.name} · simulated`, -amount, 'Credit card payment', date);
+                  addTransaction(eligibleChecking, `Payment to ${card.name} · simulated`, -amount, 'Credit card payment', date);
                   addTransaction(card, 'Payment received — thank you · simulated', -amount, 'Payment', date);
                   continue;
                 }
@@ -2620,11 +3473,11 @@ async function handleApi(req, res, url) {
 
             if (eligibleChecking && eligibleLoan && cadence === 'monthly' && date.getUTCDate() <= 5) {
               const due = Number(eligibleLoan.monthlyPayment || 250);
-              const amount = Math.min(due, Number(eligibleLoan.balance || 0), Number(checking.balance || 0));
+              const amount = Math.min(due, Number(eligibleLoan.balance || 0), Number(eligibleChecking.balance || 0));
               if (amount >= 1) {
-                checking.balance = roundAmount(Number(checking.balance || 0) - amount);
+                eligibleChecking.balance = roundAmount(Number(eligibleChecking.balance || 0) - amount);
                 eligibleLoan.balance = roundAmount(Number(eligibleLoan.balance || 0) - amount);
-                addTransaction(checking, `Payment to ${eligibleLoan.name} · simulated`, -amount, 'Loan payment', date);
+                addTransaction(eligibleChecking, `Payment to ${eligibleLoan.name} · simulated`, -amount, 'Loan payment', date);
                 addTransaction(eligibleLoan, 'Monthly loan payment received · simulated', -amount, 'Loan payment', date);
                 continue;
               }
@@ -2632,8 +3485,8 @@ async function handleApi(req, res, url) {
 
             if (eligibleChecking) {
               const amount = amountBetween(850, 3400);
-              checking.balance = roundAmount(Number(checking.balance || 0) + amount);
-              addTransaction(checking, 'Direct deposit · Northstar Payroll', amount, 'Income', date);
+              eligibleChecking.balance = roundAmount(Number(eligibleChecking.balance || 0) + amount);
+              addTransaction(eligibleChecking, 'Direct deposit · Northstar Payroll', amount, 'Income', date);
               continue;
             }
 
@@ -2669,12 +3522,12 @@ async function handleApi(req, res, url) {
 
         if (transactionCount === 0) return sendJson(res, 400, { error: 'No transactions could be generated for the selected accounts and dates. Check account opening dates and balances.' });
         for (const account of accounts) {
-          account.transactions = (account.transactions || []).sort((a, b) => new Date(b.date) - new Date(a.date));
+          account.transactions = sortTransactionsDesc(account.transactions);
           if (account.type === 'credit-card') account.statementBalance = roundAmount(Number(account.balance || 0));
         }
         updateUser(updated);
         recordAdminAudit('Generated simulator transaction history', {
-          userId: target.id, username: target.username, startDate: body.startDate, endDate: body.endDate,
+          userId: target.id, username: target.username, accountId: requestedAccountId, startDate: body.startDate, endDate: body.endDate,
           cadence, periods: periods.length, eventsRequested: eventIndex, eventsGenerated, transactionsAdded: transactionCount,
         });
         return sendJson(res, 200, { user: publicUser(updated), eventsGenerated, transactionsAdded: transactionCount });
@@ -2716,6 +3569,15 @@ async function handleApi(req, res, url) {
         }
         const status = patch.status ?? target.status ?? 'active';
         if (!['active', 'suspended'].includes(status)) return sendJson(res, 400, { error: 'Status must be active or suspended.' });
+        const normalizedAccounts = [];
+        for (const a of accounts) {
+          const normalizedOpen = a.openedDate !== undefined ? normalizeOpenedDate(a.openedDate) : undefined;
+          if (normalizedOpen === null) return sendJson(res, 400, { error: 'Each account opening date must be a valid YYYY-MM-DD date.' });
+          const nextAcc = { ...a, balance: round2(Number(a.balance)), transactions: sortTransactionsDesc(a.transactions) };
+          if (normalizedOpen) nextAcc.openedDate = normalizedOpen;
+          else if (a.openedDate === '' || a.openedDate === null) delete nextAcc.openedDate;
+          normalizedAccounts.push(nextAcc);
+        }
         const updated = {
           ...target,
           ...patch,
@@ -2730,7 +3592,7 @@ async function handleApi(req, res, url) {
           phone: cleanText(patch.phone ?? target.phone ?? '', 40),
           address: cleanText(patch.address ?? target.address ?? '', 200),
           status,
-          accounts: accounts.map((a) => ({ ...a, balance: round2(Number(a.balance)) })),
+          accounts: normalizedAccounts,
           passwordHash: target.passwordHash,
           updatedAt: new Date().toISOString(),
         };
@@ -2765,6 +3627,21 @@ async function handleApi(req, res, url) {
   const resolvedAuth = getAuthUserResolved(req, url);
   const user = resolvedAuth.user;
   if (!user) return sendJson(res, 401, { error: 'Not signed in' });
+  const customerTarget = { type: 'customer', id: user.id, label: `${user.fullName} (@${user.username})` };
+  const recordCustomerAudit = (action, opts = {}) =>
+    recordAuditEvent({
+      actor: user.username,
+      actorType: 'customer',
+      action,
+      target: opts.target || customerTarget,
+      ...opts,
+      details: {
+        userId: user.id,
+        username: user.username,
+        ...(resolvedAuth.sessionRole === 'impersonated' ? { viaImpersonation: true } : {}),
+        ...(opts.details || {}),
+      },
+    });
 
   if (pathname === '/api/auth/me' && method === 'GET') {
     const linkedAdmin = resolvedAuth.sessionRole === 'impersonated' ? null : buildLinkedAdminSummary(user.id);
@@ -2773,19 +3650,55 @@ async function handleApi(req, res, url) {
 
   if (pathname === '/api/auth/switch-to-admin' && method === 'POST') {
     if (resolvedAuth.sessionRole === 'impersonated') {
+      recordCustomerAudit('Blocked switch to admin console', {
+        category: 'security',
+        outcome: 'blocked',
+        severity: 'high',
+        reason: 'Switching into the administrator console is not allowed while inside an impersonated customer preview.',
+        summary: `Blocked switch-to-admin attempt on ${user.fullName} (@${user.username}) from impersonated preview mode.`,
+      });
       return sendJson(res, 403, { error: 'Cannot switch to administrator console from an impersonated customer preview.' });
     }
     const linked = findAdminByLinkedUserId(user.id);
-    if (!linked) return sendJson(res, 403, { error: 'This customer account does not have administrator access.' });
+    if (!linked) {
+      recordCustomerAudit('Blocked switch to admin console', {
+        category: 'security',
+        outcome: 'blocked',
+        severity: 'medium',
+        reason: 'This customer account does not have linked administrator access.',
+        summary: `Customer ${user.fullName} (@${user.username}) attempted to open the admin console without admin privileges.`,
+      });
+      return sendJson(res, 403, { error: 'This customer account does not have administrator access.' });
+    }
     if (linked.status === 'disabled') {
+      recordCustomerAudit('Blocked switch to admin console', {
+        category: 'security',
+        outcome: 'blocked',
+        severity: 'high',
+        reason: linked.lockMessage || 'Linked administrator access is currently disabled by the Super Administrator.',
+        summary: `Blocked ${user.fullName} (@${user.username}) from switching to the admin console because their admin access is disabled.`,
+      });
       return sendJson(res, 403, { error: linked.lockMessage || 'This administrator account is disabled. Contact the super administrator.' });
     }
     if (linked.username.toLowerCase() !== user.username.toLowerCase() || linked.passwordHash !== user.passwordHash) {
+      recordCustomerAudit('Blocked switch to admin console', {
+        category: 'security',
+        outcome: 'blocked',
+        severity: 'high',
+        reason: 'Linked customer and administrator credentials are out of sync.',
+        summary: `Blocked ${user.fullName} (@${user.username}) from switching to the admin console due to out-of-sync credentials.`,
+      });
       return sendJson(res, 403, { error: 'Linked administrator credentials are out of sync. Sign in again or contact the super administrator.' });
     }
     const token = createAdminToken(linked.username, linked.role);
     createSession(token, `admin:${linked.username}`, linked.role);
-    auditAdmin('Switched from customer view to admin console', { userId: user.id, adminId: linked.id, username: linked.username, role: linked.role }, linked.username);
+    auditAdmin('Switched from customer view to admin console', { userId: user.id, adminId: linked.id, username: linked.username, role: linked.role }, linked.username, {
+      actorType: linked.role === 'auditor' ? 'auditor' : 'admin',
+      category: 'auth',
+      outcome: 'success',
+      severity: 'low',
+      summary: `${user.fullName} (@${linked.username}) switched from customer banking into the Admin Console.`,
+    });
     return sendJson(res, 200, {
       token,
       admin: {
@@ -2803,18 +3716,48 @@ async function handleApi(req, res, url) {
   if (pathname === '/api/auth/change-password' && method === 'POST') {
     const body = await readBody(req);
     if (!verifyPassword(String(body.currentPassword || ''), user.passwordHash)) {
+      recordCustomerAudit('Failed password change attempt', {
+        category: 'auth',
+        outcome: 'failed',
+        severity: 'medium',
+        reason: 'The current password entered was incorrect.',
+        summary: `Customer ${user.fullName} (@${user.username}) tried to change their password, but entered the wrong current password.`,
+      });
       return sendJson(res, 400, { error: 'Your current password is incorrect.' });
     }
     const linkedAdmin = findAdminByLinkedUserId(user.id);
     const minLen = linkedAdmin ? 10 : 8;
     if (String(body.newPassword || '').length < minLen) {
+      recordCustomerAudit('Failed password change attempt', {
+        category: 'auth',
+        outcome: 'failed',
+        severity: 'low',
+        reason: `New password was shorter than the required ${minLen}-character minimum.`,
+        summary: `Customer ${user.fullName} (@${user.username}) entered a new password that was too short.`,
+      });
       return sendJson(res, 400, { error: `New password must be at least ${minLen} characters${linkedAdmin ? ' because this account has linked administrator access' : ''}.` });
     }
-    updateUser({ ...user, passwordHash: hashPassword(String(body.newPassword)) }, { preserveToken: resolvedAuth.token });
+    const updatedUser = { ...user, passwordHash: hashPassword(String(body.newPassword)) };
+    updateUser(updatedUser, { preserveToken: resolvedAuth.token });
     if (linkedAdmin) {
-      auditAdmin('Linked customer changed shared password', { userId: user.id, adminId: linkedAdmin.id, username: user.username }, user.username);
+      auditAdmin('Linked customer changed shared password', { userId: user.id, adminId: linkedAdmin.id, username: user.username }, user.username, {
+        actorType: linkedAdmin.role === 'auditor' ? 'auditor' : 'admin',
+        category: 'auth',
+        outcome: 'success',
+        severity: 'high',
+        summary: `${user.fullName} (@${user.username}) changed their shared customer & administrator password; other sessions were signed out.`,
+        target: customerTarget,
+      });
+    } else {
+      recordCustomerAudit('Customer changed password', {
+        category: 'auth',
+        outcome: 'success',
+        severity: 'high',
+        summary: `Customer ${user.fullName} (@${user.username}) changed their online banking password; other sessions were signed out.`,
+      });
     }
-    return sendJson(res, 200, { ok: true });
+    const linkedSummary = resolvedAuth.sessionRole === 'impersonated' ? null : buildLinkedAdminSummary(user.id);
+    return sendJson(res, 200, { ok: true, user: publicUser(updatedUser), ...(linkedSummary ? { linkedAdmin: linkedSummary } : {}) });
   }
 
   if (pathname === '/api/accounts' && method === 'POST') {
@@ -2826,8 +3769,17 @@ async function handleApi(req, res, url) {
       return sendJson(res, 400, { error: 'Opening deposit must be between $0 and $100,000' });
     }
     const updated = JSON.parse(JSON.stringify(user));
-    updated.accounts.push(buildAccount(product, deposit));
+    const createdAcct = buildAccount(product, deposit);
+    updated.accounts.push(createdAcct);
     updateUser(updated);
+    recordCustomerAudit('Customer opened new account', {
+      category: 'accounts',
+      outcome: 'success',
+      severity: 'info',
+      summary: `${user.fullName} (@${user.username}) opened a new ${createdAcct.name} (…${createdAcct.mask}) with ${formatUsdSimple(deposit)} opening deposit.`,
+      target: { type: 'account', id: createdAcct.id, label: `${createdAcct.name} (…${createdAcct.mask}) · ${user.fullName}` },
+      details: { accountId: createdAcct.id, accountName: createdAcct.name, accountMask: createdAcct.mask, product: product.name, openingDeposit: deposit },
+    });
     return sendJson(res, 201, { user: publicUser(updated) });
   }
 
@@ -2847,6 +3799,14 @@ async function handleApi(req, res, url) {
       return sendJson(res, 400, { error: 'Choose two different accounts.' });
     }
     if (amount > from.balance) {
+      recordCustomerAudit('Failed customer transfer', {
+        category: 'money',
+        outcome: 'failed',
+        severity: 'medium',
+        reason: `Insufficient funds in ${from.name} (…${from.mask}) — tried to send ${formatUsdSimple(amount)} with only ${formatUsdSimple(from.balance)} available.`,
+        summary: `${user.fullName} (@${user.username}) tried to transfer ${formatUsdSimple(amount)} from ${from.name} (…${from.mask}) to ${to.name} (…${to.mask}), but did not have enough funds.`,
+        details: { fromAccount: `${from.name} (…${from.mask})`, toAccount: `${to.name} (…${to.mask})`, amount, availableBalance: from.balance },
+      });
       return sendJson(res, 400, { error: 'Insufficient funds in the "from" account.' });
     }
     from.balance = round2(from.balance - amount);
@@ -2869,6 +3829,13 @@ async function handleApi(req, res, url) {
       status: 'posted',
     });
     updateUser(updated);
+    recordCustomerAudit('Customer completed internal transfer', {
+      category: 'money',
+      outcome: 'success',
+      severity: amount >= 10000 ? 'high' : 'medium',
+      summary: `${user.fullName} (@${user.username}) transferred ${formatUsdSimple(amount)} from ${from.name} (…${from.mask}) to ${to.name} (…${to.mask}).`,
+      details: { fromAccount: `${from.name} (…${from.mask})`, toAccount: `${to.name} (…${to.mask})`, amount, memo: body.memo || '' },
+    });
     return sendJson(res, 200, { user: publicUser(updated) });
   }
 
@@ -2904,6 +3871,14 @@ async function handleApi(req, res, url) {
       return sendJson(res, 400, { error: 'Payee or eligible funding account not found.' });
     }
     if (amount > from.balance) {
+      recordCustomerAudit('Failed bill payment', {
+        category: 'money',
+        outcome: 'failed',
+        severity: 'medium',
+        reason: `Insufficient funds in ${from.name} (…${from.mask}) — tried to pay ${formatUsdSimple(amount)} with ${formatUsdSimple(from.balance)} available.`,
+        summary: `${user.fullName} (@${user.username}) could not pay ${formatUsdSimple(amount)} to ${payee.name} due to insufficient funds.`,
+        details: { payee: payee.name, fromAccount: `${from.name} (…${from.mask})`, amount, availableBalance: from.balance },
+      });
       return sendJson(res, 400, { error: 'Insufficient funds in the selected account.' });
     }
     from.balance = round2(from.balance - amount);
@@ -2916,15 +3891,31 @@ async function handleApi(req, res, url) {
       status: 'posted',
     });
     updateUser(updated);
+    recordCustomerAudit('Customer paid bill', {
+      category: 'money',
+      outcome: 'success',
+      severity: 'medium',
+      summary: `${user.fullName} (@${user.username}) paid ${formatUsdSimple(amount)} to ${payee.name} from ${from.name} (…${from.mask}).`,
+      details: { payee: payee.name, fromAccount: `${from.name} (…${from.mask})`, amount },
+    });
     return sendJson(res, 200, { user: publicUser(updated) });
   }
 
   if (pathname === '/api/zelle' && method === 'POST') {
     const body = await readBody(req);
-    if (!body.to || !String(body.to).trim()) {
+    const recipient = String(body.to || '').trim();
+    if (!recipient) {
       return sendJson(res, 400, { error: 'Enter a recipient.' });
     }
     if (Number(body.amount) > 2500) {
+      recordCustomerAudit('Blocked Zelle payment (limit exceeded)', {
+        category: 'money',
+        outcome: 'blocked',
+        severity: 'medium',
+        reason: `Requested Zelle payment of ${formatUsdSimple(body.amount)} exceeded the $2,500.00 per-payment limit.`,
+        summary: `${user.fullName} (@${user.username}) tried to send ${formatUsdSimple(body.amount)} via Zelle to ${recipient}, which exceeded the $2,500 limit.`,
+        details: { recipient, amount: Number(body.amount), limit: 2500 },
+      });
       return sendJson(res, 400, { error: 'Zelle® payments in this Chase experience are limited to $2,500 per payment.' });
     }
     const amount = money(body.amount, 2500);
@@ -2937,18 +3928,33 @@ async function handleApi(req, res, url) {
       return sendJson(res, 400, { error: 'You need a checking account to send money with Zelle®.' });
     }
     if (amount > from.balance) {
+      recordCustomerAudit('Failed Zelle payment', {
+        category: 'money',
+        outcome: 'failed',
+        severity: 'medium',
+        reason: `Insufficient funds in ${from.name} (…${from.mask}) — tried to send ${formatUsdSimple(amount)} with ${formatUsdSimple(from.balance)} available.`,
+        summary: `${user.fullName} (@${user.username}) could not send ${formatUsdSimple(amount)} via Zelle to ${recipient} due to insufficient funds.`,
+        details: { recipient, amount, fromAccount: `${from.name} (…${from.mask})`, availableBalance: from.balance },
+      });
       return sendJson(res, 400, { error: 'Insufficient funds in your checking account.' });
     }
     from.balance = round2(from.balance - amount);
     from.transactions.unshift({
       id: uid(),
       date: new Date().toISOString(),
-      description: `Zelle payment to ${String(body.to).trim()}${body.memo ? ` — ${body.memo}` : ''}`,
+      description: `Zelle payment to ${recipient}${body.memo ? ` — ${body.memo}` : ''}`,
       amount: -amount,
       category: 'Zelle',
       status: 'posted',
     });
     updateUser(updated);
+    recordCustomerAudit('Customer sent Zelle payment', {
+      category: 'money',
+      outcome: 'success',
+      severity: 'medium',
+      summary: `${user.fullName} (@${user.username}) sent ${formatUsdSimple(amount)} via Zelle to ${recipient} from ${from.name} (…${from.mask}).`,
+      details: { recipient, amount, fromAccount: `${from.name} (…${from.mask})`, memo: body.memo || '' },
+    });
     return sendJson(res, 200, { user: publicUser(updated) });
   }
 
@@ -2991,6 +3997,13 @@ async function handleApi(req, res, url) {
       status: 'posted',
     });
     updateUser(updated);
+    recordCustomerAudit('Customer paid credit card', {
+      category: 'money',
+      outcome: 'success',
+      severity: 'medium',
+      summary: `${user.fullName} (@${user.username}) paid ${formatUsdSimple(amount)} toward ${card.name} (…${card.mask}) from ${from.name} (…${from.mask}).`,
+      details: { card: `${card.name} (…${card.mask})`, fromAccount: `${from.name} (…${from.mask})`, amount },
+    });
     return sendJson(res, 200, { user: publicUser(updated) });
   }
 
@@ -3055,6 +4068,13 @@ async function handleApi(req, res, url) {
       status: 'posted',
     });
     updateUser(updated);
+    recordCustomerAudit('Customer deposited check (QuickDeposit)', {
+      category: 'money',
+      outcome: 'success',
+      severity: 'medium',
+      summary: `${user.fullName} (@${user.username}) deposited check #${String(body.checkNumber || '1042').trim()} for ${formatUsdSimple(amount)} into ${acct.name} (…${acct.mask}).`,
+      details: { account: `${acct.name} (…${acct.mask})`, checkNumber: String(body.checkNumber || '1042').trim(), amount },
+    });
     return sendJson(res, 200, { user: publicUser(updated) });
   }
 
@@ -3075,6 +4095,14 @@ async function handleApi(req, res, url) {
     const from = updated.accounts.find((a) => a.id === body.fromId && (a.type === 'checking' || a.type === 'savings'));
     if (!from) return sendJson(res, 400, { error: 'Source account not found.' });
     if (amount + fee > from.balance) {
+      recordCustomerAudit('Failed wire transfer', {
+        category: 'money',
+        outcome: 'failed',
+        severity: 'high',
+        reason: `Insufficient funds in ${from.name} (…${from.mask}) — needed ${formatUsdSimple(amount + fee)} (including $${fee} wire fee) with ${formatUsdSimple(from.balance)} available.`,
+        summary: `${user.fullName} (@${user.username}) could not send a ${formatUsdSimple(amount)} ${wireType} wire to ${recipient} due to insufficient funds.`,
+        details: { wireType, recipient, amount, fee, fromAccount: `${from.name} (…${from.mask})`, availableBalance: from.balance },
+      });
       return sendJson(res, 400, { error: `Insufficient funds (includes $${fee} wire fee).` });
     }
     from.balance = round2(from.balance - amount - fee);
@@ -3095,6 +4123,13 @@ async function handleApi(req, res, url) {
       status: 'posted',
     });
     updateUser(updated);
+    recordCustomerAudit('Customer sent wire transfer', {
+      category: 'money',
+      outcome: 'success',
+      severity: 'high',
+      summary: `${user.fullName} (@${user.username}) sent a ${formatUsdSimple(amount)} ${wireType} wire (+$${fee} fee) to ${recipient} from ${from.name} (…${from.mask}).`,
+      details: { wireType, recipient, amount, fee, fromAccount: `${from.name} (…${from.mask})` },
+    });
     return sendJson(res, 200, { user: publicUser(updated) });
   }
 
@@ -3119,6 +4154,18 @@ async function handleApi(req, res, url) {
       acct.autopayDay = Math.min(28, Math.max(1, Math.round(body.autopayDay)));
     }
     updateUser(updated);
+    const changesDesc = [
+      typeof body.locked === 'boolean' ? (body.locked ? 'locked card' : 'unlocked card') : null,
+      typeof body.autopay === 'boolean' ? (body.autopay ? 'enabled autopay' : 'disabled autopay') : null,
+    ].filter(Boolean).join(' & ') || 'updated card controls';
+    recordCustomerAudit('Customer updated card controls', {
+      category: 'accounts',
+      outcome: 'success',
+      severity: typeof body.locked === 'boolean' ? 'medium' : 'info',
+      summary: `${user.fullName} (@${user.username}) ${changesDesc} on ${acct.name} (…${acct.mask}).`,
+      target: { type: 'account', id: acct.id, label: `${acct.name} (…${acct.mask}) · ${user.fullName}` },
+      details: { accountId: acct.id, accountName: acct.name, accountMask: acct.mask, locked: acct.locked, autopay: acct.autopay },
+    });
     return sendJson(res, 200, { user: publicUser(updated) });
   }
 
@@ -3127,10 +4174,27 @@ async function handleApi(req, res, url) {
     const card = user.accounts.find((a) => a.id === body.cardId && a.type === 'credit-card');
     if (!card) return sendJson(res, 404, { error: 'Card not found.' });
     if (!verifyPassword(String(body.password || ''), user.passwordHash)) {
-      recordFailure(req, `reveal:${user.id}`, 15 * 60 * 1000);
+      const attemptCount = recordFailure(req, `reveal:${user.id}`, 15 * 60 * 1000);
+      recordCustomerAudit('Failed card detail reveal', {
+        category: 'security',
+        outcome: 'failed',
+        severity: 'high',
+        reason: `The account password entered to reveal ${card.name} (…${card.mask}) card number was incorrect (attempt ${attemptCount}).`,
+        summary: `Customer ${user.fullName} (@${user.username}) failed password verification while trying to view card details for ${card.name} (…${card.mask}).`,
+        target: { type: 'account', id: card.id, label: `${card.name} (…${card.mask}) · ${user.fullName}` },
+        details: { accountId: card.id, accountName: card.name, accountMask: card.mask, attemptCount },
+      });
       sendJson(res, 400, { error: 'That password is incorrect.' });
       return;
     }
+    recordCustomerAudit('Customer revealed card details', {
+      category: 'security',
+      outcome: 'success',
+      severity: 'medium',
+      summary: `${user.fullName} (@${user.username}) verified their password and viewed card details for ${card.name} (…${card.mask}).`,
+      target: { type: 'account', id: card.id, label: `${card.name} (…${card.mask}) · ${user.fullName}` },
+      details: { accountId: card.id, accountName: card.name, accountMask: card.mask },
+    });
     // Sample PAN only. Real card numbers are never stored by this Chase experience.
     const pan = `4117 8234 5690 ${card.mask}`;
     return sendJson(res, 200, { cardNumber: pan, expiry: '08/29', cvv: '482' });
@@ -3143,12 +4207,22 @@ async function handleApi(req, res, url) {
     if (!card) return sendJson(res, 404, { error: 'Card not found.' });
     const reasons = new Set(['lost', 'stolen', 'damaged', 'not-received']);
     if (!reasons.has(body.reason)) return sendJson(res, 400, { error: 'Choose a replacement reason.' });
+    const oldMask = card.mask;
     card.mask = mask4();
     card.locked = true;
     card.replacedAt = new Date().toISOString();
     card.replacementReason = body.reason;
     if (!Array.isArray(updated.disputes)) updated.disputes = [];
     updateUser(updated);
+    recordCustomerAudit('Customer requested card replacement', {
+      category: 'security',
+      outcome: 'warning',
+      severity: body.reason === 'stolen' ? 'high' : 'medium',
+      reason: `Card reported as "${body.reason}" — old card …${oldMask} locked and replaced with …${card.mask}.`,
+      summary: `${user.fullName} (@${user.username}) replaced ${card.name} (…${oldMask} → …${card.mask}) because it was ${body.reason}.`,
+      target: { type: 'account', id: card.id, label: `${card.name} (…${card.mask}) · ${user.fullName}` },
+      details: { accountId: card.id, oldMask, newMask: card.mask, replacementReason: body.reason },
+    });
     return sendJson(res, 200, { user: publicUser(updated) });
   }
 
@@ -3186,6 +4260,14 @@ async function handleApi(req, res, url) {
     });
     transaction.disputedAt = new Date().toISOString();
     updateUser(updated);
+    recordCustomerAudit('Customer opened transaction dispute', {
+      category: 'support',
+      outcome: 'warning',
+      severity: 'high',
+      reason: body.reason,
+      summary: `${user.fullName} (@${user.username}) disputed a ${formatUsdSimple(transaction.amount)} charge ("${transaction.description}") on ${account.name} (…${account.mask}).`,
+      details: { accountName: account.name, accountMask: account.mask, merchant: transaction.description, amount: transaction.amount, disputeReason: body.reason },
+    });
     return sendJson(res, 201, { user: publicUser(updated) });
   }
 
@@ -3233,6 +4315,13 @@ async function handleApi(req, res, url) {
       }
     }
     updateUser(updated);
+    recordCustomerAudit('Customer placed investment trade', {
+      category: 'money',
+      outcome: 'success',
+      severity: total >= 10000 ? 'high' : 'medium',
+      summary: `${user.fullName} (@${user.username}) ${side === 'buy' ? 'bought' : 'sold'} ${shares} shares of ${quote.symbol} (${formatUsdSimple(total)}).`,
+      details: { side, symbol: quote.symbol, shares, price: quote.price, total },
+    });
     return sendJson(res, 200, { user: publicUser(updated) });
   }
 
@@ -3284,6 +4373,12 @@ async function handleApi(req, res, url) {
 
   if (pathname === '/api/auth/sign-out-all' && method === 'POST') {
     deleteSessionsForUser(user.id);
+    recordCustomerAudit('Customer signed out of all devices', {
+      category: 'security',
+      outcome: 'success',
+      severity: 'medium',
+      summary: `${user.fullName} (@${user.username}) revoked all active sign-in sessions across all devices.`,
+    });
     return sendJson(res, 200, { ok: true }, sessionCookieHeader(req));
   }
 
@@ -3301,8 +4396,20 @@ async function handleApi(req, res, url) {
       return sendJson(res, 400, { error: 'Enter a valid phone number.' });
     }
     if (address.length < 5) return sendJson(res, 400, { error: 'Enter your mailing address.' });
+    const changedFields = [];
+    if (fullName !== user.fullName) changedFields.push('full name');
+    if (email !== user.email) changedFields.push('email');
+    if (phone !== user.phone) changedFields.push('phone');
+    if (address !== user.address) changedFields.push('address');
     const updated = { ...user, fullName, email, phone, address };
     updateUser(updated);
+    recordCustomerAudit('Customer updated profile', {
+      category: 'customers',
+      outcome: 'success',
+      severity: changedFields.includes('email') || changedFields.includes('phone') ? 'medium' : 'info',
+      summary: `${user.fullName} (@${user.username}) updated their contact profile (${changedFields.length ? changedFields.join(', ') : 'confirmed details'}).`,
+      details: { changedFields, email, phone },
+    });
     return sendJson(res, 200, { user: publicUser(updated) });
   }
 
@@ -3616,6 +4723,13 @@ async function handleApi(req, res, url) {
     }
     updated.security = { ...(updated.security || defaultSecurity()), ...patch };
     updateUser(updated);
+    recordCustomerAudit('Customer updated security settings', {
+      category: 'security',
+      outcome: 'success',
+      severity: 'medium',
+      summary: `${user.fullName} (@${user.username}) updated their account security preferences (${Object.entries(patch).map(([k, v]) => `${k}: ${v ? 'On' : 'Off'}`).join(', ') || 'saved'}).`,
+      details: patch,
+    });
     return sendJson(res, 200, { user: publicUser(updated) });
   }
 
@@ -3651,6 +4765,13 @@ async function handleApi(req, res, url) {
       readByAdmin: false,
     });
     updateUser(updated);
+    recordCustomerAudit('Customer sent secure message', {
+      category: 'support',
+      outcome: 'success',
+      severity: category === 'security' || category === 'dispute' ? 'medium' : 'info',
+      summary: `${user.fullName} (@${user.username}) sent a ${category} message: "${subject}".`,
+      details: { subject, category },
+    });
     return sendJson(res, 201, { user: publicUser(updated) });
   }
 
@@ -3741,7 +4862,10 @@ async function dispatchApi(req, res, url) {
     res.end = originalEnd;
     if (!res.headersSent) sendJson(res, error.status || 500, { error: error.status ? error.message : 'Internal server error' });
     else originalEnd();
-  } finally { release(); }
+  } finally {
+    currentRequestMeta = null;
+    release();
+  }
 }
 
 export async function handleVercelRequest(req, res) {
@@ -3805,7 +4929,7 @@ if (process.env.VERCEL !== '1' && process.env.CLOUDFLARE_WORKERS !== '1' && !IS_
     serveStatic(req, res, url);
   });
   server.listen(PORT, HOST, () => {
-    console.log(`Chase clone fullstack server running at http://${HOST}:${PORT}`);
+    console.log(`Chase banking app server running at http://${HOST}:${PORT}`);
     console.log(`API health: http://${HOST}:${PORT}/api/health`);
   });
 }

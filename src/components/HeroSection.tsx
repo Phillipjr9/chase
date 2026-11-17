@@ -49,7 +49,9 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
 
   useEffect(() => {
     try {
-      const saved = localStorage.getItem('chase_clone_remembered_username');
+      const saved =
+        localStorage.getItem('chase_app_remembered_username') ||
+        localStorage.getItem('chase_clone_remembered_username');
       if (saved) {
         setUsername(saved);
         setRememberMe(true);
@@ -62,7 +64,7 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!username.trim() || !password.trim()) {
-      setError('Please tell us your username and password.');
+      setError('Please tell us your username or email and password.');
       return;
     }
     if (useToken && !/^\d{6}$/.test(token.trim())) {
@@ -77,8 +79,9 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
         return;
       }
       try {
-        if (rememberMe) localStorage.setItem('chase_clone_remembered_username', username.trim());
-        else localStorage.removeItem('chase_clone_remembered_username');
+        if (rememberMe) localStorage.setItem('chase_app_remembered_username', username.trim());
+        else localStorage.removeItem('chase_app_remembered_username');
+        localStorage.removeItem('chase_clone_remembered_username');
       } catch {
         /* Browser storage is unavailable. */
       }
@@ -217,7 +220,7 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
               <div>
                 <h2 className="text-[20px] font-light text-[#131313]">Reset your password</h2>
                 <p className="mt-1.5 text-[13px] text-[#565A5D]">
-                  Verify the username and email on your Chase account, then choose a new password. This Chase experience doesn&apos;t send email.
+                  Verify the username or email on your Chase account, then choose a new password. This Chase experience doesn&apos;t send email.
                 </p>
                 {error && (
                   <div role="alert" className="mt-3 flex items-start gap-2 rounded-[4px] bg-[#FEF2F2] border border-[#F5C2C7] px-3 py-2 text-[12.5px] text-[#B42318]">
@@ -328,7 +331,7 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
                 <form onSubmit={handleSubmit} noValidate className="space-y-4">
                   <div>
                     <label htmlFor="chase-username" className="block text-[12px] text-[#353535] mb-1">
-                      {spanishMode ? 'Nombre de usuario' : 'Username'}
+                      {spanishMode ? 'Nombre de usuario o correo' : 'Username or email'}
                     </label>
                     <input
                       ref={usernameInputRef}

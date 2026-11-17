@@ -622,40 +622,66 @@ export const OverviewTab: React.FC<Props> = ({
           {/* Live audit stream */}
           <Card className="p-5">
             <CardHeader
-              title="Recent Admin Audit Trail"
-              subtitle="Latest operator & compliance events"
+              title="Recent Immutable Audit Trail"
+              subtitle="Plain-English activity, logins & alerts"
               action={
                 <Btn variant="ghost" size="xs" onClick={() => onNavigate('audit')}>
-                  Full log ({audit.length})
+                  Full trail ({audit.length})
                 </Btn>
               }
             />
             {audit.length === 0 ? (
               <p className="mt-3 text-[12.5px] text-gray-500 dark:text-gray-400">
-                Administrative actions and impersonation events appear here automatically.
+                Sign-ins, failed attempts, transfers, and administrative changes appear here automatically.
               </p>
             ) : (
               <ul className="mt-3 divide-y divide-gray-100 dark:divide-gray-800">
-                {audit.slice(0, 5).map((entry) => (
-                  <li key={entry.id} className="py-2.5 flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="text-[12.5px] font-semibold text-gray-800 dark:text-gray-100 truncate">
-                        {entry.action}
-                      </p>
-                      <p className="text-[11px] text-gray-500 dark:text-gray-400 truncate">
-                        by <span className="font-medium">{entry.actor}</span>
-                        {Object.keys(entry.details || {}).length > 0 &&
-                          ` · ${Object.entries(entry.details)
-                            .slice(0, 2)
-                            .map(([k, v]) => `${k}: ${String(v)}`)
-                            .join(' · ')}`}
-                      </p>
-                    </div>
-                    <span className="text-[11px] text-gray-400 whitespace-nowrap shrink-0">
-                      {relTime(entry.createdAt)}
-                    </span>
-                  </li>
-                ))}
+                {audit.slice(0, 6).map((entry) => {
+                  const isIssue = entry.outcome === 'failed' || entry.outcome === 'blocked';
+                  return (
+                    <li
+                      key={entry.id}
+                      onClick={() => onNavigate('audit')}
+                      className="py-2.5 flex items-start justify-between gap-3 cursor-pointer hover:bg-gray-50/70 dark:hover:bg-white/[0.02] -mx-2 px-2 rounded-lg"
+                    >
+                      <div className="min-w-0 space-y-0.5">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <Badge
+                            tone={
+                              isIssue
+                                ? 'error'
+                                : entry.outcome === 'warning'
+                                ? 'warning'
+                                : 'success'
+                            }
+                          >
+                            {entry.outcome === 'blocked'
+                              ? 'Blocked'
+                              : entry.outcome === 'failed'
+                              ? 'Failed'
+                              : entry.outcome === 'warning'
+                              ? 'Notice'
+                              : 'OK'}
+                          </Badge>
+                          <p className="text-[12.5px] font-semibold text-gray-800 dark:text-gray-100 truncate">
+                            {entry.action}
+                          </p>
+                        </div>
+                        <p className="text-[11.5px] text-gray-600 dark:text-gray-300 line-clamp-2">
+                          {entry.summary || `by ${entry.actor}`}
+                        </p>
+                        {entry.reason && (
+                          <p className="text-[11px] font-medium text-red-600 dark:text-red-400 line-clamp-1">
+                            Why: {entry.reason}
+                          </p>
+                        )}
+                      </div>
+                      <span className="text-[11px] text-gray-400 whitespace-nowrap shrink-0">
+                        {relTime(entry.createdAt)}
+                      </span>
+                    </li>
+                  );
+                })}
               </ul>
             )}
           </Card>

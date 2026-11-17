@@ -1,5 +1,5 @@
 /* -------------------------------------------------------------------------- */
-/* Chase Clone — JSON file database (users, sessions, admins & audit log)     */
+/* Chase banking app data store (users, sessions, admins & audit log)         */
 /* Swap this module for SQLite/Postgres in production; the API stays the same. */
 /* -------------------------------------------------------------------------- */
 import fs from 'node:fs';
@@ -17,7 +17,14 @@ function getSupabaseUrl() {
 }
 
 function getSupabaseKey() {
-  return process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY || '';
+  return (
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.SUPABASE_SECRET_KEY ||
+    process.env.SUPABASE_ANON_KEY ||
+    process.env.SUPABASE_PUBLISHABLE_KEY ||
+    process.env.VITE_SUPABASE_ANON_KEY ||
+    ''
+  );
 }
 
 function getSupabaseRowId() {
@@ -44,6 +51,20 @@ function sanitizeLoadedDb(parsed) {
   } else {
     next.auditLog = next.auditLog.map(normalizeAuditEntry);
   }
+  const latestChained = next.auditLog.find((e) => typeof e.seq === 'number' && typeof e.entryHash === 'string');
+  if (!next.auditMeta || typeof next.auditMeta !== 'object') {
+    next.auditMeta = {
+      lastSeq: latestChained ? latestChained.seq : 0,
+      lastHash: latestChained ? latestChained.entryHash : null,
+      chainStartedAt: latestChained ? latestChained.createdAt : null,
+    };
+  } else {
+    const storedSeq = Number(next.auditMeta.lastSeq || 0);
+    if (latestChained && latestChained.seq > storedSeq) {
+      next.auditMeta.lastSeq = latestChained.seq;
+      next.auditMeta.lastHash = latestChained.entryHash;
+    }
+  }
   if (!next.simulatorSettings || typeof next.simulatorSettings !== 'object') next.simulatorSettings = {};
   if (!Array.isArray(next.adminAccounts)) next.adminAccounts = [];
   for (const u of next.users) {
@@ -64,6 +85,37 @@ function diskMtimeMs() {
   }
 }
 
+function canonicalJson(value) {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map((v) => (v === undefined ? 'null' : canonicalJson(v))).join(',')}]`;
+  const keys = Object.keys(value).filter((k) => value[k] !== undefined).sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalJson(value[k])}`).join(',')}}`;
+}
+
+export function computeAuditHash(entry) {
+  const payload = {
+    id: entry.id,
+    seq: entry.seq,
+    createdAt: entry.createdAt,
+    actor: entry.actor,
+    actorType: entry.actorType ?? null,
+    action: entry.action,
+    summary: entry.summary ?? null,
+    reason: entry.reason ?? null,
+    category: entry.category ?? null,
+    outcome: entry.outcome ?? null,
+    severity: entry.severity ?? null,
+    target: entry.target ?? null,
+    ip: entry.ip ?? null,
+    userAgent: entry.userAgent ?? null,
+    path: entry.path ?? null,
+    method: entry.method ?? null,
+    details: entry.details && typeof entry.details === 'object' && !Array.isArray(entry.details) ? entry.details : {},
+    prevHash: entry.prevHash ?? null,
+  };
+  return crypto.createHash('sha256').update(canonicalJson(payload)).digest('hex');
+}
+
 function normalizeAuditEntry(entry, index = 0) {
   if (!entry || typeof entry !== 'object') {
     return {
@@ -80,16 +132,31 @@ function normalizeAuditEntry(entry, index = 0) {
   let details = entry.details;
   if (!details || typeof details !== 'object' || Array.isArray(details)) {
     details = {};
-    if (entry.target) details.target = entry.target;
+    if (entry.target && typeof entry.target !== 'object') details.target = entry.target;
     if (entry.detail) details.note = entry.detail;
   }
-  return {
+  const out = {
     id: entry.id || `audit-${index}-${Date.now()}`,
     actor,
     action,
     details,
     createdAt,
   };
+  if (typeof entry.seq === 'number') out.seq = entry.seq;
+  if (entry.actorType != null) out.actorType = entry.actorType;
+  if (entry.summary != null) out.summary = entry.summary;
+  if (entry.reason != null) out.reason = entry.reason;
+  if (entry.category != null) out.category = entry.category;
+  if (entry.outcome != null) out.outcome = entry.outcome;
+  if (entry.severity != null) out.severity = entry.severity;
+  if (entry.target && typeof entry.target === 'object') out.target = entry.target;
+  if (entry.ip != null) out.ip = entry.ip;
+  if (entry.userAgent != null) out.userAgent = entry.userAgent;
+  if (entry.path != null) out.path = entry.path;
+  if (entry.method != null) out.method = entry.method;
+  if (entry.prevHash != null) out.prevHash = entry.prevHash;
+  if (entry.entryHash != null) out.entryHash = entry.entryHash;
+  return out;
 }
 
 function load() {
@@ -188,7 +255,14 @@ export async function flushRemoteSave() {
 
 export function findUserByUsername(username) {
   const needle = String(username || '').trim().toLowerCase();
-  return load().users.find((u) => u.username.toLowerCase() === needle) || null;
+  if (!needle) return null;
+  return (
+    load().users.find(
+      (u) =>
+        u.username.toLowerCase() === needle ||
+        (typeof u.email === 'string' && u.email.trim().toLowerCase() === needle)
+    ) || null
+  );
 }
 
 export function findUserById(id) {
@@ -221,13 +295,87 @@ export function resetUsers(users) {
 
 export function appendAudit(entry) {
   const db = load();
-  db.auditLog.unshift(normalizeAuditEntry(entry));
+  const base = normalizeAuditEntry(entry);
+  const latestChained = db.auditLog.find((e) => typeof e.seq === 'number' && typeof e.entryHash === 'string');
+  const prevSeq = Math.max(Number(db.auditMeta?.lastSeq || 0), latestChained ? latestChained.seq : 0);
+  const prevHash = (latestChained && latestChained.seq >= Number(db.auditMeta?.lastSeq || 0))
+    ? latestChained.entryHash
+    : (db.auditMeta?.lastHash || 'GENESIS');
+  const seq = prevSeq + 1;
+  // Clone details through JSON to guarantee clean plain JSON values before hashing.
+  let cleanDetails = {};
+  try {
+    cleanDetails = JSON.parse(JSON.stringify(base.details || {}));
+  } catch {
+    cleanDetails = {};
+  }
+  const chained = {
+    ...base,
+    details: cleanDetails,
+    seq,
+    prevHash,
+  };
+  chained.entryHash = computeAuditHash(chained);
+  db.auditMeta = {
+    lastSeq: seq,
+    lastHash: chained.entryHash,
+    chainStartedAt: db.auditMeta?.chainStartedAt || chained.createdAt,
+  };
+  db.auditLog.unshift(chained);
   db.auditLog = db.auditLog.slice(0, 5000);
   save();
+  return chained;
 }
 
 export function getAuditLog(limit = 100) {
   return load().auditLog.slice(0, limit);
+}
+
+export function verifyAuditIntegrity(entries = null) {
+  const db = load();
+  const list = Array.isArray(entries) ? entries : db.auditLog;
+  const chained = list
+    .filter((e) => typeof e?.seq === 'number' && typeof e?.entryHash === 'string')
+    .sort((a, b) => a.seq - b.seq);
+  const legacyCount = list.length - chained.length;
+  const tamperedIds = [];
+
+  for (let i = 0; i < chained.length; i += 1) {
+    const curr = chained[i];
+    const expectedHash = computeAuditHash(curr);
+    if (curr.entryHash !== expectedHash) {
+      tamperedIds.push(curr.id);
+      continue;
+    }
+    if (i === 0) {
+      if (curr.seq === 1 && curr.prevHash !== 'GENESIS') {
+        tamperedIds.push(curr.id);
+      }
+    } else {
+      const prev = chained[i - 1];
+      if (curr.seq !== prev.seq + 1 || curr.prevHash !== prev.entryHash) {
+        tamperedIds.push(curr.id);
+      }
+    }
+  }
+
+  const latest = chained.length ? chained[chained.length - 1] : null;
+  const status = tamperedIds.length > 0
+    ? 'tampered'
+    : chained.length > 0
+      ? 'verified'
+      : 'legacy_only';
+  return {
+    valid: tamperedIds.length === 0,
+    status,
+    totalEntries: list.length,
+    chainedCount: chained.length,
+    legacyCount,
+    tamperedIds,
+    lastSeq: latest ? latest.seq : Number(db.auditMeta?.lastSeq || 0),
+    lastHash: latest ? latest.entryHash : (db.auditMeta?.lastHash || null),
+    chainStartedAt: db.auditMeta?.chainStartedAt || (chained[0]?.createdAt || null),
+  };
 }
 
 const DEFAULT_SIMULATOR_SETTINGS = {
@@ -472,12 +620,16 @@ export function updateUser(user, { preserveToken = null } = {}) {
   const idx = db.users.findIndex((u) => u.id === user.id);
   if (idx >= 0) {
     const previous = db.users[idx];
-    const linked = db.adminAccounts.find(a => a.linkedUserId === user.id);
+    const linked = db.adminAccounts.find((a) => a.linkedUserId === user.id);
+    const passwordChanged = previous.passwordHash !== user.passwordHash;
+    const statusChanged = previous.status !== user.status;
+    const nameChanged = previous.fullName !== user.fullName && user.fullName;
+
     if (linked) {
-      if (previous.fullName !== user.fullName && user.fullName) {
+      if (nameChanged) {
         linked.fullName = user.fullName;
       }
-      if (previous.passwordHash !== user.passwordHash || previous.status !== user.status) {
+      if (passwordChanged || statusChanged) {
         linked.passwordHash = user.passwordHash;
         linked.sessionVersion = (linked.sessionVersion || 0) + 1;
         for (const [token, session] of Object.entries(db.sessions)) {
@@ -487,6 +639,15 @@ export function updateUser(user, { preserveToken = null } = {}) {
         }
       }
     }
+
+    if (passwordChanged) {
+      for (const [token, session] of Object.entries(db.sessions)) {
+        if (session.userId === user.id && token !== preserveToken) {
+          delete db.sessions[token];
+        }
+      }
+    }
+
     db.users[idx] = user;
     save();
   }

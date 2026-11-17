@@ -87,6 +87,7 @@ interface Props {
     endDate: string;
     cadence: 'daily' | 'weekly' | 'monthly' | 'yearly';
     perPeriod: number;
+    accountId?: string | null;
   }) => Promise<void>;
   onImpersonate: () => void;
   onNavigate: (tab: AdminTab) => void;
@@ -151,6 +152,7 @@ export const UsersTab: React.FC<Props> = ({
   const [activityEnd, setActivityEnd] = useState(() => inputDate(0));
   const [activityCadence, setActivityCadence] = useState<'daily' | 'weekly' | 'monthly' | 'yearly'>('weekly');
   const [perPeriod, setPerPeriod] = useState('2');
+  const [activityAccountId, setActivityAccountId] = useState<string>('all');
   const [studioMode, setStudioMode] = useState<'quick' | 'json'>('quick');
 
   // Quick profile edit local fields synced from selectedUser
@@ -769,6 +771,24 @@ export const UsersTab: React.FC<Props> = ({
                     onChange={(e) => setPerPeriod(e.target.value)}
                   />
                 </label>
+                <label className="block">
+                  <span className="block text-[11px] font-medium text-gray-600 dark:text-gray-300 mb-1">
+                    Account
+                  </span>
+                  <SelectInput
+                    value={activityAccountId}
+                    onChange={(e) => setActivityAccountId(e.target.value)}
+                    className="w-full"
+                    disabled={selectedUser.accounts.length === 0}
+                  >
+                    <option value="all">All eligible accounts</option>
+                    {selectedUser.accounts.map((account) => (
+                      <option key={account.id} value={account.id}>
+                        {account.nickname?.trim() || account.name} ({account.type})
+                      </option>
+                    ))}
+                  </SelectInput>
+                </label>
                 <Btn
                   variant="primary"
                   disabled={busy || isReadOnly || !canGenerateActivity || selectedUser.accounts.length === 0}
@@ -778,6 +798,7 @@ export const UsersTab: React.FC<Props> = ({
                       endDate: activityEnd,
                       cadence: activityCadence,
                       perPeriod: Number(perPeriod) || 1,
+                      accountId: activityAccountId === 'all' ? null : activityAccountId,
                     })
                   }
                 >

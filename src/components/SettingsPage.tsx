@@ -220,11 +220,16 @@ export const SettingsPage: React.FC<Props> = ({ user, onUpdateUser, onSignOut, i
   const [newPw, setNewPw] = useState('');
   const [confirmPw, setConfirmPw] = useState('');
 
+  const minPasswordLength = user.linkedAdmin ? 10 : 8;
+
   const savePassword = async () => {
-    if (newPw.length < 8) return setNotice({ kind: 'error', text: 'New password must be at least 8 characters.' });
+    if (newPw.length < minPasswordLength) {
+      return setNotice({ kind: 'error', text: `New password must be at least ${minPasswordLength} characters.` });
+    }
     if (confirmPw !== newPw) return setNotice({ kind: 'error', text: 'The new passwords do not match.' });
     try {
-      await changePasswordApi(curPw, newPw);
+      const refreshed = await changePasswordApi(curPw, newPw);
+      if (refreshed) onUpdateUser(refreshed);
       setCurPw('');
       setNewPw('');
       setConfirmPw('');
@@ -424,7 +429,7 @@ export const SettingsPage: React.FC<Props> = ({ user, onUpdateUser, onSignOut, i
                   <Lock className="w-4 h-4" style={{ color: BLUE }} />
                   <h2 className="text-[17px] font-semibold" style={{ color: INK }}>Password</h2>
                 </div>
-                <p className="text-[12.5px]" style={{ color: MUTED }}>Use at least 8 characters. Don't reuse a password from another site.</p>
+                <p className="text-[12.5px]" style={{ color: MUTED }}>Use at least {minPasswordLength} characters. Don't reuse a password from another site.</p>
                 <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <Field label="Current password">
                     <input className={inputCls} type="password" value={curPw} onChange={(e) => setCurPw(e.target.value)} autoComplete="current-password" />

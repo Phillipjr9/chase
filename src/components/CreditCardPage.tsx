@@ -235,7 +235,7 @@ export const CreditCardPage: React.FC<Props> = ({
     });
   }, [account.transactions, activityFilter, search, sort]);
 
-  const visibleActivity = showAll ? activity : activity.slice(0, 6);
+  const visibleActivity = showAll ? activity : activity.slice(0, 25);
 
   const changeControl = async (patch: { locked?: boolean; autopay?: boolean }) => {
     setBusy(typeof patch.locked === 'boolean' ? 'lock' : 'autopay');
@@ -698,7 +698,7 @@ export const CreditCardPage: React.FC<Props> = ({
                   ))}
                 </ul>
               )}
-              {activity.length > 6 && (
+              {activity.length > 25 && (
                 <div className="px-4 sm:px-5 py-3 border-t" style={{ borderColor: '#EFF0F1' }}>
                   <TextButton onClick={() => setShowAll((v) => !v)} className="text-[12.5px]">
                     {showAll ? 'Show fewer transactions' : `Show all ${activity.length} transactions`}
@@ -819,7 +819,14 @@ export const CreditCardPage: React.FC<Props> = ({
                     { k: 'Card status', v: account.locked ? 'Locked' : 'Active' },
                     { k: 'Automatic payments', v: account.autopay ? 'On' : 'Off' },
                     { k: 'Paperless', v: paperless ? 'On' : 'Off' },
-                    { k: 'Opened', v: new Date(account.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) },
+                    {
+                      k: 'Opened',
+                      v: new Date(
+                        /^\d{4}-\d{2}-\d{2}$/.test(account.openedDate || '')
+                          ? `${account.openedDate}T12:00:00`
+                          : account.openedDate || account.createdAt
+                      ).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+                    },
                   ].map((row) => (
                     <div key={row.k} className="flex justify-between gap-3 border-b border-[#EFF0F1] pb-2 last:border-b-0">
                       <dt style={{ color: MUTED }}>{row.k}</dt>
