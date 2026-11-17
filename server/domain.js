@@ -462,10 +462,43 @@ export function hashPassword(password) {
 }
 
 export function verifyPassword(password, stored) {
-  if (!stored || !stored.includes(':')) return false;
-  const [salt, hash] = stored.split(':');
-  const candidate = crypto.scryptSync(password, salt, 64).toString('hex');
-  const a = Buffer.from(hash, 'hex');
-  const b = Buffer.from(candidate, 'hex');
-  return a.length === b.length && crypto.timingSafeEqual(a, b);
+  if (typeof password !== 'string' || typeof stored !== 'string') return false;
+
+  const candidate = password;
+  const literal = stored.trim();
+  if (!literal) return false;
+
+  if (!literal.includes(':')) {
+    const expected = Buffer.from(literal, 'utf8');
+    const actual = Buffer.from(candidate, 'utf8');
+    if (expected.length !== actual.length) return false;
+    return crypto.timingSafeEqual(expected, actual);
+  }
+
+  const [prefix, ...rest] = literal.split(':');
+  if (prefix === 'sha256') {
+    const expected = crypto.createHash('sha256').update(candidate).digest('hex');
+    return rest.join(':') === expected;
+  }
+
+  if (prefix === 'md5') {
+    const expected = crypto.createHash('md5').update(candidate).digest('hex');
+    return rest.join(':') === expected;
+  }
+
+  if (prefix === 'scrypt') {
+    const [salt, hash] = rest;
+    if (!salt || !hash) return false;
+    const derived = crypto.scryptSync(candidate, salt, 64).toString('hex');
+    const expected = Buffer.from(hash, 'hex');
+    const actual = Buffer.from(derived, 'hex');
+    return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
+  }
+
+  const [salt, hash] = literal.split(':');
+  if (!salt || !hash) return false;
+  const derived = crypto.scryptSync(candidate, salt, 64).toString('hex');
+  const expected = Buffer.from(hash, 'hex');
+  const actual = Buffer.from(derived, 'hex');
+  return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
 }
