@@ -1,5 +1,5 @@
 /* -------------------------------------------------------------------------- */
-/* Chase Clone — server-side domain logic (full Chase product ecosystem)       */
+/* Chase banking app domain logic                                             */
 /* -------------------------------------------------------------------------- */
 import crypto from 'node:crypto';
 

@@ -60,6 +60,7 @@ import {
   AdminUserRow,
   DEFAULT_ADMIN_CAPABILITIES,
   GlobalDispute,
+  LinkedCheckingAccount,
   OverviewAnalytics,
   SimulatorSettings,
   User,
@@ -75,6 +76,14 @@ interface OperationsProps {
   isReadOnly: boolean;
   isSuperAdmin?: boolean;
   busy: boolean;
+  linkedCheckingAccounts?: LinkedCheckingAccount[];
+  onSendFromChecking?: (payload: {
+    userId: string;
+    fromAccountId: string;
+    toAccountId: string;
+    amount: number;
+    memo: string;
+  }) => Promise<boolean>;
   onSelectUser: (id: string) => void;
   onTransfer: (payload: {
     fromAccountId: string;
@@ -149,6 +158,8 @@ export const OperationsTab: React.FC<OperationsProps> = ({
   isReadOnly,
   isSuperAdmin = false,
   busy,
+  linkedCheckingAccounts = [],
+  onSendFromChecking,
   onSelectUser,
   onTransfer,
   onCreatePayee,
@@ -171,6 +182,12 @@ export const OperationsTab: React.FC<OperationsProps> = ({
   const [railCounterparty, setRailCounterparty] = useState('Jordan Taylor');
   const [railAmount, setRailAmount] = useState('350');
   const [railMemo, setRailMemo] = useState('Rent split');
+
+  // Linked Checking → Assigned User transfer state
+  const [sendFromAcctId, setSendFromAcctId] = useState('');
+  const [sendToAcctId, setSendToAcctId] = useState('');
+  const [sendAmt, setSendAmt] = useState('');
+  const [sendMemo, setSendMemo] = useState('');
 
   // Transfer state
   const [fromId, setFromId] = useState('');
@@ -215,12 +232,21 @@ export const OperationsTab: React.FC<OperationsProps> = ({
   const [disputeScope, setDisputeScope] = useState<'customer' | 'global'>('global');
 
   React.useEffect(() => {
+    if (linkedCheckingAccounts.length > 0) {
+      setSendFromAcctId((prev) =>
+        linkedCheckingAccounts.some((a) => a.id === prev) ? prev : linkedCheckingAccounts[0].id
+      );
+    }
+  }, [linkedCheckingAccounts]);
+
+  React.useEffect(() => {
     if (!selectedUser) return;
     const deposits = selectedUser.accounts.filter((a) =>
       ['checking', 'savings', 'cd'].includes(a.type)
     );
     const defaultFrom = deposits[0]?.id || selectedUser.accounts[0]?.id || '';
     setFromId(defaultFrom);
+    setSendToAcctId((prev) => (deposits.some((a) => a.id === prev) ? prev : deposits[0]?.id || ''));
     const second = selectedUser.accounts.find((a) => a.id !== defaultFrom)?.id || '';
     setToId(second);
     setSchedFromId(defaultFrom);
@@ -291,6 +317,117 @@ export const OperationsTab: React.FC<OperationsProps> = ({
           ))}
         </SelectInput>
       </Card>
+
+      {/* Send Money from Limited Admin's Linked Checking Account */}
+      {!isReadOnly && onSendFromChecking && linkedCheckingAccounts.length > 0 && (
+        <Card className="p-5 border-t-[3px] border-t-[#12B76A]">
+          <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-gray-100 dark:border-gray-800">
+            <div>
+              <div className="flex items-center gap-2">
+                <h3 className="text-[15.5px] font-semibold text-gray-900 dark:text-white">
+                  Send Money from Your Checking Account
+                </h3>
+                <Badge tone="success">Linked Checking</Badge>
+              </div>
+              <p className="mt-0.5 text-[12px] text-gray-500 dark:text-gray-400">
+                Transfer funds directly from your linked personal checking balance to an assigned customer&apos;s deposit account. Both transaction histories update automatically.
+              </p>
+            </div>
+          </div>
+
+          {!selectedUser || depositAccounts.length === 0 ? (
+            <p className="mt-4 text-[12.5px] text-gray-500 dark:text-gray-400">
+              {!selectedUser
+                ? 'Create or select an assigned customer with a checking, savings, or CD account to send funds.'
+                : `Open a checking, savings, or CD account for ${selectedUser.fullName} before sending funds.`}
+            </p>
+          ) : (
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault();
+                const amountNum = Number(sendAmt);
+                if (!selectedUser || !sendFromAcctId || !sendToAcctId || !Number.isFinite(amountNum) || amountNum <= 0) {
+                  return;
+                }
+                const ok = await onSendFromChecking({
+                  userId: selectedUser.id,
+                  fromAccountId: sendFromAcctId,
+                  toAccountId: sendToAcctId,
+                  amount: amountNum,
+                  memo: sendMemo.trim(),
+                });
+                if (ok) {
+                  setSendAmt('');
+                  setSendMemo('');
+                }
+              }}
+              className="mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 items-end"
+            >
+              <label className="block lg:col-span-2">
+                <span className="block text-[11px] font-medium text-gray-600 dark:text-gray-300 mb-1">
+                  From Your Checking Account
+                </span>
+                <SelectInput
+                  value={sendFromAcctId}
+                  onChange={(e) => setSendFromAcctId(e.target.value)}
+                  className="w-full"
+                >
+                  {linkedCheckingAccounts.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.name} (•••• {a.mask}) · {fmtMoneyFull(a.balance)}
+                    </option>
+                  ))}
+                </SelectInput>
+              </label>
+              <label className="block lg:col-span-2">
+                <span className="block text-[11px] font-medium text-gray-600 dark:text-gray-300 mb-1">
+                  To {selectedUser.fullName} (@{selectedUser.username})
+                </span>
+                <SelectInput
+                  value={sendToAcctId}
+                  onChange={(e) => setSendToAcctId(e.target.value)}
+                  className="w-full"
+                >
+                  {depositAccounts.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.name} (•••• {a.mask}) · {fmtMoneyFull(a.balance)}
+                    </option>
+                  ))}
+                </SelectInput>
+              </label>
+              <label className="block">
+                <span className="block text-[11px] font-medium text-gray-600 dark:text-gray-300 mb-1">
+                  Amount ($)
+                </span>
+                <TextInput
+                  type="number"
+                  step="0.01"
+                  min="0.01"
+                  required
+                  placeholder="2500.00"
+                  value={sendAmt}
+                  onChange={(e) => setSendAmt(e.target.value)}
+                />
+              </label>
+              <label className="block">
+                <span className="block text-[11px] font-medium text-gray-600 dark:text-gray-300 mb-1">
+                  Memo (optional)
+                </span>
+                <TextInput
+                  placeholder="e.g. Client payout"
+                  value={sendMemo}
+                  onChange={(e) => setSendMemo(e.target.value)}
+                />
+              </label>
+              <div className="lg:col-span-6 flex justify-end">
+                <Btn type="submit" variant="primary" disabled={busy}>
+                  <Send className="w-3.5 h-3.5" /> Send from Checking
+                </Btn>
+              </div>
+            </form>
+          )}
+        </Card>
+      )}
 
       {/* Batch Engine: Executable Scheduled Payments & Month-End Statement Close (Super Admin only) */}
       {isSuperAdmin && (

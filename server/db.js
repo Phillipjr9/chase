@@ -1,5 +1,5 @@
 /* -------------------------------------------------------------------------- */
-/* Chase Clone — JSON file database (users, sessions, admins & audit log)     */
+/* Chase banking app data store (users, sessions, admins & audit log)         */
 /* Swap this module for SQLite/Postgres in production; the API stays the same. */
 /* -------------------------------------------------------------------------- */
 import fs from 'node:fs';
@@ -7,17 +7,32 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DEFAULT_DATA_DIR = process.env.VERCEL === '1' ? '/tmp' : path.join(__dirname, 'data');
+const __dirname = import.meta.url ? path.dirname(fileURLToPath(import.meta.url)) : '/tmp';
+const DEFAULT_DATA_DIR = (process.env.VERCEL === '1' || process.env.CLOUDFLARE_WORKERS === '1') ? '/tmp' : path.join(__dirname, 'data');
 const DB_FILE = process.env.CHASE_DB_PATH || path.join(DEFAULT_DATA_DIR, 'db.json');
 const DATA_DIR = path.dirname(DB_FILE);
 
-const SUPABASE_URL = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '').replace(/\/+$/, '');
-const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY || '';
-const SUPABASE_ROW_ID = process.env.CHASE_SUPABASE_ROW_ID || 'primary';
+function getSupabaseUrl() {
+  return (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '').replace(/\/+$/, '');
+}
+
+function getSupabaseKey() {
+  return (
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.SUPABASE_SECRET_KEY ||
+    process.env.SUPABASE_ANON_KEY ||
+    process.env.SUPABASE_PUBLISHABLE_KEY ||
+    process.env.VITE_SUPABASE_ANON_KEY ||
+    ''
+  );
+}
+
+function getSupabaseRowId() {
+  return process.env.CHASE_SUPABASE_ROW_ID || 'primary';
+}
 
 export function isSupabaseEnabled() {
-  return Boolean(SUPABASE_URL && SUPABASE_KEY && !process.env.CHASE_DB_PATH);
+  return Boolean(getSupabaseUrl() && getSupabaseKey() && !process.env.CHASE_DB_PATH);
 }
 
 let cache = null;
@@ -179,12 +194,15 @@ function save() {
   cacheMtimeMs = diskMtimeMs();
 }
 
-const remoteHeaders = () => ({
-  apikey: SUPABASE_KEY,
-  Authorization: `Bearer ${SUPABASE_KEY}`,
-  'Content-Type': 'application/json',
-  Accept: 'application/json',
-});
+const remoteHeaders = () => {
+  const key = getSupabaseKey();
+  return {
+    apikey: key,
+    Authorization: `Bearer ${key}`,
+    'Content-Type': 'application/json',
+    Accept: 'application/json',
+  };
+};
 
 export async function ensureDbReady() {
   if (!isSupabaseEnabled()) { load(); return; }
@@ -192,7 +210,7 @@ export async function ensureDbReady() {
   remoteDirty = false;
   let res;
   try {
-    res = await fetch(`${SUPABASE_URL}/rest/v1/chase_simulator_state?id=eq.${encodeURIComponent(SUPABASE_ROW_ID)}&select=state,updated_at`, { headers: remoteHeaders() });
+    res = await fetch(`${getSupabaseUrl()}/rest/v1/chase_simulator_state?id=eq.${encodeURIComponent(getSupabaseRowId())}&select=state,updated_at`, { headers: remoteHeaders() });
   } catch (cause) { throw Object.assign(new Error('Database connection unavailable'), { status: 503, cause }); }
   if (!res.ok) {
     const detail = await res.json().catch(() => ({}));
@@ -210,14 +228,15 @@ export async function flushRemoteSave() {
   if (!isSupabaseEnabled() || !remoteDirty) return;
   // Compare-and-swap rejects concurrent writes from different serverless instances.
   const updatedAt = new Date(Math.max(Date.now(), remoteVersion ? Date.parse(remoteVersion) + 1 : 0)).toISOString();
-  const endpoint = `${SUPABASE_URL}/rest/v1/chase_simulator_state`;
-  const query = remoteVersion ? `?id=eq.${encodeURIComponent(SUPABASE_ROW_ID)}&updated_at=eq.${encodeURIComponent(remoteVersion)}` : '';
+  const rowId = getSupabaseRowId();
+  const endpoint = `${getSupabaseUrl()}/rest/v1/chase_simulator_state`;
+  const query = remoteVersion ? `?id=eq.${encodeURIComponent(rowId)}&updated_at=eq.${encodeURIComponent(remoteVersion)}` : '';
   let res;
   try {
     res = await fetch(endpoint + query, {
       method: remoteVersion ? 'PATCH' : 'POST',
       headers: { ...remoteHeaders(), Prefer: 'return=representation' },
-      body: JSON.stringify(remoteVersion ? { state: cache, updated_at: updatedAt } : { id: SUPABASE_ROW_ID, state: cache, updated_at: updatedAt }),
+      body: JSON.stringify(remoteVersion ? { state: cache, updated_at: updatedAt } : { id: rowId, state: cache, updated_at: updatedAt }),
     });
   } catch (cause) { cache = null; remoteDirty = false; throw Object.assign(new Error('Database save failed'), { status: 503, cause }); }
   if (!res.ok) {
@@ -236,7 +255,14 @@ export async function flushRemoteSave() {
 
 export function findUserByUsername(username) {
   const needle = String(username || '').trim().toLowerCase();
-  return load().users.find((u) => u.username.toLowerCase() === needle) || null;
+  if (!needle) return null;
+  return (
+    load().users.find(
+      (u) =>
+        u.username.toLowerCase() === needle ||
+        (typeof u.email === 'string' && u.email.trim().toLowerCase() === needle)
+    ) || null
+  );
 }
 
 export function findUserById(id) {
@@ -764,7 +790,7 @@ export function getDbStats() {
     auditCount: db.auditLog.length,
     dbSizeBytes,
     db: {
-      path: isSupabaseEnabled() ? `supabase://chase_simulator_state/${SUPABASE_ROW_ID}` : DB_FILE,
+      path: isSupabaseEnabled() ? `supabase://chase_simulator_state/${getSupabaseRowId()}` : DB_FILE,
       sizeBytes: dbSizeBytes,
       mtimeMs: dbMtimeMs,
     },

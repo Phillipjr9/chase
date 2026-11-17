@@ -596,7 +596,7 @@ export const TravelView: React.FC<{
                   <BrandLogo brand={b.brand} alt={b.provider} size="sm" />
                   <div className="flex-1 min-w-0">
                     <p className="text-[12.5px] font-semibold truncate" style={{ color: INK }}>{b.title}</p>
-                    <p className="text-[11px]" style={{ color: MUT }}>{b.dates} · {b.pointsUsed.toLocaleString()} pts</p>
+                    <p className="text-[11px]" style={{ color: MUT }}>{b.dates} · {(b.pointsUsed || 0).toLocaleString()} pts</p>
                   </div>
                   <span className="text-[10.5px] font-semibold px-2 py-0.5 rounded-full bg-[#EAF7EE] text-[#138842] shrink-0">
                     {b.status}

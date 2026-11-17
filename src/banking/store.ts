@@ -1,5 +1,5 @@
 /* -------------------------------------------------------------------------- */
-/* Chase Clone — fullstack banking API client + local fallback                */
+/* Chase banking app API client + local fallback                              */
 /* -------------------------------------------------------------------------- */
 
 export interface Transaction {
@@ -429,12 +429,15 @@ export function mask4(): string {
   return String(Math.floor(1000 + Math.random() * 9000));
 }
 
-export function fmtMoney(n: number): string {
-  return n.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+export function fmtMoney(n: number | null | undefined): string {
+  const num = typeof n === 'number' ? n : Number(n ?? 0);
+  const safe = Number.isFinite(num) ? num : 0;
+  return safe.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
 }
 
-export function round2(n: number): number {
-  return Math.round(n * 100) / 100;
+export function round2(n: number | null | undefined): number {
+  const num = typeof n === 'number' ? n : Number(n ?? 0);
+  return Number.isFinite(num) ? Math.round(num * 100) / 100 : 0;
 }
 
 /** Account types that can fund a payment. Mirrors the server-side rule. */
@@ -581,20 +584,21 @@ export function defaultBudgets(): Record<string, number> {
 
 /* ------------------------------ API client -------------------------------- */
 
-const TOKEN_KEY = 'chase_clone_token_v1';
-const USERS_KEY = 'chase_clone_users_v2';
-const SESSION_KEY = 'chase_clone_session_v2';
+const TOKEN_KEY = 'chase_app_token_v1';
+const LEGACY_TOKEN_KEY = 'chase_clone_token_v1';
+const USERS_KEY = 'chase_app_users_v2';
+const SESSION_KEY = 'chase_app_session_v2';
 export const ADMIN_TOKEN_KEY = 'chase_sim_admin_token';
 
 function readCustomerToken(): string | null {
   try {
-    const v = localStorage.getItem(TOKEN_KEY);
+    const v = localStorage.getItem(TOKEN_KEY) || localStorage.getItem(LEGACY_TOKEN_KEY);
     if (v) return v;
   } catch {
     /* localStorage unavailable */
   }
   try {
-    const v = sessionStorage.getItem(TOKEN_KEY);
+    const v = sessionStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(LEGACY_TOKEN_KEY);
     if (v) return v;
   } catch {
     /* sessionStorage unavailable */
@@ -609,12 +613,14 @@ function setToken(t: string | null) {
   try {
     if (t) localStorage.setItem(TOKEN_KEY, t);
     else localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(LEGACY_TOKEN_KEY);
   } catch {
     /* storage unavailable */
   }
   try {
     if (t) sessionStorage.setItem(TOKEN_KEY, t);
     else sessionStorage.removeItem(TOKEN_KEY);
+    sessionStorage.removeItem(LEGACY_TOKEN_KEY);
   } catch {
     /* storage unavailable */
   }
@@ -810,7 +816,9 @@ function setLocalSession(userId: string | null): void {
 
 function findUserByUsernameLocal(username: string): User | undefined {
   const needle = username.trim().toLowerCase();
-  return loadUsers().find((u) => u.username.toLowerCase() === needle);
+  return loadUsers().find(
+    (u) => u.username.toLowerCase() === needle || u.email.trim().toLowerCase() === needle
+  );
 }
 
 function buildAccount(product: ProductInfo, openingDeposit: number): Account {
@@ -944,7 +952,7 @@ export async function authenticate(
   const user = findUserByUsernameLocal(username);
   if (!user) {
     return {
-      error: "We don't recognize this username. Please check your username or enroll in Chase Online.",
+      error: "We don't recognize this username or email. Please check your username or enroll in Chase Online.",
     };
   }
   if (user.password !== password) {
@@ -981,7 +989,11 @@ export async function resetPassword(
     return;
   }
   const users = loadUsers();
-  const idx = users.findIndex((u) => u.username.toLowerCase() === username.trim().toLowerCase());
+  const idx = users.findIndex(
+    (u) =>
+      u.username.toLowerCase() === username.trim().toLowerCase() ||
+      u.email.trim().toLowerCase() === username.trim().toLowerCase()
+  );
   const user = idx >= 0 ? users[idx] : null;
   if (!user || user.email.trim().toLowerCase() !== email.trim().toLowerCase()) {
     throw new Error("We couldn't verify that username and email. Check them and try again.");

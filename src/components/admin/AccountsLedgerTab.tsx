@@ -484,6 +484,7 @@ export const AccountsTab: React.FC<AccountsProps> = ({
                 apr: draft.apr === '' ? undefined : Number(draft.apr),
                 monthlyPayment: draft.monthlyPayment === '' ? undefined : Number(draft.monthlyPayment),
                 rewardsPoints: draft.rewardsPoints === '' ? undefined : Number(draft.rewardsPoints),
+                openedDate: draft.openedDate || account.openedDate || inputDate(0),
                 replacedAt: new Date().toISOString(),
                 locked: false,
                 autopay: draft.autopay,
@@ -527,7 +528,7 @@ export const AccountsTab: React.FC<AccountsProps> = ({
                         </h4>
                       </div>
                       <p className="text-[12px] text-gray-500 dark:text-gray-400 mt-0.5">
-                        •••• {account.mask} · {(account.transactions || []).length} transactions
+                        •••• {account.mask} · Opened {fmtDateShort(account.openedDate || account.createdAt)} · {(account.transactions || []).length} transactions
                         {account.rewardsPoints ? ` · ${account.rewardsPoints.toLocaleString()} pts` : ''}
                       </p>
                       <p className="text-[20px] font-light tracking-tight text-gray-900 dark:text-white mt-1 tabular-nums">

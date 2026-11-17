@@ -15,6 +15,7 @@ import {
   Eye,
   KeyRound,
   LockKeyhole,
+  Mail,
   Menu,
   RefreshCw,
   Search,
@@ -57,6 +58,7 @@ import {
   DEFAULT_ADMIN_CAPABILITIES,
   DEFAULT_ADMIN_PERMISSIONS,
   GlobalTransaction,
+  LinkedCheckingAccount,
   OverviewAnalytics,
   SimulatorSettings,
   adminFetch,
@@ -104,6 +106,7 @@ export const AdminPage: React.FC<{
   const [currentAdminUsername, setCurrentAdminUsername] = useState(initialAdmin?.username || '');
   const [isSuperAdmin, setIsSuperAdmin] = useState(initialAdmin?.isSuperAdmin === true);
   const [linkedUserId, setLinkedUserId] = useState<string | null>(initialAdmin?.linkedUserId || null);
+  const [linkedCheckingAccounts, setLinkedCheckingAccounts] = useState<LinkedCheckingAccount[]>([]);
   const [permissions, setPermissions] = useState<AdminPermissions>(DEFAULT_ADMIN_PERMISSIONS);
   const [capabilities, setCapabilities] = useState<AdminCapabilities>(DEFAULT_ADMIN_CAPABILITIES);
   const [adminAccounts, setAdminAccounts] = useState<AdminAccountRow[]>([]);
@@ -113,6 +116,15 @@ export const AdminPage: React.FC<{
   const [headerOwnPwdOpen, setHeaderOwnPwdOpen] = useState(false);
   const [headerCurPwd, setHeaderCurPwd] = useState('');
   const [headerNextPwd, setHeaderNextPwd] = useState('');
+
+  // Header Support Contact Modal (for limited admins to update their own support email & phone)
+  const [ownSupportContact, setOwnSupportContact] = useState<{ email: string; phone: string }>({
+    email: '',
+    phone: '',
+  });
+  const [headerSupportOpen, setHeaderSupportOpen] = useState(false);
+  const [headerSupportEmail, setHeaderSupportEmail] = useState('');
+  const [headerSupportPhone, setHeaderSupportPhone] = useState('');
 
   // Public header state (for unauthenticated sign-in view)
   const [publicSegment, setPublicSegment] = useState<SegmentKey>('personal');
@@ -266,6 +278,8 @@ export const AdminPage: React.FC<{
             role: 'admin' | 'auditor';
             isSuperAdmin?: boolean;
             linkedUserId?: string | null;
+            linkedCheckingAccounts?: LinkedCheckingAccount[];
+            supportContact?: { email: string; phone: string };
             permissions: AdminPermissions;
             capabilities?: AdminCapabilities;
           };
@@ -288,6 +302,8 @@ export const AdminPage: React.FC<{
         setPermissions(me.admin.permissions || DEFAULT_ADMIN_PERMISSIONS);
         setCapabilities(me.admin.capabilities || DEFAULT_ADMIN_CAPABILITIES);
         setLinkedUserId(me.admin.linkedUserId || null);
+        setLinkedCheckingAccounts(me.admin.linkedCheckingAccounts || []);
+        if (me.admin.supportContact) setOwnSupportContact(me.admin.supportContact);
         setAdminName(me.admin.label);
         setCurrentAdminRole(me.admin.role || 'admin');
         setCurrentAdminUsername(me.admin.username);
@@ -419,6 +435,8 @@ export const AdminPage: React.FC<{
             role: 'admin' | 'auditor';
             isSuperAdmin?: boolean;
             linkedUserId?: string | null;
+            linkedCheckingAccounts?: LinkedCheckingAccount[];
+            supportContact?: { email: string; phone: string };
           };
         }>('/api/admin/me', {}, token);
         if (active) {
@@ -427,6 +445,8 @@ export const AdminPage: React.FC<{
           if (me.admin.capabilities) setCapabilities(me.admin.capabilities);
           setCurrentAdminRole(me.admin.role || 'admin');
           setLinkedUserId(me.admin.linkedUserId || null);
+          setLinkedCheckingAccounts(me.admin.linkedCheckingAccounts || []);
+          if (me.admin.supportContact) setOwnSupportContact(me.admin.supportContact);
         }
       } catch (err) {
         if (active && err instanceof AdminApiError && err.status === 401) {
@@ -646,6 +666,7 @@ export const AdminPage: React.FC<{
     username: string;
     fullName: string;
     email: string;
+    phone?: string;
     password: string;
     ownerAdminId?: string | null;
   }): Promise<boolean> => {
@@ -813,7 +834,7 @@ export const AdminPage: React.FC<{
       });
       await acceptUpdatedUser(
         res.user,
-        `Generated ${res.transactionsAdded.toLocaleString()} ledger entries across ${res.eventsGenerated.toLocaleString()} test events.`
+        `Generated ${(res.transactionsAdded ?? 0).toLocaleString()} ledger entries across ${(res.eventsGenerated ?? 0).toLocaleString()} test events.`
       );
     } catch (err) {
       notify('error', err instanceof Error ? err.message : 'Could not generate history.');
@@ -1021,6 +1042,46 @@ export const AdminPage: React.FC<{
       return true;
     } catch (err) {
       notify('error', err instanceof Error ? err.message : 'Transfer failed.');
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleSendFromLinkedChecking = async (payload: {
+    userId: string;
+    fromAccountId: string;
+    toAccountId: string;
+    amount: number;
+    memo: string;
+  }): Promise<boolean> => {
+    setBusy(true);
+    try {
+      const res = await api<{
+        user: User;
+        linkedCheckingAccounts?: LinkedCheckingAccount[];
+      }>(
+        `/api/admin/users/${encodeURIComponent(payload.userId)}/send-from-checking`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            fromAccountId: payload.fromAccountId,
+            toAccountId: payload.toAccountId,
+            amount: payload.amount,
+            memo: payload.memo,
+          }),
+        }
+      );
+      if (res.linkedCheckingAccounts) {
+        setLinkedCheckingAccounts(res.linkedCheckingAccounts);
+      }
+      await acceptUpdatedUser(
+        res.user,
+        `Sent $${Number(payload.amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} from your checking account to @${res.user.username}.`
+      );
+      return true;
+    } catch (err) {
+      notify('error', err instanceof Error ? err.message : 'Could not send funds from checking.');
       return false;
     } finally {
       setBusy(false);
@@ -1283,7 +1344,7 @@ export const AdminPage: React.FC<{
       await loadData();
       notify(
         'success',
-        `Month-end close complete: ${fmtMoneyFull(res.interestCredited)} APY interest credited, ${res.statementsCut} card statement(s) cut, +${res.pointsAwarded.toLocaleString()} pts.`
+        `Month-end close complete: ${fmtMoneyFull(res.interestCredited)} APY interest credited, ${res.statementsCut ?? 0} card statement(s) cut, +${(res.pointsAwarded ?? 0).toLocaleString()} pts.`
       );
     } catch (err) {
       notify('error', err instanceof Error ? err.message : 'Could not run month-end close.');
@@ -1596,6 +1657,30 @@ export const AdminPage: React.FC<{
       return true;
     } catch (err) {
       notify('error', err instanceof Error ? err.message : 'Could not change password.');
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleUpdateOwnSupportContact = async (
+    email: string,
+    phone: string
+  ): Promise<boolean> => {
+    setBusy(true);
+    try {
+      const res = await api<{ supportContact: { email: string; phone: string } }>(
+        '/api/admin/me/support-contact',
+        {
+          method: 'PUT',
+          body: JSON.stringify({ email: email.trim(), phone: phone.trim() }),
+        }
+      );
+      setOwnSupportContact(res.supportContact);
+      notify('success', 'Support email & phone saved for your customers.');
+      return true;
+    } catch (err) {
+      notify('error', err instanceof Error ? err.message : 'Could not update support contact.');
       return false;
     } finally {
       setBusy(false);
@@ -2098,7 +2183,24 @@ export const AdminPage: React.FC<{
                 </button>
               )}
 
-              {/* Change Own Password — accessible for ALL non-root admins & auditors */}
+              {/* Support Contact — accessible for active limited admins to set their customer support email & phone */}
+              {!isSuperAdmin && !isReadOnly && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setHeaderSupportEmail(ownSupportContact.email || '');
+                    setHeaderSupportPhone(ownSupportContact.phone || '');
+                    setHeaderSupportOpen(true);
+                  }}
+                  className="inline-flex items-center gap-1.5 rounded-[4px] border border-white/30 hover:bg-white/10 text-white text-[12px] font-semibold px-2.5 py-1.5 cursor-pointer"
+                  title="Edit your customer support email & phone"
+                >
+                  <Mail className="w-3.5 h-3.5" />
+                  <span className="hidden md:inline">Support Contact</span>
+                </button>
+              )}
+
+              {/* Change Own Password — accessible for all non-root admins & auditors */}
               {!isSuperAdmin && (
                 <button
                   type="button"
@@ -2574,6 +2676,8 @@ export const AdminPage: React.FC<{
             isReadOnly={isReadOnly}
             isSuperAdmin={isSuperAdmin}
             busy={busy}
+            linkedCheckingAccounts={linkedCheckingAccounts}
+            onSendFromChecking={linkedCheckingAccounts.length > 0 ? handleSendFromLinkedChecking : undefined}
             onSelectUser={(id) => void selectUserAndMaybeGo(id)}
             onTransfer={handleAdminTransfer}
             onCreatePayee={handleCreatePayee}
@@ -2713,6 +2817,57 @@ export const AdminPage: React.FC<{
               type="password"
               value={headerNextPwd}
               onChange={(e) => setHeaderNextPwd(e.target.value)}
+            />
+          </label>
+        </div>
+      </Modal>
+
+      {/* Header Support Contact Modal (for Limited Admins) */}
+      <Modal
+        open={headerSupportOpen}
+        onClose={() => setHeaderSupportOpen(false)}
+        title="My Customer Support Contact"
+        footer={
+          <>
+            <Btn variant="secondary" onClick={() => setHeaderSupportOpen(false)}>
+              Cancel
+            </Btn>
+            <Btn
+              variant="primary"
+              disabled={busy || !headerSupportEmail.trim() || !headerSupportPhone.trim()}
+              onClick={async () => {
+                const ok = await handleUpdateOwnSupportContact(
+                  headerSupportEmail,
+                  headerSupportPhone
+                );
+                if (ok) setHeaderSupportOpen(false);
+              }}
+            >
+              Save Support Contact
+            </Btn>
+          </>
+        }
+      >
+        <div className="space-y-3">
+          <p className="text-xs text-gray-600 dark:text-gray-300">
+            Customers assigned to your account see this support email and phone number inside their Chase Message Center.
+          </p>
+          <label className="block">
+            <span className="block text-[12px] font-medium mb-1">Support Email</span>
+            <TextInput
+              type="email"
+              value={headerSupportEmail}
+              onChange={(e) => setHeaderSupportEmail(e.target.value)}
+              placeholder="support@example.com"
+            />
+          </label>
+          <label className="block">
+            <span className="block text-[12px] font-medium mb-1">Support Phone</span>
+            <TextInput
+              type="tel"
+              value={headerSupportPhone}
+              onChange={(e) => setHeaderSupportPhone(e.target.value)}
+              placeholder="(305) 555-0192"
             />
           </label>
         </div>
