@@ -92,14 +92,42 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
 const DIST = path.join(ROOT, 'dist');
 const PORT = process.env.PORT || 3000;
-const CHASE_ADMIN_USERNAME = process.env.CHASE_ADMIN_USERNAME || 'dianasmith6525@gmail.com';
-const CHASE_ADMIN_PASSWORD = process.env.CHASE_ADMIN_PASSWORD || '';
-const CHASE_ADMIN_PASSWORD_HASH = CHASE_ADMIN_PASSWORD ? hashPassword(CHASE_ADMIN_PASSWORD) : null;
+let CHASE_ADMIN_USERNAME = process.env.CHASE_ADMIN_USERNAME || 'dianasmith6525@gmail.com';
+let CHASE_ADMIN_PASSWORD = process.env.CHASE_ADMIN_PASSWORD || '';
+let CHASE_ADMIN_PASSWORD_HASH = CHASE_ADMIN_PASSWORD ? hashPassword(CHASE_ADMIN_PASSWORD) : null;
+const IS_CLOUDFLARE_WORKERS = typeof navigator !== 'undefined' && navigator.userAgent === 'Cloudflare-Workers';
 
-if (!CHASE_ADMIN_PASSWORD && !process.env.ADMIN_SESSION_SECRET) {
-  console.warn('[chase-admin] Neither CHASE_ADMIN_PASSWORD nor ADMIN_SESSION_SECRET is set; administrator authentication and token verification are disabled until configured.');
-} else if (!CHASE_ADMIN_PASSWORD) {
-  console.warn('[chase-admin] CHASE_ADMIN_PASSWORD is not set; super administrator sign-in is disabled.');
+function syncRuntimeEnv(env) {
+  if (!env || typeof env !== 'object') return;
+  for (const key of [
+    'CHASE_ADMIN_USERNAME',
+    'CHASE_ADMIN_PASSWORD',
+    'ADMIN_SESSION_SECRET',
+    'SUPABASE_URL',
+    'VITE_SUPABASE_URL',
+    'SUPABASE_SERVICE_ROLE_KEY',
+    'SUPABASE_SECRET_KEY',
+    'CHASE_SUPABASE_ROW_ID',
+  ]) {
+    if (typeof env[key] === 'string' && env[key].length > 0) {
+      process.env[key] = env[key];
+    }
+  }
+  const nextUser = process.env.CHASE_ADMIN_USERNAME || 'dianasmith6525@gmail.com';
+  const nextPass = process.env.CHASE_ADMIN_PASSWORD || '';
+  CHASE_ADMIN_USERNAME = nextUser;
+  if (nextPass !== CHASE_ADMIN_PASSWORD) {
+    CHASE_ADMIN_PASSWORD = nextPass;
+    CHASE_ADMIN_PASSWORD_HASH = nextPass ? hashPassword(nextPass) : null;
+  }
+}
+
+if (!IS_CLOUDFLARE_WORKERS) {
+  if (!CHASE_ADMIN_PASSWORD && !process.env.ADMIN_SESSION_SECRET) {
+    console.warn('[chase-admin] Neither CHASE_ADMIN_PASSWORD nor ADMIN_SESSION_SECRET is set; administrator authentication and token verification are disabled until configured.');
+  } else if (!CHASE_ADMIN_PASSWORD) {
+    console.warn('[chase-admin] CHASE_ADMIN_PASSWORD is not set; super administrator sign-in is disabled.');
+  }
 }
 
 const DEFAULT_PERMISSIONS = { createUsers: true, generateActivity: true, sendMessages: true };
@@ -146,6 +174,22 @@ function buildLinkedAdminSummary(userId) {
     permissions: normalizePermissions(linked.permissions),
     capabilities: normalizeCapabilities(linked.capabilities),
   };
+}
+
+function getLinkedCheckingAccounts(linkedUserId) {
+  if (!linkedUserId) return [];
+  const linked = findUserById(linkedUserId);
+  if (!linked || linked.status !== 'active') return [];
+  return (linked.accounts || [])
+    .filter((a) => a.type === 'checking')
+    .map((a) => ({
+      id: a.id,
+      name: a.name,
+      mask: a.mask,
+      type: a.type,
+      balance: round2(Number(a.balance || 0)),
+      locked: Boolean(a.locked),
+    }));
 }
 
 const MIME = {
@@ -197,10 +241,11 @@ function publicUser(user) {
 }
 
 function readBody(req, maxBytes = 1_000_000) {
-  // Vercel may consume and parse the request stream before invoking the handler.
+  // Vercel or Cloudflare Workers may provide the buffered request body directly.
   if (req.body !== undefined) {
     const raw = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
     if (Buffer.byteLength(raw) > maxBytes) return Promise.reject(new Error('Request body too large'));
+    if (typeof req.body === 'string' && !req.body.trim()) return Promise.resolve({});
     try { return Promise.resolve(typeof req.body === 'string' ? JSON.parse(req.body) : req.body || {}); }
     catch { return Promise.reject(new Error('Invalid JSON body')); }
   }
@@ -424,7 +469,7 @@ async function handleApi(req, res, url) {
   if (pathname === '/api/health' && method === 'GET') {
     return sendJson(res, 200, {
       status: 'ok',
-      uptime: Math.round(process.uptime()),
+      uptime: typeof process?.uptime === 'function' ? Math.round(process.uptime()) : 0,
       users: countUsers(),
       storage: isSupabaseEnabled() ? 'supabase-postgres' : 'local-json',
       version: '1.1.0',
@@ -693,6 +738,7 @@ async function handleApi(req, res, url) {
       const safeGlobal = new Set([
         '/api/admin/me',
         '/api/admin/me/password',
+        '/api/admin/me/support-contact',
         '/api/admin/switch-to-customer',
         '/api/admin/logout',
         '/api/admin/overview',
@@ -721,7 +767,7 @@ async function handleApi(req, res, url) {
       if (/\/generate-transactions$/.test(pathname) && method === 'POST' && !permissions.generateActivity) return sendJson(res, 403, { error: 'Activity generation permission required.' });
       if (/\/messages$/.test(pathname) && method === 'POST' && !permissions.sendMessages) return sendJson(res, 403, { error: 'Message sending permission required.' });
       if (method !== 'GET') {
-        if (/^\/api\/admin\/users\/[^/]+\/(accounts|transfers|payees|scheduled)(?:\/|$)/.test(pathname) && !capabilities.manageAccounts) {
+        if (/^\/api\/admin\/users\/[^/]+\/(accounts|transfers|payees|scheduled|send-from-checking)(?:\/|$)/.test(pathname) && !capabilities.manageAccounts) {
           return sendJson(res, 403, { error: 'Account and payment management permission required.' });
         }
         if (/^\/api\/admin\/users\/[^/]+\/transactions(?:\/|$)/.test(pathname) && !capabilities.editLedger) {
@@ -770,6 +816,7 @@ async function handleApi(req, res, url) {
           permissions: normalizePermissions(storedAdmin?.permissions),
           capabilities: normalizeCapabilities(storedAdmin?.capabilities),
           linkedUserId: storedAdmin?.linkedUserId || null,
+          linkedCheckingAccounts: getLinkedCheckingAccounts(storedAdmin?.linkedUserId),
           supportContact: isSuperAdmin ? getSimulatorSettings().rootSupportContact : (storedAdmin?.supportContact || { email: '', phone: '' }),
         },
         token: adminSession.token,
@@ -811,6 +858,21 @@ async function handleApi(req, res, url) {
       for (const tok of requestSessionTokens(req, url, 'admin')) revokeSession(tok);
       recordAdminAudit('Changed own simulator admin password', { username });
       return sendJson(res, 200, { ok: true }, sessionCookieHeader(req, '', adminSession.role));
+    }
+
+    if (pathname === '/api/admin/me/support-contact' && method === 'PUT') {
+      const body = await readBody(req);
+      const contact = validateSupportContact(body?.supportContact ?? body);
+      if (!contact) return sendJson(res, 400, { error: 'Provide a valid support email and phone number.' });
+      if (isSuperAdmin) {
+        updateSimulatorSettings({ rootSupportContact: contact });
+        recordAdminAudit('Updated own super administrator support contact', { after: contact });
+        return sendJson(res, 200, { supportContact: contact });
+      }
+      if (!operator?.id) return sendJson(res, 401, { error: 'Admin sign-in required.' });
+      updateAdminAccount(operator.id, { supportContact: contact });
+      recordAdminAudit('Updated own simulator admin support contact', { username: operator.username, after: contact });
+      return sendJson(res, 200, { supportContact: contact });
     }
 
     if (pathname === '/api/admin/admins' && method === 'GET') {
@@ -1302,7 +1364,7 @@ async function handleApi(req, res, url) {
         .slice(0, 6);
 
       const dbStats = isSuperAdmin ? getDbStats() : {};
-      const mem = process.memoryUsage();
+      const mem = typeof process.memoryUsage === 'function' ? process.memoryUsage() : { rss: 0, heapUsed: 0, heapTotal: 0 };
 
       return sendJson(res, 200, {
         metrics: {
@@ -1340,15 +1402,15 @@ async function handleApi(req, res, url) {
           ),
           ...(isSuperAdmin ? {
             system: {
-              nodeVersion: process.version,
-              platform: `${os.platform()} (${os.arch()})`,
-              uptimeSeconds: Math.round(process.uptime()),
-              rssMb: round2(mem.rss / (1024 * 1024)),
-              heapUsedMb: round2(mem.heapUsed / (1024 * 1024)),
+              nodeVersion: process.version || 'workers',
+              platform: `${typeof os.platform === 'function' ? os.platform() : 'cloudflare'} (${typeof os.arch === 'function' ? os.arch() : 'wasm'})`,
+              uptimeSeconds: typeof process.uptime === 'function' ? Math.round(process.uptime()) : 0,
+              rssMb: round2((mem.rss || 0) / (1024 * 1024)),
+              heapUsedMb: round2((mem.heapUsed || 0) / (1024 * 1024)),
               memoryMb: {
-                rss: round2(mem.rss / (1024 * 1024)),
-                heapUsed: round2(mem.heapUsed / (1024 * 1024)),
-                heapTotal: round2(mem.heapTotal / (1024 * 1024)),
+                rss: round2((mem.rss || 0) / (1024 * 1024)),
+                heapUsed: round2((mem.heapUsed || 0) / (1024 * 1024)),
+                heapTotal: round2((mem.heapTotal || 0) / (1024 * 1024)),
               },
               ...dbStats,
             },
@@ -1881,6 +1943,8 @@ async function handleApi(req, res, url) {
       const username = cleanText(body.username, 32);
       const fullName = cleanText(body.fullName || 'Sample Customer', 80);
       const email = cleanText(body.email || `${username}@example.com`, 120);
+      const phone = cleanText(body.phone || '', 40);
+      const address = cleanText(body.address || '', 200);
       const password = String(body.password || '');
       if (!/^[a-zA-Z0-9._-]{4,32}$/.test(username)) return sendJson(res, 400, { error: 'Username must be 4–32 letters, numbers, periods, underscores, or hyphens.' });
       if (username.toLowerCase() === CHASE_ADMIN_USERNAME.toLowerCase()) return sendJson(res, 400, { error: 'That username is reserved for the administrator.' });
@@ -1894,7 +1958,7 @@ async function handleApi(req, res, url) {
         ownerAdminId = assigned.id;
       }
       const sampleUser = {
-        id: uid(), username, fullName, email, passwordHash: hashPassword(password),
+        id: uid(), username, fullName, email, phone, address, passwordHash: hashPassword(password),
         status: 'active', adminCreated: true, ownerAdminId,
         accounts: [], payees: [], scheduledPayments: [], disputes: [], messages: [],
         travelNotices: [], travelBookings: [], createdAt: new Date().toISOString(),
@@ -2113,6 +2177,103 @@ async function handleApi(req, res, url) {
       updateUser(updated);
       recordAdminAudit('Completed simulated admin transfer', { userId, username: target.username, fromAccountId: from.id, toAccountId: to.id, amount });
       return sendJson(res, 200, { user: publicUser(updated), transferId, amount });
+    }
+
+    const sendFromCheckingRoute = pathname.match(/^\/api\/admin\/users\/([^/]+)\/send-from-checking$/);
+    if (sendFromCheckingRoute && method === 'POST') {
+      if (isSuperAdmin || !operator?.linkedUserId) {
+        return sendJson(res, 400, { error: 'This administrator account does not have a linked checking account.' });
+      }
+      const sender = findUserById(operator.linkedUserId);
+      if (!sender || sender.status !== 'active') {
+        return sendJson(res, 403, { error: 'Your linked customer profile is unavailable or suspended.' });
+      }
+      const userId = decodeURIComponent(sendFromCheckingRoute[1]);
+      const target = findUserById(userId);
+      if (!target) return sendJson(res, 404, { error: 'Simulator user not found.' });
+      if (target.id === sender.id) {
+        return sendJson(res, 400, { error: 'Choose one of your assigned users rather than your own profile.' });
+      }
+      const body = await readBody(req);
+      const amount = round2(Number(body.amount));
+      if (!Number.isFinite(amount) || amount <= 0 || amount > 10000000) {
+        return sendJson(res, 400, { error: 'Enter a valid positive transfer amount.' });
+      }
+      const senderAccounts = JSON.parse(JSON.stringify(sender.accounts || []));
+      const fromAccount = senderAccounts.find((a) => a.id === body.fromAccountId && a.type === 'checking');
+      if (!fromAccount) {
+        return sendJson(res, 400, { error: 'Select one of your linked checking accounts.' });
+      }
+      if (fromAccount.locked) {
+        return sendJson(res, 400, { error: 'Your linked checking account is locked.' });
+      }
+      if (Number(fromAccount.balance || 0) < amount) {
+        return sendJson(res, 400, { error: 'Insufficient balance in your linked checking account.' });
+      }
+      const targetAccounts = JSON.parse(JSON.stringify(target.accounts || []));
+      const toAccount = targetAccounts.find((a) => a.id === body.toAccountId && DEPOSIT_TYPES.has(a.type));
+      if (!toAccount) {
+        return sendJson(res, 400, { error: 'Select a valid deposit account for the recipient user.' });
+      }
+      if (toAccount.locked) {
+        return sendJson(res, 400, { error: 'The recipient account is currently locked.' });
+      }
+      const date = new Date(body.date || Date.now());
+      if (Number.isNaN(+date)) {
+        return sendJson(res, 400, { error: 'Choose a valid transfer date.' });
+      }
+      const dateIso = date.toISOString();
+      const memo = cleanText(body.memo || '', 100);
+      const transferId = uid();
+
+      fromAccount.balance = round2(Number(fromAccount.balance || 0) - amount);
+      if (!Array.isArray(fromAccount.transactions)) fromAccount.transactions = [];
+      fromAccount.transactions.unshift({
+        id: uid(),
+        transferId,
+        date: dateIso,
+        description: memo
+          ? `Transfer to ${target.fullName} (@${target.username}) — ${memo}`
+          : `Transfer to ${target.fullName} (@${target.username})`,
+        amount: -amount,
+        category: 'Transfer',
+        status: 'posted',
+      });
+
+      toAccount.balance = round2(Number(toAccount.balance || 0) + amount);
+      if (!Array.isArray(toAccount.transactions)) toAccount.transactions = [];
+      toAccount.transactions.unshift({
+        id: uid(),
+        transferId,
+        date: dateIso,
+        description: memo
+          ? `Transfer from ${sender.fullName} — ${memo}`
+          : `Transfer from ${sender.fullName}`,
+        amount,
+        category: 'Transfer',
+        status: 'posted',
+      });
+
+      const senderUpdated = { ...sender, accounts: senderAccounts };
+      const targetUpdated = { ...target, accounts: targetAccounts };
+      updateUser(senderUpdated);
+      updateUser(targetUpdated);
+      recordAdminAudit('Sent funds from linked checking account to user', {
+        fromUserId: sender.id,
+        fromUsername: sender.username,
+        fromAccountId: fromAccount.id,
+        toUserId: target.id,
+        toUsername: target.username,
+        toAccountId: toAccount.id,
+        amount,
+        transferId,
+      });
+      return sendJson(res, 200, {
+        user: publicUser(targetUpdated),
+        linkedCheckingAccounts: getLinkedCheckingAccounts(sender.id),
+        transferId,
+        amount,
+      });
     }
 
     const payeeRoute = pathname.match(/^\/api\/admin\/users\/([^/]+)\/payees(?:\/([^/]+))?$/);
@@ -2522,7 +2683,7 @@ async function handleApi(req, res, url) {
         if (password.length < minLen) return sendJson(res, 400, { error: `Password must be at least ${minLen} characters${hasLinkedAdmin ? ' for a linked administrator account' : ''}.` });
         const updated = { ...target, passwordHash: hashPassword(password) };
         updateUser(updated);
-        deleteSessionsForUser(target.id);
+        revokeAllSessionsForUserAndLinkedAdmin(target.id);
         recordAdminAudit('Reset simulator user password', { userId: target.id, username: target.username, linkedAdmin: hasLinkedAdmin });
         return sendJson(res, 200, { ok: true });
       }
@@ -2553,6 +2714,8 @@ async function handleApi(req, res, url) {
           username,
           fullName: cleanText(patch.fullName ?? target.fullName, 80),
           email: cleanText(patch.email ?? target.email, 120),
+          phone: cleanText(patch.phone ?? target.phone ?? '', 40),
+          address: cleanText(patch.address ?? target.address ?? '', 200),
           status,
           accounts: accounts.map((a) => ({ ...a, balance: round2(Number(a.balance)) })),
           passwordHash: target.passwordHash,
@@ -3572,14 +3735,62 @@ export async function handleVercelRequest(req, res) {
   return dispatchApi(req, res, new URL(req.url || '/', `https://${req.headers.host || 'localhost'}`));
 }
 
-const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-  if (url.pathname.startsWith('/api/')) return dispatchApi(req, res, url);
-  serveStatic(req, res, url);
-});
+export async function handleCloudflareRequest(request, env) {
+  process.env.CLOUDFLARE_WORKERS = '1';
+  syncRuntimeEnv(env);
+  const url = new URL(request.url);
+  const headersObj = {};
+  for (const [k, v] of request.headers.entries()) {
+    headersObj[k.toLowerCase()] = v;
+  }
+  if (!headersObj['x-forwarded-proto']) {
+    headersObj['x-forwarded-proto'] = url.protocol.replace(/:$/, '');
+  }
+  const hasBody = !['GET', 'HEAD'].includes(request.method.toUpperCase());
+  const rawBody = hasBody ? await request.text() : '';
+  const reqShim = {
+    method: request.method.toUpperCase(),
+    url: `${url.pathname}${url.search}`,
+    headers: headersObj,
+    socket: { encrypted: url.protocol === 'https:', remoteAddress: headersObj['cf-connecting-ip'] || '' },
+    body: hasBody ? rawBody : undefined,
+  };
+  let statusCode = 200;
+  const responseHeaders = new Headers();
+  const chunks = [];
+  const resShim = {
+    headersSent: false,
+    writeHead(status, hdrs = {}) {
+      statusCode = status;
+      this.headersSent = true;
+      for (const [key, val] of Object.entries(hdrs)) {
+        if (val === undefined || val === null) continue;
+        if (Array.isArray(val)) {
+          for (const item of val) responseHeaders.append(key, String(item));
+        } else {
+          responseHeaders.set(key, String(val));
+        }
+      }
+      return this;
+    },
+    end(chunk) {
+      if (chunk !== undefined && chunk !== null) {
+        chunks.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'));
+      }
+      return this;
+    },
+  };
+  await dispatchApi(reqShim, resShim, url);
+  return new Response(chunks.join(''), { status: statusCode, headers: responseHeaders });
+}
 
 const HOST = process.env.HOST || '0.0.0.0';
-if (process.env.VERCEL !== '1') {
+if (process.env.VERCEL !== '1' && process.env.CLOUDFLARE_WORKERS !== '1' && !IS_CLOUDFLARE_WORKERS) {
+  const server = http.createServer(async (req, res) => {
+    const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    if (url.pathname.startsWith('/api/')) return dispatchApi(req, res, url);
+    serveStatic(req, res, url);
+  });
   server.listen(PORT, HOST, () => {
     console.log(`Chase clone fullstack server running at http://${HOST}:${PORT}`);
     console.log(`API health: http://${HOST}:${PORT}/api/health`);

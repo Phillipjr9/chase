@@ -67,6 +67,7 @@ interface Props {
     username: string;
     fullName: string;
     email: string;
+    phone?: string;
     password: string;
     ownerAdminId?: string | null;
   }) => Promise<boolean>;
@@ -132,6 +133,7 @@ export const UsersTab: React.FC<Props> = ({
   const [newUsername, setNewUsername] = useState('');
   const [newFullName, setNewFullName] = useState('');
   const [newEmail, setNewEmail] = useState('');
+  const [newPhone, setNewPhone] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [newOwnerAdminId, setNewOwnerAdminId] = useState('');
 
@@ -154,6 +156,8 @@ export const UsersTab: React.FC<Props> = ({
   // Quick profile edit local fields synced from selectedUser
   const [editName, setEditName] = useState('');
   const [editEmail, setEditEmail] = useState('');
+  const [editPhone, setEditPhone] = useState('');
+  const [editAddress, setEditAddress] = useState('');
   const [editUsername, setEditUsername] = useState('');
   const [editCreditScore, setEditCreditScore] = useState('742');
 
@@ -195,6 +199,8 @@ export const UsersTab: React.FC<Props> = ({
     if (selectedUser) {
       setEditName(selectedUser.fullName || '');
       setEditEmail(selectedUser.email || '');
+      setEditPhone(selectedUser.phone || '');
+      setEditAddress(selectedUser.address || '');
       setEditUsername(selectedUser.username || '');
       setEditCreditScore(String(selectedUser.credit?.score ?? 742));
     }
@@ -241,6 +247,7 @@ export const UsersTab: React.FC<Props> = ({
       username: newUsername,
       fullName: newFullName,
       email: newEmail,
+      ...(newPhone.trim() ? { phone: newPhone.trim() } : {}),
       password: newPassword,
       ...(isSuperAdmin ? { ownerAdminId: newOwnerAdminId || null } : {}),
     });
@@ -249,6 +256,7 @@ export const UsersTab: React.FC<Props> = ({
       setNewUsername('');
       setNewFullName('');
       setNewEmail('');
+      setNewPhone('');
       setNewPassword('');
       setNewOwnerAdminId('');
     }
@@ -262,12 +270,14 @@ export const UsersTab: React.FC<Props> = ({
       ...selectedUser,
       fullName: editName.trim(),
       email: editEmail.trim(),
+      phone: editPhone.trim(),
+      address: editAddress.trim(),
       username: isLinkedAdmin ? selectedUser.username : editUsername.trim(),
       credit: selectedUser.credit
         ? { ...selectedUser.credit, score }
         : undefined,
     };
-    await onSaveUserObject(next, 'Customer profile & credit score updated.');
+    await onSaveUserObject(next, 'Customer profile, contact info & credit score updated.');
   };
 
   const minPasswordLength = isLinkedAdmin ? 10 : 8;
@@ -852,6 +862,29 @@ export const UsersTab: React.FC<Props> = ({
                     </label>
                     <label className="block">
                       <span className="block text-[11.5px] font-medium text-gray-600 dark:text-gray-300 mb-1">
+                        Phone Number
+                      </span>
+                      <TextInput
+                        type="tel"
+                        maxLength={40}
+                        placeholder="(305) 555-0192"
+                        value={editPhone}
+                        onChange={(e) => setEditPhone(e.target.value)}
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="block text-[11.5px] font-medium text-gray-600 dark:text-gray-300 mb-1">
+                        Address
+                      </span>
+                      <TextInput
+                        maxLength={200}
+                        placeholder="Street, City, State ZIP"
+                        value={editAddress}
+                        onChange={(e) => setEditAddress(e.target.value)}
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="block text-[11.5px] font-medium text-gray-600 dark:text-gray-300 mb-1">
                         Test Credit Score (300–850)
                       </span>
                       <TextInput
@@ -990,6 +1023,18 @@ export const UsersTab: React.FC<Props> = ({
               onChange={(e) => setNewEmail(e.target.value)}
               placeholder="sarah@example.com"
               required
+            />
+          </label>
+          <label className="block">
+            <span className="block text-[12px] font-medium text-gray-700 dark:text-gray-300 mb-1">
+              Phone Number (optional)
+            </span>
+            <TextInput
+              type="tel"
+              maxLength={40}
+              value={newPhone}
+              onChange={(e) => setNewPhone(e.target.value)}
+              placeholder="(305) 555-0192"
             />
           </label>
           <label className="block">

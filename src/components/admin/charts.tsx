@@ -24,9 +24,11 @@ export const ACCOUNT_TYPE_COLORS: Record<string, string> = {
   'auto-loan': '#EC4899',
 };
 
-export function fmtCompactMoney(n: number): string {
-  const abs = Math.abs(n);
-  const sign = n < 0 ? '−' : '';
+export function fmtCompactMoney(n: number | null | undefined): string {
+  const num = typeof n === 'number' ? n : Number(n ?? 0);
+  const safe = Number.isFinite(num) ? num : 0;
+  const abs = Math.abs(safe);
+  const sign = safe < 0 ? '−' : '';
   if (abs >= 1_000_000_000) return `${sign}$${(abs / 1_000_000_000).toFixed(1)}B`;
   if (abs >= 1_000_000) return `${sign}$${(abs / 1_000_000).toFixed(abs >= 10_000_000 ? 0 : 1)}M`;
   if (abs >= 1_000) return `${sign}$${(abs / 1_000).toFixed(abs >= 100_000 ? 0 : 1)}K`;

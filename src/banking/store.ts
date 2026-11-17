@@ -428,12 +428,15 @@ export function mask4(): string {
   return String(Math.floor(1000 + Math.random() * 9000));
 }
 
-export function fmtMoney(n: number): string {
-  return n.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+export function fmtMoney(n: number | null | undefined): string {
+  const num = typeof n === 'number' ? n : Number(n ?? 0);
+  const safe = Number.isFinite(num) ? num : 0;
+  return safe.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
 }
 
-export function round2(n: number): number {
-  return Math.round(n * 100) / 100;
+export function round2(n: number | null | undefined): number {
+  const num = typeof n === 'number' ? n : Number(n ?? 0);
+  return Number.isFinite(num) ? Math.round(num * 100) / 100 : 0;
 }
 
 /** Account types that can fund a payment. Mirrors the server-side rule. */

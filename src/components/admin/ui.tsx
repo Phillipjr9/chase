@@ -19,13 +19,17 @@ import { cn } from '../../utils/cn';
 
 /* --------------------------------- Format --------------------------------- */
 
-export function fmtMoneyFull(n: number): string {
-  return n.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+export function fmtMoneyFull(n: number | null | undefined): string {
+  const num = typeof n === 'number' ? n : Number(n ?? 0);
+  const safe = Number.isFinite(num) ? num : 0;
+  return safe.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
 }
 
-export function fmtSignedMoney(n: number): string {
-  const sign = n > 0 ? '+' : n < 0 ? '−' : '';
-  return `${sign}${fmtMoneyFull(Math.abs(n))}`;
+export function fmtSignedMoney(n: number | null | undefined): string {
+  const num = typeof n === 'number' ? n : Number(n ?? 0);
+  const safe = Number.isFinite(num) ? num : 0;
+  const sign = safe > 0 ? '+' : safe < 0 ? '−' : '';
+  return `${sign}${fmtMoneyFull(Math.abs(safe))}`;
 }
 
 export function fmtDateShort(iso: string | null | undefined): string {

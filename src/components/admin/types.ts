@@ -110,6 +110,15 @@ export interface AdminAccountRow {
   lastActivity?: string | null;
 }
 
+export interface LinkedCheckingAccount {
+  id: string;
+  name: string;
+  mask: string;
+  type: string;
+  balance: number;
+  locked?: boolean;
+}
+
 export interface GlobalTransaction extends Transaction {
   userId: string;
   username: string;
