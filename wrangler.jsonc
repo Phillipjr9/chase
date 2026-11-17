@@ -1,0 +1,11 @@
+{
+  "name": "chase",
+  "main": "src/index.js",
+  "compatibility_date": "2026-11-16",
+  "hyperdrive": [
+    {
+      "binding": "HYPERDRIVE",
+      "id": "47aefe0e9a4b408695d88d733970d65b"
+    }
+  ]
+}

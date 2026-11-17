@@ -4,6 +4,10 @@ server/data/
 # Dependencies — platform-specific optional binaries
 node_modules/
 
+# Cloudflare Worker / local runtime
+.wrangler/
+.dev.vars
+
 # Scratch scripts and preview logs
 .work/
 

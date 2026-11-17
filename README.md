@@ -57,6 +57,48 @@ identical behavior.
 
 ---
 
+## Cloudflare Worker + Hyperdrive (Supabase)
+
+This repo also includes a Cloudflare Worker named `chase` that connects to a Supabase Postgres database through a Hyperdrive binding.
+
+### Install dependencies
+
+```bash
+npm install
+```
+
+### Add the Hyperdrive config ID
+
+Open `wrangler.jsonc` and replace the placeholder value for the `HYPERDRIVE` binding:
+
+```json
+"hyperdrive": [
+  { "binding": "HYPERDRIVE", "id": "REPLACE_WITH_HYPERDRIVE_CONFIG_ID" }
+]
+```
+
+Use the Cloudflare dashboard config named `chase-supabase` and paste its config ID into that field. Do not add the database password anywhere in the project; Hyperdrive provides the runtime connection string via `env.HYPERDRIVE.connectionString`.
+
+### Run locally
+
+```bash
+npm run dev
+```
+
+This runs `wrangler dev`, which starts the local Worker and makes the `HYPERDRIVE` binding available at runtime.
+
+### Deploy
+
+```bash
+npm run deploy
+```
+
+This runs `wrangler deploy` and publishes the Worker. The existing Cloudflare Worker named `chase` is already present in your account as a static-assets-only Worker; deploying this Worker code will turn it into a real Worker with a fetch handler.
+
+> Do not redefine the remote secret bindings `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `SUPABASE_PUBLISHABLE_KEY`, or `SUPABASE_JWKS_URL` in this repo. Those already exist in Cloudflare and are injected remotely.
+
+---
+
 ## API reference
 
 All endpoints are JSON. Authenticated routes require
