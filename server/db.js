@@ -629,7 +629,7 @@ export function getDbStats() {
     auditCount: db.auditLog.length,
     dbSizeBytes,
     db: {
-      path: isSupabaseEnabled() ? `supabase://chase_simulator_state/${SUPABASE_ROW_ID}` : DB_FILE,
+      path: isSupabaseEnabled() ? `supabase://chase_simulator_state/${getSupabaseRowId()}` : DB_FILE,
       sizeBytes: dbSizeBytes,
       mtimeMs: dbMtimeMs,
     },
