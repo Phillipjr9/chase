@@ -965,7 +965,7 @@ export const WealthCreditTab: React.FC<WealthCreditProps> = ({
                   <div>
                     <strong className="text-gray-900">{b.title}</strong>
                     <span className="block text-[11px] text-gray-500">
-                      {b.provider} · {b.dates} · {b.pointsUsed.toLocaleString()} pts
+                      {b.provider} · {b.dates} · {(b.pointsUsed || 0).toLocaleString()} pts
                     </span>
                   </div>
                   {!isReadOnly && (

@@ -408,7 +408,7 @@ export const StatementModal: React.FC<StatementModalProps> = ({
                       <div>
                         <span className="text-slate-500 block">Ultimate Rewards® Balance</span>
                         <span className="font-bold text-[#117ACA]">
-                          {Number(account.rewardsPoints).toLocaleString()} pts
+                          {Number(account.rewardsPoints || 0).toLocaleString()} pts
                         </span>
                       </div>
                     )}
