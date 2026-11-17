@@ -237,7 +237,7 @@ export const AccountsTab: React.FC<AccountsProps> = ({
         <Card className="xl:col-span-4 p-5">
           <CardHeader
             title="Active Customer Portfolio"
-            subtitle="Choose whose test accounts to inspect or reconcile"
+            subtitle="Choose whose accounts to inspect or reconcile"
             action={
               selectedUser ? (
                 <div className="flex items-center gap-1">
@@ -261,7 +261,7 @@ export const AccountsTab: React.FC<AccountsProps> = ({
           />
           <div className="mt-3">
             <SelectInput
-              aria-label="Choose test customer"
+              aria-label="Choose customer"
               value={selectedUser?.id || ''}
               onChange={(e) => e.target.value && onSelectUser(e.target.value)}
               className="w-full"
@@ -301,7 +301,7 @@ export const AccountsTab: React.FC<AccountsProps> = ({
 
         <Card className="xl:col-span-8 p-5">
           <CardHeader
-            title="Open New Test Account"
+            title="Open New Account"
             subtitle="Provision checking, savings, CD, credit card, auto loan, or mortgage with instant balance & mask"
           />
           <form onSubmit={handleCreate} className="mt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 items-end">
@@ -361,7 +361,7 @@ export const AccountsTab: React.FC<AccountsProps> = ({
             <div className="sm:col-span-2 lg:col-span-5 flex justify-end">
               <Btn type="submit" variant="primary" disabled={busy || isReadOnly || !selectedUser}>
                 <Plus className="w-4 h-4" />
-                Add Test Account
+                Add Account
               </Btn>
             </div>
           </form>
@@ -409,7 +409,7 @@ export const AccountsTab: React.FC<AccountsProps> = ({
         <Card className="p-8">
           <EmptyState
             icon={<WalletCards className="w-5 h-5" />}
-            title="No test accounts on this profile"
+            title="No accounts on this profile"
             detail="Use the form above to provision a checking, savings, card, CD, or loan account."
           />
         </Card>
@@ -933,7 +933,7 @@ export const AccountsTab: React.FC<AccountsProps> = ({
           setBulkDeleteOpen(false);
           setBulkDeleteConfirm('');
         }}
-        title={`Delete ${selectedAccountIds.length} Test Accounts`}
+        title={`Delete ${selectedAccountIds.length} Accounts`}
         footer={
           <>
             <Btn variant="secondary" onClick={() => setBulkDeleteOpen(false)}>
@@ -961,7 +961,7 @@ export const AccountsTab: React.FC<AccountsProps> = ({
         }
       >
         <p className="text-[13px] text-gray-600 dark:text-gray-300">
-          Type <code className="font-mono font-bold text-[#F04438]">DELETE SELECTED ACCOUNTS</code> to permanently delete the selected test accounts and their attached ledger history:
+          Type <code className="font-mono font-bold text-[#F04438]">DELETE SELECTED ACCOUNTS</code> to permanently delete the selected accounts and their attached ledger history:
         </p>
         <TextInput
           className="mt-3"
@@ -975,7 +975,7 @@ export const AccountsTab: React.FC<AccountsProps> = ({
       <Modal
         open={!!deleteTargetId}
         onClose={() => setDeleteTargetId(null)}
-        title="Delete Test Account"
+        title="Delete Account"
         footer={
           <>
             <Btn variant="secondary" onClick={() => setDeleteTargetId(null)}>
@@ -995,7 +995,7 @@ export const AccountsTab: React.FC<AccountsProps> = ({
         }
       >
         <p className="text-[13px] text-gray-600 dark:text-gray-300">
-          Delete this test account and all of its attached ledger entries?
+          Delete this account and all of its attached ledger entries?
         </p>
       </Modal>
       {statementModal && selectedUser && (
@@ -1253,7 +1253,7 @@ export const LedgerTab: React.FC<LedgerProps> = ({
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h3 className="text-[15.5px] font-semibold text-gray-900 dark:text-white">
-                Global Simulator Ledger ({filtered.length.toLocaleString()})
+                Global Ledger ({filtered.length.toLocaleString()})
               </h3>
               <p className="text-[12px] text-gray-500 dark:text-gray-400">
                 Editing or deleting any entry automatically adjusts the underlying account balance by the delta

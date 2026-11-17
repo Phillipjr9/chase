@@ -176,7 +176,7 @@ export const OverviewTab: React.FC<Props> = ({
 
   const kpis = [
     {
-      label: 'Test Customers',
+      label: 'Customer Profiles',
       value: String(metrics?.users ?? 0),
       sub:
         metrics && metrics.suspendedUsers > 0
@@ -256,7 +256,7 @@ export const OverviewTab: React.FC<Props> = ({
           <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
             <div>
               <h3 className="text-[15.5px] font-semibold text-gray-900 dark:text-white">
-                Test Cashflow Velocity
+                Cashflow Velocity
               </h3>
               <p className="text-[12px] text-gray-500 dark:text-gray-400 mt-0.5">
                 Deposits &amp; credits vs. purchases &amp; outgoing payments across all customer ledgers
@@ -306,7 +306,7 @@ export const OverviewTab: React.FC<Props> = ({
               Current-Month Deposit Pace
             </h3>
             <p className="text-[12px] text-gray-500 dark:text-gray-400 mt-0.5">
-              Monthly inflow benchmark across active test profiles
+              Monthly inflow benchmark across active profiles
             </p>
           </div>
           <div className="my-2">
@@ -361,7 +361,7 @@ export const OverviewTab: React.FC<Props> = ({
                 centerLabel="Total accounts"
               />
             ) : (
-              <EmptyState title="No test accounts" />
+              <EmptyState title="No accounts" />
             )}
           </div>
         </Card>
@@ -559,7 +559,7 @@ export const OverviewTab: React.FC<Props> = ({
                           variant="ghost"
                           size="xs"
                           onClick={() => onImpersonateById(u.id, u.fullName)}
-                          title={`Open banking simulator as ${u.fullName}`}
+                          title={`Open customer view as ${u.fullName}`}
                         >
                           <Eye className="w-3.5 h-3.5" />
                           Preview
@@ -591,7 +591,7 @@ export const OverviewTab: React.FC<Props> = ({
             />
             {openDisputes.length === 0 ? (
               <p className="mt-3 text-[12.5px] text-gray-500 dark:text-gray-400">
-                All customer card disputes are currently resolved. You can open or refund test disputes in Payments &amp; Disputes.
+                All customer card disputes are currently resolved. You can open or refund disputes in Payments &amp; Disputes.
               </p>
             ) : (
               <ul className="mt-3 divide-y divide-gray-100 dark:divide-gray-800">
