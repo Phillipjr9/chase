@@ -7,7 +7,7 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const __dirname = import.meta.url ? path.dirname(fileURLToPath(import.meta.url)) : '/tmp';
 const DEFAULT_DATA_DIR = (process.env.VERCEL === '1' || process.env.CLOUDFLARE_WORKERS === '1') ? '/tmp' : path.join(__dirname, 'data');
 const DB_FILE = process.env.CHASE_DB_PATH || path.join(DEFAULT_DATA_DIR, 'db.json');
 const DATA_DIR = path.dirname(DB_FILE);
