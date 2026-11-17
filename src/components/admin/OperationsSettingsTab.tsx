@@ -168,7 +168,7 @@ export const OperationsTab: React.FC<OperationsProps> = ({
   onProcessScheduled,
   onRunMonthEndClose,
 }) => {
-  // Zelle / Wire / QuickDeposit test environment rail state
+  // Zelle / Wire / QuickDeposit rail state
   const [railMode, setRailMode] = useState<'zelle' | 'wire' | 'deposit'>('zelle');
   const [railDirection, setRailDirection] = useState<'in' | 'out'>('in');
   const [railAccountId, setRailAccountId] = useState('');
@@ -1550,7 +1550,7 @@ export const SettingsTab: React.FC<SettingsProps> = ({
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-5">
         <Card className="xl:col-span-6 p-5">
           <CardHeader
-            title="Test Environment Access Guardrails"
+            title="Access Guardrails"
             subtitle="Server-enforced public customer enrollment & password recovery controls"
             action={<LockKeyhole className="w-4 h-4 text-[#0060F0]" />}
           />
@@ -2117,7 +2117,7 @@ export const SettingsTab: React.FC<SettingsProps> = ({
 
         <Card className="xl:col-span-5 p-5 border-red-200 dark:border-red-500/30">
           <CardHeader
-            title="Reset Test Environment"
+            title="Reset Environment"
             subtitle="Deletes customer profiles and customer sessions while retaining audit history"
             action={<ShieldAlert className="w-4 h-4 text-[#F04438]" />}
           />
@@ -2676,7 +2676,7 @@ export const SettingsTab: React.FC<SettingsProps> = ({
           setRestoreOpen(false);
           setRestoreConfirm('');
         }}
-        title="Restore Test Environment Backup"
+        title="Restore Backup"
         footer={
           <>
             <Btn variant="secondary" onClick={() => setRestoreOpen(false)}>
@@ -2731,7 +2731,7 @@ export const SettingsTab: React.FC<SettingsProps> = ({
           setResetSimOpen(false);
           setResetSimConfirm('');
         }}
-        title="Confirm Full Test Environment Reset"
+        title="Confirm Full Reset"
         footer={
           <>
             <Btn variant="secondary" onClick={() => setResetSimOpen(false)}>

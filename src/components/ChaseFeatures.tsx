@@ -1472,9 +1472,6 @@ export const SecureMessagesView: React.FC<{ user: User; onUpdateUser: (user: Use
       <div className="flex flex-wrap items-end justify-between gap-3 mb-6">
         <div>
           <H1>Secure Message Center</H1>
-          <p className="mt-1 text-[13px]" style={{ color: MUT }}>
-            Test environment support messages. No real banking or payment services are provided.
-          </p>
         </div>
         <span className="inline-flex items-center gap-1.5 text-[12px] font-semibold px-3 py-1 rounded-full bg-[#EAF3FB] text-[#0B5FA5]">
           <ShieldCheck className="w-4 h-4" /> 256-bit TLS · Authenticated Session

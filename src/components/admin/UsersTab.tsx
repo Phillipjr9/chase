@@ -705,9 +705,8 @@ export const UsersTab: React.FC<Props> = ({
             {/* Simulated Activity History Generator */}
             <Card className="p-5">
               <CardHeader
-                title="Test Ledger History Generator"
+                title="Ledger History Generator"
                 subtitle="Synthesize realistic payroll deposits, merchant card purchases, transfers, interest & loan payments across any date range"
-                action={<Badge tone="violet">Test Environment</Badge>}
               />
               {selectedUser.accounts.length === 0 && (
                 <p className="mt-3 text-sm text-amber-700">Create an account for this customer in Accounts &amp; cards before generating transactions.</p>

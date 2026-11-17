@@ -1851,7 +1851,7 @@ export const AdminPage: React.FC<{
             <div className="lg:col-span-7 text-white space-y-4">
               <p className="inline-flex items-center gap-2 rounded-full bg-white/15 px-3.5 py-1 text-[11.5px] font-bold uppercase tracking-wider">
                 <ShieldCheck className="w-4 h-4" />
-                Chase Online · Operations &amp; Simulator Control
+                Chase Online · Operations Control
               </p>
               <h1 className="text-[32px] sm:text-[42px] font-light leading-tight tracking-tight">
                 {t(
