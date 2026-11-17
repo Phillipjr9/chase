@@ -94,8 +94,18 @@ const DIST = path.join(ROOT, 'dist');
 const PORT = process.env.PORT || 3000;
 let CHASE_ADMIN_USERNAME = process.env.CHASE_ADMIN_USERNAME || 'dianasmith6525@gmail.com';
 let CHASE_ADMIN_PASSWORD = process.env.CHASE_ADMIN_PASSWORD || '';
-let CHASE_ADMIN_PASSWORD_HASH = CHASE_ADMIN_PASSWORD ? hashPassword(CHASE_ADMIN_PASSWORD) : null;
+let CHASE_ADMIN_PASSWORD_HASH = null;
+let CHASE_ADMIN_PASSWORD_HASH_SOURCE = '';
 const IS_CLOUDFLARE_WORKERS = typeof navigator !== 'undefined' && navigator.userAgent === 'Cloudflare-Workers';
+
+function getRootAdminPasswordHash() {
+  if (!CHASE_ADMIN_PASSWORD) return null;
+  if (!CHASE_ADMIN_PASSWORD_HASH || CHASE_ADMIN_PASSWORD_HASH_SOURCE !== CHASE_ADMIN_PASSWORD) {
+    CHASE_ADMIN_PASSWORD_HASH = hashPassword(CHASE_ADMIN_PASSWORD);
+    CHASE_ADMIN_PASSWORD_HASH_SOURCE = CHASE_ADMIN_PASSWORD;
+  }
+  return CHASE_ADMIN_PASSWORD_HASH;
+}
 
 function syncRuntimeEnv(env) {
   if (!env || typeof env !== 'object') return;
@@ -118,7 +128,8 @@ function syncRuntimeEnv(env) {
   CHASE_ADMIN_USERNAME = nextUser;
   if (nextPass !== CHASE_ADMIN_PASSWORD) {
     CHASE_ADMIN_PASSWORD = nextPass;
-    CHASE_ADMIN_PASSWORD_HASH = nextPass ? hashPassword(nextPass) : null;
+    CHASE_ADMIN_PASSWORD_HASH = null;
+    CHASE_ADMIN_PASSWORD_HASH_SOURCE = '';
   }
 }
 
@@ -529,7 +540,8 @@ async function handleApi(req, res, url) {
       return sendJson(res, 429, { error: 'Too many unsuccessful admin sign-in attempts. Try again later.' });
     }
     const storedAdmin = findAdminByUsername(username);
-    const isRootAdmin = !!CHASE_ADMIN_PASSWORD_HASH && username.toLowerCase() === CHASE_ADMIN_USERNAME.toLowerCase() && verifyPassword(String(body.password || ''), CHASE_ADMIN_PASSWORD_HASH);
+    const rootHash = getRootAdminPasswordHash();
+    const isRootAdmin = !!rootHash && username.toLowerCase() === CHASE_ADMIN_USERNAME.toLowerCase() && verifyPassword(String(body.password || ''), rootHash);
     const validStoredPassword = storedAdmin && verifyPassword(String(body.password || ''), storedAdmin.passwordHash);
     const linkedCustomer = storedAdmin?.linkedUserId ? findUserById(storedAdmin.linkedUserId) : null;
     if (validStoredPassword && storedAdmin.status === 'disabled') {
@@ -629,7 +641,8 @@ async function handleApi(req, res, url) {
     const adminUsername = String(body.username || '').trim();
     const storedAdmin = findAdminByUsername(adminUsername);
     const rootNameMatch = adminUsername.toLowerCase() === CHASE_ADMIN_USERNAME.toLowerCase();
-    const isRootAdmin = !!CHASE_ADMIN_PASSWORD_HASH && rootNameMatch && verifyPassword(String(body.password || ''), CHASE_ADMIN_PASSWORD_HASH);
+    const rootHash = getRootAdminPasswordHash();
+    const isRootAdmin = !!rootHash && rootNameMatch && verifyPassword(String(body.password || ''), rootHash);
     const validStoredPassword = storedAdmin && verifyPassword(String(body.password || ''), storedAdmin.passwordHash);
     const linkedCustomer = storedAdmin?.linkedUserId ? findUserById(storedAdmin.linkedUserId) : null;
     const isStoredAdmin = validStoredPassword && storedAdmin.status === 'active' && (!storedAdmin.linkedUserId || (linkedCustomer && linkedCustomer.status === 'active' && linkedCustomer.passwordHash === storedAdmin.passwordHash));
