@@ -1949,17 +1949,19 @@ async function handleApi(req, res, url) {
         const name = cleanText(body.name, 80);
         const balance = Number(body.balance);
         const creditLimit = body.creditLimit === '' || body.creditLimit == null ? undefined : Number(body.creditLimit);
-        if (!allowed.has(type) || !name || !Number.isFinite(balance) || Math.abs(balance) > 100000000 || (creditLimit !== undefined && (!Number.isFinite(creditLimit) || creditLimit < 0 || creditLimit > 100000000))) {
-          return sendJson(res, 400, { error: 'Provide a valid account type, name, balance, and optional credit limit.' });
+        const dateValue = body.openedDate || body.createdAt || new Date().toISOString().slice(0, 10);
+        const openedDate = /^\d{4}-\d{2}-\d{2}$/.test(String(dateValue)) ? String(dateValue) : (() => { const parsed = new Date(dateValue); return Number.isNaN(+parsed) ? null : parsed.toISOString().slice(0, 10); })();
+        if (!allowed.has(type) || !name || !Number.isFinite(balance) || Math.abs(balance) > 100000000 || (creditLimit !== undefined && (!Number.isFinite(creditLimit) || creditLimit < 0 || creditLimit > 100000000)) || !openedDate) {
+          return sendJson(res, 400, { error: 'Provide a valid account type, name, balance, opening date, and optional credit limit.' });
         }
         const account = {
           id: uid(), type, name, mask: mask4(), balance: round2(balance),
           ...(creditLimit !== undefined ? { creditLimit: round2(creditLimit) } : {}),
-          locked: false, autopay: false, transactions: [], createdAt: new Date().toISOString(),
+          locked: false, autopay: false, transactions: [], openedDate, createdAt: new Date().toISOString(),
         };
         const updated = { ...target, accounts: [...accounts, account] };
         updateUser(updated);
-        recordAdminAudit('Created simulator account', { userId, username: target.username, accountId: account.id, type });
+        recordAdminAudit('Created simulator account', { userId, username: target.username, accountId: account.id, type, openedDate });
         return sendJson(res, 201, { user: publicUser(updated), account });
       }
 
@@ -1976,6 +1978,12 @@ async function handleApi(req, res, url) {
         }
         if (patch.nickname !== undefined) next.nickname = cleanText(patch.nickname, 60);
         if (patch.mask !== undefined && /^\d{4}$/.test(String(patch.mask))) next.mask = String(patch.mask);
+        if (patch.openedDate !== undefined) {
+          const value = String(patch.openedDate || '');
+          const openedDate = /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : (() => { const parsed = new Date(value); return Number.isNaN(+parsed) ? null : parsed.toISOString().slice(0, 10); })();
+          if (!openedDate) return sendJson(res, 400, { error: 'Enter a valid account opening date.' });
+          next.openedDate = openedDate;
+        }
         if (patch.replacedAt !== undefined) next.replacedAt = String(patch.replacedAt);
         for (const field of ['balance', 'creditLimit', 'statementBalance', 'apr', 'monthlyPayment', 'rewardsPoints']) {
           if ((field === 'creditLimit' || field === 'statementBalance') && patch[field] === null) {
@@ -2382,13 +2390,18 @@ async function handleApi(req, res, url) {
         let eventsGenerated = 0;
         let transactionCount = 0;
         let eventRowStartCount = 0;
-        const isOpenOnDate = (account, date) => !account.createdAt || String(account.createdAt).slice(0, 10) <= date.toISOString().slice(0, 10);
+        const isOpenOnDate = (account, date) => {
+          const openedRaw = account.openedDate || account.createdAt;
+          if (!openedRaw) return true;
+          return String(openedRaw).slice(0, 10) <= date.toISOString().slice(0, 10);
+        };
         const addTransaction = (account, description, amount, category, date) => {
           if (transactionCount === eventRowStartCount) eventsGenerated += 1;
           if (!Array.isArray(account.transactions)) account.transactions = [];
           const occurredAt = new Date(date);
           occurredAt.setUTCHours(8 + Math.floor(Math.random() * 12), Math.floor(Math.random() * 60), 0, 0);
-          const opened = new Date(account.createdAt);
+          const openedRaw = account.openedDate || account.createdAt;
+          const opened = new Date(openedRaw || Date.now());
           if (!Number.isNaN(+opened) && occurredAt < opened) occurredAt.setTime(opened.getTime());
           account.transactions.push({
             id: uid(),
@@ -2561,8 +2574,9 @@ async function handleApi(req, res, url) {
           return sendJson(res, 400, { error: 'Choose a unique username that is not reserved for the administrator.' });
         }
         const accounts = patch.accounts ?? target.accounts;
-        if (!Array.isArray(accounts) || accounts.some((a) => !a || typeof a.id !== 'string' || !['checking', 'savings', 'credit-card', 'cd', 'auto-loan', 'mortgage'].includes(a.type) || !Number.isFinite(Number(a.balance)) || Math.abs(Number(a.balance)) > 100000000)) {
-          return sendJson(res, 400, { error: 'Each account needs an ID, valid account type, and a finite simulated balance.' });
+        const validOpenedDate = (value) => !value || /^\d{4}-\d{2}-\d{2}$/.test(String(value));
+        if (!Array.isArray(accounts) || accounts.some((a) => !a || typeof a.id !== 'string' || !['checking', 'savings', 'credit-card', 'cd', 'auto-loan', 'mortgage'].includes(a.type) || !Number.isFinite(Number(a.balance)) || Math.abs(Number(a.balance)) > 100000000 || !validOpenedDate(a.openedDate))) {
+          return sendJson(res, 400, { error: 'Each account needs an ID, valid account type, a finite simulated balance, and an optional valid opening date.' });
         }
         const status = patch.status ?? target.status ?? 'active';
         if (!['active', 'suspended'].includes(status)) return sendJson(res, 400, { error: 'Status must be active or suspended.' });

@@ -1489,7 +1489,7 @@ export const BankingDashboard: React.FC<Props> = ({
                         ...(selected.creditLimit ? [{ k: 'Credit limit', v: fmtMoney(selected.creditLimit) }] : []),
                         ...(selected.apr ? [{ k: selected.type === 'credit-card' ? 'Purchase APR' : 'APR', v: `${selected.apr}%` }] : []),
                         { k: 'Card status', v: selected.locked ? 'Locked' : 'Active' },
-                        { k: 'Opened', v: fmtDate(selected.createdAt) },
+                        { k: 'Opened', v: fmtDate(selected.openedDate || selected.createdAt) },
                       ].map((r) => (
                         <div key={r.k} className="flex justify-between gap-3 border-b border-[#EFF0F1] pb-2 last:border-b-0">
                           <dt style={{ color: MUTED }}>{r.k}</dt>

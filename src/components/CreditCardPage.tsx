@@ -819,7 +819,7 @@ export const CreditCardPage: React.FC<Props> = ({
                     { k: 'Card status', v: account.locked ? 'Locked' : 'Active' },
                     { k: 'Automatic payments', v: account.autopay ? 'On' : 'Off' },
                     { k: 'Paperless', v: paperless ? 'On' : 'Off' },
-                    { k: 'Opened', v: new Date(account.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) },
+                    { k: 'Opened', v: new Date(account.openedDate || account.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) },
                   ].map((row) => (
                     <div key={row.k} className="flex justify-between gap-3 border-b border-[#EFF0F1] pb-2 last:border-b-0">
                       <dt style={{ color: MUTED }}>{row.k}</dt>

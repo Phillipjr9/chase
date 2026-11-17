@@ -818,6 +818,7 @@ export const AdminPage: React.FC<{
     name: string;
     balance: number;
     creditLimit?: number;
+    openedDate?: string;
   }): Promise<boolean> => {
     if (!selectedUser) return false;
     setBusy(true);

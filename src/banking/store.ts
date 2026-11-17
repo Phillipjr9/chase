@@ -39,6 +39,7 @@ export interface Account {
   replacedAt?: string;
   replacementReason?: string;
   transactions: Transaction[];
+  openedDate?: string;
   createdAt: string;
 }
 

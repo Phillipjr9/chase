@@ -60,6 +60,7 @@ export interface AccountPatchPayload {
   apr?: number;
   monthlyPayment?: number;
   rewardsPoints?: number;
+  openedDate?: string;
   replacedAt?: string;
   locked: boolean;
   autopay: boolean;
@@ -108,6 +109,7 @@ interface AccountDraft {
   apr: string;
   monthlyPayment: string;
   rewardsPoints: string;
+  openedDate: string;
   locked: boolean;
   autopay: boolean;
   isPrimary: boolean;
@@ -131,6 +133,7 @@ export const AccountsTab: React.FC<AccountsProps> = ({
   const [newName, setNewName] = useState('');
   const [newBalance, setNewBalance] = useState('2500');
   const [newLimit, setNewLimit] = useState('');
+  const [newOpenedDate, setNewOpenedDate] = useState(inputDate(0));
   const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>([]);
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState('');
@@ -165,6 +168,7 @@ export const AccountsTab: React.FC<AccountsProps> = ({
             apr: a.apr == null ? '' : String(a.apr),
             monthlyPayment: a.monthlyPayment == null ? '' : String(a.monthlyPayment),
             rewardsPoints: a.rewardsPoints == null ? '' : String(a.rewardsPoints),
+            openedDate: a.openedDate || inputDate(0),
             locked: !!a.locked,
             autopay: !!a.autopay,
             isPrimary: !!a.isPrimary,
@@ -183,11 +187,13 @@ export const AccountsTab: React.FC<AccountsProps> = ({
       name: newName.trim(),
       balance: Number(newBalance) || 0,
       creditLimit: newLimit === '' ? undefined : Number(newLimit),
+      openedDate: newOpenedDate || inputDate(0),
     });
     if (ok) {
       setNewName('');
       setNewBalance('0');
       setNewLimit('');
+      setNewOpenedDate(inputDate(0));
     }
   };
 
@@ -304,7 +310,7 @@ export const AccountsTab: React.FC<AccountsProps> = ({
             title="Open New Account"
             subtitle="Provision checking, savings, CD, credit card, auto loan, or mortgage with instant balance & mask"
           />
-          <form onSubmit={handleCreate} className="mt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 items-end">
+          <form onSubmit={handleCreate} className="mt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 items-end">
             <label className="block">
               <span className="block text-[11px] font-medium text-gray-600 dark:text-gray-300 mb-1">
                 Account Type
@@ -335,6 +341,16 @@ export const AccountsTab: React.FC<AccountsProps> = ({
             </label>
             <label className="block">
               <span className="block text-[11px] font-medium text-gray-600 dark:text-gray-300 mb-1">
+                Opened On
+              </span>
+              <TextInput
+                type="date"
+                value={newOpenedDate}
+                onChange={(e) => setNewOpenedDate(e.target.value)}
+              />
+            </label>
+            <label className="block">
+              <span className="block text-[11px] font-medium text-gray-600 dark:text-gray-300 mb-1">
                 Opening Balance ($)
               </span>
               <TextInput
@@ -358,7 +374,7 @@ export const AccountsTab: React.FC<AccountsProps> = ({
                 onChange={(e) => setNewLimit(e.target.value)}
               />
             </label>
-            <div className="sm:col-span-2 lg:col-span-5 flex justify-end">
+            <div className="sm:col-span-2 lg:col-span-6 flex justify-end">
               <Btn type="submit" variant="primary" disabled={busy || isReadOnly || !selectedUser}>
                 <Plus className="w-4 h-4" />
                 Add Account
@@ -426,6 +442,7 @@ export const AccountsTab: React.FC<AccountsProps> = ({
               apr: account.apr == null ? '' : String(account.apr),
               monthlyPayment: account.monthlyPayment == null ? '' : String(account.monthlyPayment),
               rewardsPoints: account.rewardsPoints == null ? '' : String(account.rewardsPoints),
+              openedDate: account.openedDate || inputDate(0),
               locked: !!account.locked,
               autopay: !!aBool(account.autopay),
               isPrimary: !!account.isPrimary,
@@ -641,6 +658,21 @@ export const AccountsTab: React.FC<AccountsProps> = ({
                   </label>
                   <label className="block">
                     <span className="block text-[10.5px] font-semibold text-gray-500 dark:text-gray-400 mb-1">
+                      Opened On
+                    </span>
+                    <TextInput
+                      type="date"
+                      value={draft.openedDate || inputDate(0)}
+                      onChange={(e) =>
+                        setDrafts((prev) => ({
+                          ...prev,
+                          [account.id]: { ...draft, openedDate: e.target.value },
+                        }))
+                      }
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="block text-[10.5px] font-semibold text-gray-500 dark:text-gray-400 mb-1">
                       Balance ($)
                     </span>
                     <TextInput
@@ -824,6 +856,7 @@ export const AccountsTab: React.FC<AccountsProps> = ({
                               draft.monthlyPayment === '' ? undefined : Number(draft.monthlyPayment),
                             rewardsPoints:
                               draft.rewardsPoints === '' ? undefined : Number(draft.rewardsPoints),
+                            openedDate: draft.openedDate || account.openedDate || inputDate(0),
                             locked: draft.locked,
                             autopay: draft.autopay,
                             isPrimary: draft.isPrimary,
