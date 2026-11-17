@@ -19,19 +19,54 @@ const fmtShortDate = (iso: string) => {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 };
 
-function buildStatementPeriods() {
+function buildStatementPeriods(account?: Account) {
   const periods: { id: string; label: string; start: Date; end: Date }[] = [];
   const now = new Date();
+  const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+  const monthKeys = new Set<string>();
+
   for (let i = 0; i < 6; i += 1) {
-    const end = new Date(now.getFullYear(), now.getMonth() - i, 16, 23, 59, 59);
-    const start = new Date(now.getFullYear(), now.getMonth() - i - 1, 17, 0, 0, 0);
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    monthKeys.add(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+  }
+  for (const tx of account?.transactions || []) {
+    const parsed = new Date(tx.date);
+    if (!Number.isNaN(+parsed)) {
+      monthKeys.add(`${parsed.getFullYear()}-${String(parsed.getMonth() + 1).padStart(2, '0')}`);
+    }
+  }
+
+  const sortedKeys = [...monthKeys].sort((a, b) => b.localeCompare(a));
+  const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+
+  for (const key of sortedKeys) {
+    const [yStr, mStr] = key.split('-');
+    const year = Number(yStr);
+    const monthIdx = Number(mStr) - 1;
+    const start = new Date(year, monthIdx, 1, 0, 0, 0, 0);
+    const end = key === currentMonthKey
+      ? endOfToday
+      : new Date(year, monthIdx + 1, 0, 23, 59, 59, 999);
     periods.push({
-      id: `${end.getFullYear()}-${String(end.getMonth() + 1).padStart(2, '0')}`,
+      id: key,
       label: `${start.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} – ${end.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`,
       start,
       end,
     });
   }
+
+  const txDates = (account?.transactions || [])
+    .map((t) => new Date(t.date))
+    .filter((d) => !Number.isNaN(+d))
+    .sort((a, b) => a.getTime() - b.getTime());
+  const earliest = txDates[0] || new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+  periods.push({
+    id: 'all',
+    label: `All activity (${earliest.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} – ${endOfToday.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })})`,
+    start: new Date(earliest.getFullYear(), earliest.getMonth(), earliest.getDate(), 0, 0, 0, 0),
+    end: endOfToday,
+  });
+
   return periods;
 }
 
@@ -47,12 +82,11 @@ export const StatementModal: React.FC<StatementModalProps> = ({
       ? initialAccountId
       : accounts[0]?.id || ''
   );
-  const periods = useMemo(() => buildStatementPeriods(), []);
-  const [selectedPeriodId, setSelectedPeriodId] = useState<string>(periods[0]?.id || '');
-  const [tab, setTab] = useState<'statement' | 'tax-1099' | 'tax-1098'>(initialTab);
-
   const account: Account | undefined =
     accounts.find((a) => a.id === selectedAccountId) || accounts[0];
+  const periods = useMemo(() => buildStatementPeriods(account), [account]);
+  const [selectedPeriodId, setSelectedPeriodId] = useState<string>(periods[0]?.id || '');
+  const [tab, setTab] = useState<'statement' | 'tax-1099' | 'tax-1098'>(initialTab);
   const period = periods.find((p) => p.id === selectedPeriodId) || periods[0];
 
   const statementSummary = useMemo(() => {

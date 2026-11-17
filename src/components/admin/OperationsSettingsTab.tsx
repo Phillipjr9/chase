@@ -86,6 +86,7 @@ interface OperationsProps {
     toAccountId: string;
     amount: number;
     description: string;
+    transferType?: string;
   }) => Promise<boolean>;
   onCreatePayee: (payload: {
     name: string;
@@ -180,7 +181,21 @@ export const OperationsTab: React.FC<OperationsProps> = ({
   const [fromId, setFromId] = useState('');
   const [toId, setToId] = useState('');
   const [transferAmt, setTransferAmt] = useState('');
-  const [transferDesc, setTransferDesc] = useState('Admin test transfer');
+  const [transferType, setTransferType] = useState('direct-deposit');
+  const [transferDesc, setTransferDesc] = useState('Direct deposit');
+
+  const transferTypeOptions = [
+    { value: 'direct-deposit', label: 'Direct deposit' },
+    { value: 'payroll', label: 'Payroll deposit' },
+    { value: 'ach', label: 'ACH transfer' },
+    { value: 'wire', label: 'Wire transfer' },
+    { value: 'internal', label: 'Internal transfer' },
+    { value: 'bill-pay', label: 'Bill pay' },
+    { value: 'loan-payment', label: 'Loan payment' },
+    { value: 'card-payment', label: 'Card payment' },
+    { value: 'vendor-payment', label: 'Vendor payment' },
+    { value: 'customer-refund', label: 'Customer refund' },
+  ];
 
   // Payee state
   const [payeeName, setPayeeName] = useState('');
@@ -529,7 +544,8 @@ export const OperationsTab: React.FC<OperationsProps> = ({
                   fromAccountId: fromId,
                   toAccountId: toId,
                   amount: Number(transferAmt),
-                  description: transferDesc,
+                  description: transferDesc.trim() || 'Customer transfer',
+                  transferType,
                 });
                 if (ok) setTransferAmt('');
               }}
@@ -582,6 +598,27 @@ export const OperationsTab: React.FC<OperationsProps> = ({
                   onChange={(e) => setTransferAmt(e.target.value)}
                   required
                 />
+              </label>
+              <label className="block">
+                <span className="block text-[11px] font-medium text-gray-600 dark:text-gray-300 mb-1">
+                  Transfer type
+                </span>
+                <SelectInput
+                  value={transferType}
+                  onChange={(e) => {
+                    const nextType = e.target.value;
+                    setTransferType(nextType);
+                    const match = transferTypeOptions.find((option) => option.value === nextType);
+                    setTransferDesc(match?.label || 'Customer transfer');
+                  }}
+                  className="w-full"
+                >
+                  {transferTypeOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </SelectInput>
               </label>
               <label className="block">
                 <span className="block text-[11px] font-medium text-gray-600 dark:text-gray-300 mb-1">

@@ -51,8 +51,11 @@ import { OFFERS } from '../data/chaseFeatures';
 import {
   User,
   Account,
+  Transaction,
   ProductId,
   fmtMoney,
+  fetchMe,
+  sortTransactionsDesc,
   updateCardControls as apiUpdateCardControls,
   dismissAccountNotice,
   fmtDueDate,
@@ -109,8 +112,13 @@ type View = DashboardView;
 
 type Notice = { kind: 'success' | 'error'; text: string } | null;
 
-const fmtDate = (iso: string) =>
-  new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+const fmtDate = (iso: string) => {
+  if (!iso) return '—';
+  const normalized = /^\d{4}-\d{2}-\d{2}$/.test(iso) ? `${iso}T12:00:00` : iso;
+  const parsed = new Date(normalized);
+  if (Number.isNaN(parsed.getTime())) return iso;
+  return parsed.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+};
 
 const Dotted: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   <span className="border-b border-dotted border-[#8A929A] pb-px">{children}</span>
@@ -258,11 +266,56 @@ export const BankingDashboard: React.FC<Props> = ({
     if (searchOpen) searchInputRef.current?.focus();
   }, [searchOpen]);
   const [txFilter, setTxFilter] = useState<'all' | 'in' | 'out'>('all');
+  const [txSearch, setTxSearch] = useState('');
+  const [showAllOverviewTx, setShowAllOverviewTx] = useState(false);
+  const [detailTx, setDetailTx] = useState<{ tx: Transaction; account: Account } | null>(null);
   const [addedOffers, setAddedOffers] = useState<string[]>([]);
   const [footerMeetingOpen, setFooterMeetingOpen] = useState(false);
   const [footerMortgageOpen, setFooterMortgageOpen] = useState(false);
   const [footerAutoOpen, setFooterAutoOpen] = useState(false);
   const firstName = user.fullName.split(' ')[0];
+
+  const onUpdateUserRef = useRef(onUpdateUser);
+  onUpdateUserRef.current = onUpdateUser;
+  const lastSyncAtRef = useRef(0);
+
+  useEffect(() => {
+    let active = true;
+    const syncFreshUser = async (force = false) => {
+      const now = Date.now();
+      if (!force && now - lastSyncAtRef.current < 4000) return;
+      lastSyncAtRef.current = now;
+      try {
+        const fresh = await fetchMe();
+        if (active && fresh && fresh.id === user.id) {
+          onUpdateUserRef.current(fresh);
+        }
+      } catch {
+        // Keep current dashboard state if background refresh cannot reach server.
+      }
+    };
+    void syncFreshUser(true);
+    const onFocus = () => void syncFreshUser(false);
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') void syncFreshUser(false);
+    };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      active = false;
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [user.id]);
+
+  useEffect(() => {
+    if (!detailTx) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setDetailTx(null);
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [detailTx]);
 
   const visibleAccounts = user.accounts.filter((a) => !a.hidden);
   const deposits = visibleAccounts.filter((a) => ['checking', 'savings', 'cd'].includes(a.type));
@@ -341,6 +394,8 @@ export const BankingDashboard: React.FC<Props> = ({
     setSelectedId(id);
     setShowDetails(false);
     setShowAllTx(false);
+    setTxFilter('all');
+    setTxSearch('');
     setView('account');
   };
   const go = (v: View) => {
@@ -597,10 +652,35 @@ export const BankingDashboard: React.FC<Props> = ({
     }
   };
 
-  const txns = selected
-    ? selected.transactions.filter((t) => (txFilter === 'all' ? true : txFilter === 'in' ? t.amount > 0 : t.amount < 0))
-    : [];
-  const visibleTxns = showAllTx ? txns : txns.slice(0, 6);
+  const allRecentActivity = useMemo(() => {
+    const items: { tx: Transaction; account: Account }[] = [];
+    for (const account of visibleAccounts) {
+      for (const tx of sortTransactionsDesc(account.transactions)) {
+        items.push({ tx, account });
+      }
+    }
+    return items.sort((a, b) => {
+      const ta = new Date(a.tx.date || 0).getTime();
+      const tb = new Date(b.tx.date || 0).getTime();
+      if (Number.isFinite(tb) && Number.isFinite(ta) && tb !== ta) return tb - ta;
+      return String(b.tx.date || '').localeCompare(String(a.tx.date || ''));
+    });
+  }, [visibleAccounts]);
+
+  const txns = useMemo(() => {
+    if (!selected) return [];
+    const q = txSearch.trim().toLowerCase();
+    return sortTransactionsDesc(selected.transactions).filter((t) => {
+      if (txFilter === 'in' && t.amount <= 0) return false;
+      if (txFilter === 'out' && t.amount >= 0) return false;
+      if (q) {
+        const hay = `${t.description} ${t.category} ${fmtDate(t.date)} ${t.date} ${t.amount}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+  }, [selected, txFilter, txSearch]);
+  const visibleTxns = showAllTx ? txns : txns.slice(0, 25);
 
   /* =============================== MARKUP =============================== */
   return (
@@ -1047,7 +1127,7 @@ export const BankingDashboard: React.FC<Props> = ({
                                 type="button"
                                 onClick={() => setExpanded(isOpen ? null : account.id)}
                                 aria-label={isOpen ? `Hide ${account.name} activity` : `Show ${account.name} activity`}
-                                className="p-1.5 text-[#5C5C5C] hover:text-[#1A4488] cursor-pointer hidden sm:block"
+                                className="p-1.5 text-[#5C5C5C] hover:text-[#1A4488] cursor-pointer"
                               >
                                 <ChevronDown className={`w-4 h-4 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
                               </button>
@@ -1057,7 +1137,7 @@ export const BankingDashboard: React.FC<Props> = ({
                               <div className="border-t bg-[#FAFBFC]" style={{ borderColor: LINE }}>
                                 <div className="px-4 py-2.5 flex items-center justify-between">
                                   <span className="text-[12px] font-bold uppercase tracking-wider" style={{ color: MUTED }}>
-                                    Recent activity
+                                    Recent activity ({account.transactions.length})
                                   </span>
                                   <button
                                     type="button"
@@ -1068,17 +1148,27 @@ export const BankingDashboard: React.FC<Props> = ({
                                     View all activity
                                   </button>
                                 </div>
-                                <ul className="px-4">
-                                  {account.transactions.slice(0, 4).map((t) => (
-                                    <li key={t.id} className="flex items-center gap-3 py-2 border-t border-[#EDEFF0] text-[12.5px]">
-                                      <span className="w-[72px] shrink-0" style={{ color: MUTED }}>{fmtDate(t.date)}</span>
-                                      <span className="flex-1 min-w-0 truncate" style={{ color: INK }}>{t.description}</span>
-                                      <span className={`shrink-0 font-medium ${t.amount < 0 ? '' : 'text-[#138842]'}`}>
-                                        {t.amount < 0 ? `-${fmtMoney(Math.abs(t.amount))}` : fmtMoney(t.amount)}
-                                      </span>
-                                    </li>
-                                  ))}
-                                </ul>
+                                {account.transactions.length === 0 ? (
+                                  <p className="px-4 pb-3 text-[12.5px]" style={{ color: MUTED }}>No posted transactions yet.</p>
+                                ) : (
+                                  <ul className="px-4">
+                                    {sortTransactionsDesc(account.transactions).slice(0, 6).map((t) => (
+                                      <li key={t.id} className="border-t border-[#EDEFF0]">
+                                        <button
+                                          type="button"
+                                          onClick={() => setDetailTx({ tx: t, account })}
+                                          className="w-full flex items-center gap-3 py-2 text-left text-[12.5px] hover:bg-[#F2F5F8] -mx-2 px-2 rounded cursor-pointer"
+                                        >
+                                          <span className="w-[84px] shrink-0" style={{ color: MUTED }}>{fmtDate(t.date)}</span>
+                                          <span className="flex-1 min-w-0 truncate" style={{ color: INK }}>{t.description}</span>
+                                          <span className={`shrink-0 font-medium ${t.amount < 0 ? '' : 'text-[#138842]'}`}>
+                                            {t.amount < 0 ? `-${fmtMoney(Math.abs(t.amount))}` : fmtMoney(t.amount)}
+                                          </span>
+                                        </button>
+                                      </li>
+                                    ))}
+                                  </ul>
+                                )}
                               </div>
                             )}
                           </div>
@@ -1087,6 +1177,56 @@ export const BankingDashboard: React.FC<Props> = ({
                     </div>
                   </section>
                 ))}
+
+                {/* Recent transactions across all accounts */}
+                {allRecentActivity.length > 0 && (
+                  <section className="mb-5">
+                    <div className="flex items-baseline justify-between mb-2">
+                      <h2 className="text-[15px] font-semibold" style={{ color: INK }}>
+                        {t('Recent transactions', 'Transacciones recientes')}
+                      </h2>
+                      <span className="text-[12px]" style={{ color: MUTED }}>
+                        {allRecentActivity.length} transaction{allRecentActivity.length === 1 ? '' : 's'}
+                      </span>
+                    </div>
+                    <div className="border rounded-[6px] bg-white overflow-hidden" style={{ borderColor: LINE }}>
+                      <ul className="divide-y divide-[#EFF0F1]">
+                        {(showAllOverviewTx ? allRecentActivity : allRecentActivity.slice(0, 8)).map(({ tx, account }) => (
+                          <li key={`${account.id}-${tx.id}`}>
+                            <button
+                              type="button"
+                              onClick={() => setDetailTx({ tx, account })}
+                              className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-[#FAFBFC] cursor-pointer"
+                            >
+                              <span className="w-[84px] shrink-0 text-[12px]" style={{ color: MUTED }}>{fmtDate(tx.date)}</span>
+                              <span className="flex-1 min-w-0">
+                                <span className="block text-[13.5px] truncate" style={{ color: INK }}>{tx.description}</span>
+                                <span className="block text-[11px] truncate" style={{ color: '#8A929A' }}>
+                                  {account.nickname?.trim() || account.name} (…{account.mask}) · {tx.category}
+                                </span>
+                              </span>
+                              <span className={`text-[13.5px] font-medium shrink-0 ${tx.amount < 0 ? '' : 'text-[#138842]'}`}>
+                                {tx.amount < 0 ? `-${fmtMoney(Math.abs(tx.amount))}` : fmtMoney(tx.amount)}
+                              </span>
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                      {allRecentActivity.length > 8 && (
+                        <div className="px-4 py-2.5 border-t bg-[#FAFBFC]" style={{ borderColor: LINE }}>
+                          <button
+                            type="button"
+                            onClick={() => setShowAllOverviewTx((v) => !v)}
+                            className="text-[12.5px] font-semibold hover:underline cursor-pointer"
+                            style={{ color: BTN_BLUE }}
+                          >
+                            {showAllOverviewTx ? 'Show fewer transactions' : `Show all ${allRecentActivity.length} transactions`}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </section>
+                )}
 
                 {/* Integrated J.P. Morgan Investments account group (just like real secure.chase.com) */}
                 <section className="mb-5">
@@ -1429,24 +1569,43 @@ export const BankingDashboard: React.FC<Props> = ({
                 <div className="lg:col-span-8">
                   <div className="bg-white border rounded-[6px] overflow-hidden" style={{ borderColor: LINE }}>
                     <div className="px-4 pt-4 pb-2 flex flex-wrap items-center justify-between gap-2">
-                      <h2 className="text-[15px] font-semibold" style={{ color: INK }}>Account activity</h2>
-                      <div className="flex items-center gap-1">
-                        {(['all', 'in', 'out'] as const).map((f) => (
-                          <button
-                            key={f}
-                            type="button"
-                            onClick={() => setTxFilter(f)}
-                            className={`px-3 py-1.5 text-[12px] font-semibold rounded-[3px] cursor-pointer ${
-                              txFilter === f ? 'bg-[#1A4488] text-white' : 'text-[#353535] hover:bg-[#F2F6FB]'
-                            }`}
-                          >
-                            {f === 'all'
-                              ? 'All'
-                              : f === 'in'
-                                ? selected.type === 'credit-card' ? 'Purchases' : 'Deposits'
-                                : selected.type === 'credit-card' ? 'Payments' : 'Withdrawals'}
-                          </button>
-                        ))}
+                      <div>
+                        <h2 className="text-[15px] font-semibold" style={{ color: INK }}>Account activity</h2>
+                        <p className="text-[11.5px]" style={{ color: MUTED }}>
+                          Showing {visibleTxns.length} of {txns.length} transaction{txns.length === 1 ? '' : 's'}
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="relative">
+                          <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-[#8A929A]" />
+                          <input
+                            type="search"
+                            value={txSearch}
+                            onChange={(e) => setTxSearch(e.target.value)}
+                            placeholder="Search transactions"
+                            aria-label="Search account transactions"
+                            className="pl-8 pr-2.5 py-1 text-[12px] border rounded-[4px] w-[165px] focus:outline-none focus:border-[#1A4488]"
+                            style={{ borderColor: LINE, color: INK }}
+                          />
+                        </div>
+                        <div className="flex items-center gap-1">
+                          {(['all', 'in', 'out'] as const).map((f) => (
+                            <button
+                              key={f}
+                              type="button"
+                              onClick={() => setTxFilter(f)}
+                              className={`px-3 py-1.5 text-[12px] font-semibold rounded-[3px] cursor-pointer ${
+                                txFilter === f ? 'bg-[#1A4488] text-white' : 'text-[#353535] hover:bg-[#F2F6FB]'
+                              }`}
+                            >
+                              {f === 'all'
+                                ? 'All'
+                                : f === 'in'
+                                  ? selected.type === 'credit-card' ? 'Purchases' : 'Deposits'
+                                  : selected.type === 'credit-card' ? 'Payments' : 'Withdrawals'}
+                            </button>
+                          ))}
+                        </div>
                       </div>
                     </div>
 
@@ -1455,21 +1614,29 @@ export const BankingDashboard: React.FC<Props> = ({
                     ) : (
                       <ul className="px-4">
                         {visibleTxns.map((t, i) => (
-                          <li key={t.id} className={`flex items-center gap-3 py-3 ${i > 0 ? 'border-t' : ''}`} style={{ borderColor: '#EFF0F1' }}>
-                            <span className="w-[76px] shrink-0 text-[12px]" style={{ color: MUTED }}>{fmtDate(t.date)}</span>
-                            <span className="flex-1 min-w-0">
-                              <span className="block text-[13.5px] truncate" style={{ color: INK }}>{t.description}</span>
-                              <span className="block text-[11px]" style={{ color: '#8A929A' }}>{t.category}</span>
-                            </span>
-                            <span className={`text-[13.5px] font-medium shrink-0 ${t.amount < 0 ? '' : 'text-[#138842]'}`}>
-                              {t.amount < 0 ? `-${fmtMoney(Math.abs(t.amount))}` : fmtMoney(t.amount)}
-                            </span>
+                          <li key={t.id} className={i > 0 ? 'border-t' : ''} style={{ borderColor: '#EFF0F1' }}>
+                            <button
+                              type="button"
+                              onClick={() => setDetailTx({ tx: t, account: selected })}
+                              className="w-full flex items-center gap-3 py-3 text-left hover:bg-[#FAFBFC] -mx-2 px-2 rounded cursor-pointer"
+                            >
+                              <span className="w-[84px] shrink-0 text-[12px]" style={{ color: MUTED }}>{fmtDate(t.date)}</span>
+                              <span className="flex-1 min-w-0">
+                                <span className="block text-[13.5px] truncate" style={{ color: INK }}>{t.description}</span>
+                                <span className="block text-[11px]" style={{ color: '#8A929A' }}>
+                                  {t.category}{t.status === 'pending' ? ' · Pending' : ''}
+                                </span>
+                              </span>
+                              <span className={`text-[13.5px] font-medium shrink-0 ${t.amount < 0 ? '' : 'text-[#138842]'}`}>
+                                {t.amount < 0 ? `-${fmtMoney(Math.abs(t.amount))}` : fmtMoney(t.amount)}
+                              </span>
+                            </button>
                           </li>
                         ))}
                       </ul>
                     )}
 
-                    {txns.length > 6 && (
+                    {txns.length > 25 && (
                       <div className="px-4 py-3 border-t" style={{ borderColor: '#EFF0F1' }}>
                         <button type="button" onClick={() => setShowAllTx((v) => !v)} className="text-[12.5px] font-semibold hover:underline cursor-pointer" style={{ color: BTN_BLUE }}>
                           {showAllTx ? 'Show fewer transactions' : `Show all ${txns.length} transactions`}
@@ -1489,7 +1656,7 @@ export const BankingDashboard: React.FC<Props> = ({
                         ...(selected.creditLimit ? [{ k: 'Credit limit', v: fmtMoney(selected.creditLimit) }] : []),
                         ...(selected.apr ? [{ k: selected.type === 'credit-card' ? 'Purchase APR' : 'APR', v: `${selected.apr}%` }] : []),
                         { k: 'Card status', v: selected.locked ? 'Locked' : 'Active' },
-                        { k: 'Opened', v: fmtDate(selected.createdAt) },
+                        { k: 'Opened', v: fmtDate(selected.openedDate || selected.createdAt) },
                       ].map((r) => (
                         <div key={r.k} className="flex justify-between gap-3 border-b border-[#EFF0F1] pb-2 last:border-b-0">
                           <dt style={{ color: MUTED }}>{r.k}</dt>
@@ -1674,6 +1841,89 @@ export const BankingDashboard: React.FC<Props> = ({
           initialTab={statementModal.tab}
           onClose={() => setStatementModal(null)}
         />
+      )}
+      {detailTx && (
+        <div
+          className="fixed inset-0 z-50 bg-black/45 flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="tx-detail-heading"
+          onClick={() => setDetailTx(null)}
+        >
+          <div
+            className="w-full max-w-[440px] bg-white rounded-[8px] shadow-xl border overflow-hidden"
+            style={{ borderColor: LINE }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-5 py-4 border-b flex items-center justify-between gap-3" style={{ borderColor: LINE }}>
+              <h2 id="tx-detail-heading" className="text-[16px] font-semibold" style={{ color: INK }}>
+                Transaction details
+              </h2>
+              <button
+                type="button"
+                onClick={() => setDetailTx(null)}
+                aria-label="Close transaction details"
+                className="p-1 text-[#5C5C5C] hover:text-[#131313] cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-5 space-y-4">
+              <div className="flex items-baseline justify-between gap-4">
+                <p className="text-[15px] font-semibold" style={{ color: INK }}>{detailTx.tx.description}</p>
+                <p className={`text-[20px] font-light shrink-0 ${detailTx.tx.amount < 0 ? '' : 'text-[#138842]'}`}>
+                  {detailTx.tx.amount < 0 ? `-${fmtMoney(Math.abs(detailTx.tx.amount))}` : fmtMoney(detailTx.tx.amount)}
+                </p>
+              </div>
+              <dl className="space-y-2.5 text-[13px] border-t pt-3" style={{ borderColor: LINE }}>
+                {[
+                  { k: 'Account', v: `${detailTx.account.nickname?.trim() || detailTx.account.name} (…${detailTx.account.mask})` },
+                  { k: 'Date', v: fmtDate(detailTx.tx.date) },
+                  { k: 'Category', v: detailTx.tx.category },
+                  { k: 'Status', v: detailTx.tx.status === 'pending' ? 'Pending' : 'Posted' },
+                  { k: 'Reference ID', v: detailTx.tx.id },
+                ].map((row) => (
+                  <div key={row.k} className="flex justify-between gap-3">
+                    <dt style={{ color: MUTED }}>{row.k}</dt>
+                    <dd className="text-right font-medium break-all" style={{ color: INK }}>{row.v}</dd>
+                  </div>
+                ))}
+              </dl>
+              <div className="flex flex-wrap items-center justify-end gap-2 pt-2 border-t" style={{ borderColor: LINE }}>
+                {view !== 'account' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const acctId = detailTx.account.id;
+                      setDetailTx(null);
+                      openAccount(acctId);
+                    }}
+                    className="px-3.5 py-2 text-[12.5px] font-semibold rounded-[4px] border cursor-pointer hover:bg-[#F2F6FB]"
+                    style={{ borderColor: BTN_BLUE, color: BTN_BLUE }}
+                  >
+                    View account
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => window.print()}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-[12.5px] font-semibold rounded-[4px] border cursor-pointer hover:bg-[#F4F5F6]"
+                  style={{ borderColor: LINE, color: INK }}
+                >
+                  <Printer className="w-3.5 h-3.5" /> Print
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDetailTx(null)}
+                  className="px-4 py-2 text-[12.5px] font-semibold rounded-[4px] text-white cursor-pointer"
+                  style={{ background: BTN_BLUE }}
+                >
+                  Done
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

@@ -38,6 +38,7 @@ export interface Account {
   autopayDay?: number;
   replacedAt?: string;
   replacementReason?: string;
+  openedDate?: string;
   transactions: Transaction[];
   createdAt: string;
 }
@@ -663,15 +664,28 @@ export function adoptSessionToken(sessionToken: string): void {
 let apiMode: boolean | null = null;
 
 async function detectApi(): Promise<boolean> {
-  if (apiMode !== null) return apiMode;
+  if (apiMode === true) return true;
   try {
-    const res = await fetch('/api/health', { method: 'GET' });
+    const res = await fetch('/api/health', { method: 'GET', cache: 'no-store' });
     const data = await res.json().catch(() => null);
-    apiMode = !!(data && data.status === 'ok');
+    if (data && data.status === 'ok') {
+      apiMode = true;
+      return true;
+    }
+    return false;
   } catch {
-    apiMode = false;
+    return false;
   }
-  return apiMode;
+}
+
+export function sortTransactionsDesc(list: Transaction[] | undefined | null): Transaction[] {
+  if (!Array.isArray(list)) return [];
+  return [...list].sort((a, b) => {
+    const ta = new Date(a?.date || 0).getTime();
+    const tb = new Date(b?.date || 0).getTime();
+    if (Number.isFinite(tb) && Number.isFinite(ta) && tb !== ta) return tb - ta;
+    return String(b?.date || '').localeCompare(String(a?.date || ''));
+  });
 }
 
 interface ApiError extends Error {
@@ -703,6 +717,7 @@ async function apiFetch(path: string, options: RequestInit = {}): Promise<any> {
   const url = withCustomerTokenParam(path, activeToken);
   const res = await fetch(url, {
     ...options,
+    cache: 'no-store',
     credentials: options.credentials || 'same-origin',
     headers: {
       'Content-Type': 'application/json',
@@ -833,6 +848,12 @@ function hydrateDefaults(user: User | null | undefined): User {
   }
   return {
     ...user,
+    accounts: Array.isArray(user.accounts)
+      ? user.accounts.map((acc) => ({
+          ...acc,
+          transactions: sortTransactionsDesc(acc.transactions),
+        }))
+      : [],
     investments: user.investments || defaultInvestments(),
     security: user.security || defaultSecurity(),
     preferences: user.preferences || defaultPreferences(),
@@ -868,8 +889,11 @@ export async function fetchMe(): Promise<User | null> {
       const u = hydrateDefaults(data.user as User);
       if (data.linkedAdmin) u.linkedAdmin = data.linkedAdmin as LinkedAdminSummary;
       return u;
-    } catch {
-      if ((token || readCustomerToken()) === tokenBefore) setToken(null);
+    } catch (e) {
+      const err = e as ApiError;
+      if ((err.status === 401 || err.status === 403) && (token || readCustomerToken()) === tokenBefore) {
+        setToken(null);
+      }
       return null;
     }
   }
@@ -1885,13 +1909,18 @@ export async function signOutAllDevices(): Promise<void> {
 export async function changePasswordApi(
   currentPassword: string,
   newPassword: string
-): Promise<void> {
+): Promise<User | null> {
   if (await detectApi()) {
-    await apiFetch('/api/auth/change-password', {
+    const data = await apiFetch('/api/auth/change-password', {
       method: 'POST',
       body: JSON.stringify({ currentPassword, newPassword }),
     });
-    return;
+    if (data?.user) {
+      const hydrated = hydrateDefaults(data.user as User);
+      if (data.linkedAdmin) hydrated.linkedAdmin = data.linkedAdmin as LinkedAdminSummary;
+      return hydrated;
+    }
+    return fetchMe();
   }
   const user = requireLocalUser();
   if (user.password !== currentPassword) {
@@ -1903,6 +1932,7 @@ export async function changePasswordApi(
   const updated: User = JSON.parse(JSON.stringify(user));
   updated.password = newPassword;
   persistUser(updated);
+  return hydrateDefaults(updated);
 }
 
 export async function sendSecureMessage(

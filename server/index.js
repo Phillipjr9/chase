@@ -190,9 +190,65 @@ function sessionCookieHeader(req, token = '', role = 'user') {
   return { 'Set-Cookie': cookie };
 }
 
+function normalizeOpenedDate(value) {
+  if (value === undefined || value === null || value === '') return undefined;
+  const raw = String(value).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    const parsed = new Date(`${raw}T12:00:00.000Z`);
+    return !Number.isNaN(+parsed) && parsed.toISOString().slice(0, 10) === raw ? raw : null;
+  }
+  const parsed = new Date(raw);
+  return Number.isNaN(+parsed) ? null : parsed.toISOString().slice(0, 10);
+}
+
+function effectiveAccountOpenIso(account) {
+  if (account?.openedDate) {
+    const normalized = normalizeOpenedDate(account.openedDate);
+    if (normalized) return `${normalized}T00:00:00.000Z`;
+  }
+  return account?.createdAt || null;
+}
+
+function sortTransactionsDesc(list) {
+  if (!Array.isArray(list)) return [];
+  return [...list].sort((a, b) => {
+    const ta = new Date(a?.date || 0).getTime();
+    const tb = new Date(b?.date || 0).getTime();
+    if (Number.isFinite(tb) && Number.isFinite(ta) && tb !== ta) return tb - ta;
+    return String(b?.date || '').localeCompare(String(a?.date || ''));
+  });
+}
+
+function sanitizeCustomerDescription(text, fallback) {
+  const cleaned = cleanText(String(text || '').replace(/\badmin\b/gi, 'Operations').replace(/\s+/g, ' '), 120);
+  return cleaned || fallback;
+}
+
+const TRANSFER_TYPE_CONFIG = {
+  internal: { label: 'Internal Transfer', fromCategory: 'Transfer', toCategory: 'Transfer' },
+  wire: { label: 'Wire Transfer', fromCategory: 'Wire Transfer', toCategory: 'Wire Transfer' },
+  ach: { label: 'ACH Transfer', fromCategory: 'ACH Transfer', toCategory: 'ACH Transfer' },
+  zelle: { label: 'Zelle®', fromCategory: 'Zelle', toCategory: 'Zelle' },
+  'direct-deposit': { label: 'Direct Deposit', fromCategory: 'Transfer', toCategory: 'Income' },
+  payroll: { label: 'Payroll Deposit', fromCategory: 'Transfer', toCategory: 'Income' },
+  'bill-pay': { label: 'Bill Pay', fromCategory: 'Bills', toCategory: 'Bills' },
+  'vendor-payment': { label: 'Vendor Payment', fromCategory: 'Business', toCategory: 'Business' },
+  'customer-refund': { label: 'Customer Refund', fromCategory: 'Refund', toCategory: 'Refund' },
+  check: { label: 'Check Deposit', fromCategory: 'Check', toCategory: 'Check Deposit' },
+  'card-payment': { label: 'Card Payment', fromCategory: 'Credit card payment', toCategory: 'Card payment' },
+  'loan-payment': { label: 'Loan Payment', fromCategory: 'Loan payment', toCategory: 'Loan payment' },
+  adjustment: { label: 'Balance Adjustment', fromCategory: 'Adjustment', toCategory: 'Adjustment' },
+};
+
 function publicUser(user) {
   if (!user) return null;
   const { passwordHash, staffNotes, supportStatus, ...rest } = user;
+  if (Array.isArray(rest.accounts)) {
+    rest.accounts = rest.accounts.map((account) => ({
+      ...account,
+      transactions: sortTransactionsDesc(account.transactions),
+    }));
+  }
   return rest;
 }
 
@@ -708,7 +764,15 @@ async function handleApi(req, res, url) {
       const ownRoute = pathname === '/api/admin/users/bulk' ? null : pathname.match(/^\/api\/admin\/users\/([^/]+)(?:\/|$)/);
       if (ownRoute) {
         const target = findUserById(decodeURIComponent(ownRoute[1]));
-        if (!target || target.ownerAdminId !== operator?.id) return sendJson(res, 404, { error: 'Customer not found.' });
+        const isSelfFundingRoute =
+          Boolean(operator?.linkedUserId && target?.id === operator.linkedUserId) &&
+          (
+            (method === 'GET' && pathname === `/api/admin/users/${ownRoute[1]}`) ||
+            /^\/api\/admin\/users\/[^/]+\/accounts(?:\/|$)/.test(pathname)
+          );
+        if (!target || (target.ownerAdminId !== operator?.id && !isSelfFundingRoute)) {
+          return sendJson(res, 404, { error: 'Customer not found.' });
+        }
       } else if (!safeGlobal.has(pathname)) {
         return sendJson(res, 403, { error: 'Super administrator access required.' });
       }
@@ -1948,13 +2012,17 @@ async function handleApi(req, res, url) {
         const name = cleanText(body.name, 80);
         const balance = Number(body.balance);
         const creditLimit = body.creditLimit === '' || body.creditLimit == null ? undefined : Number(body.creditLimit);
+        const openedDate = normalizeOpenedDate(body.openedDate);
+        if (openedDate === null) return sendJson(res, 400, { error: 'Provide a valid account opening date (YYYY-MM-DD).' });
         if (!allowed.has(type) || !name || !Number.isFinite(balance) || Math.abs(balance) > 100000000 || (creditLimit !== undefined && (!Number.isFinite(creditLimit) || creditLimit < 0 || creditLimit > 100000000))) {
           return sendJson(res, 400, { error: 'Provide a valid account type, name, balance, and optional credit limit.' });
         }
+        const nowIso = new Date().toISOString();
         const account = {
           id: uid(), type, name, mask: mask4(), balance: round2(balance),
           ...(creditLimit !== undefined ? { creditLimit: round2(creditLimit) } : {}),
-          locked: false, autopay: false, transactions: [], createdAt: new Date().toISOString(),
+          ...(openedDate ? { openedDate } : {}),
+          locked: false, autopay: false, transactions: [], createdAt: nowIso,
         };
         const updated = { ...target, accounts: [...accounts, account] };
         updateUser(updated);
@@ -1976,6 +2044,12 @@ async function handleApi(req, res, url) {
         if (patch.nickname !== undefined) next.nickname = cleanText(patch.nickname, 60);
         if (patch.mask !== undefined && /^\d{4}$/.test(String(patch.mask))) next.mask = String(patch.mask);
         if (patch.replacedAt !== undefined) next.replacedAt = String(patch.replacedAt);
+        if (patch.openedDate !== undefined) {
+          const normalized = normalizeOpenedDate(patch.openedDate);
+          if (normalized === null) return sendJson(res, 400, { error: 'Provide a valid account opening date (YYYY-MM-DD).' });
+          if (normalized === undefined) delete next.openedDate;
+          else next.openedDate = normalized;
+        }
         for (const field of ['balance', 'creditLimit', 'statementBalance', 'apr', 'monthlyPayment', 'rewardsPoints']) {
           if ((field === 'creditLimit' || field === 'statementBalance') && patch[field] === null) {
             delete next[field];
@@ -2024,11 +2098,12 @@ async function handleApi(req, res, url) {
         const transaction = body.transaction || {};
         const amount = Number(transaction.amount);
         const date = new Date(transaction.date || Date.now());
-        const description = cleanText(transaction.description, 120);
+        const description = sanitizeCustomerDescription(transaction.description, '');
         const category = cleanText(transaction.category || 'Other', 48);
         if (!account || !description || !Number.isFinite(amount) || Math.abs(amount) > 10000000 || Number.isNaN(+date) || !['posted', 'pending'].includes(transaction.status || 'posted')) return sendJson(res, 400, { error: 'Choose an account and provide valid transaction details.' });
         const created = { id: uid(), date: date.toISOString(), description, amount: round2(amount), category, status: transaction.status || 'posted' };
         account.transactions.push(created);
+        account.transactions = sortTransactionsDesc(account.transactions);
         account.balance = round2(Number(account.balance || 0) + created.amount);
         if (account.type === 'credit-card') account.statementBalance = account.balance;
         const updated = { ...target, accounts };
@@ -2043,7 +2118,7 @@ async function handleApi(req, res, url) {
         const patch = body.transaction || {};
         const existing = account.transactions[index];
         const updatedTransaction = { ...existing };
-        if (patch.description !== undefined) updatedTransaction.description = cleanText(patch.description, 120);
+        if (patch.description !== undefined) updatedTransaction.description = sanitizeCustomerDescription(patch.description, '');
         if (patch.category !== undefined) updatedTransaction.category = cleanText(patch.category, 48) || 'Other';
         if (patch.amount !== undefined) {
           const amount = Number(patch.amount);
@@ -2063,6 +2138,7 @@ async function handleApi(req, res, url) {
         account.balance = round2(Number(account.balance || 0) + updatedTransaction.amount - Number(existing.amount || 0));
         if (account.type === 'credit-card') account.statementBalance = account.balance;
         account.transactions[index] = updatedTransaction;
+        account.transactions = sortTransactionsDesc(account.transactions);
         const updated = { ...target, accounts };
         updateUser(updated);
         recordAdminAudit('Updated simulator ledger transaction', { userId, username: target.username, accountId: account.id, transactionId });
@@ -2088,31 +2164,100 @@ async function handleApi(req, res, url) {
       if (!target) return sendJson(res, 404, { error: 'Simulator user not found.' });
       const body = await readBody(req);
       const amount = round2(Number(body.amount));
+      const transferTypeKey = TRANSFER_TYPE_CONFIG[body.transferType] ? body.transferType : 'internal';
+      const transferMeta = TRANSFER_TYPE_CONFIG[transferTypeKey];
       const accounts = JSON.parse(JSON.stringify(target.accounts || []));
-      const from = accounts.find((account) => account.id === body.fromAccountId && DEPOSIT_TYPES.has(account.type));
-      const to = accounts.find((account) => account.id === body.toAccountId && account.id !== body.fromAccountId);
-      if (!from || !to || !Number.isFinite(amount) || amount <= 0 || amount > 10000000) return sendJson(res, 400, { error: 'Choose valid source/destination accounts and a positive transfer amount.' });
-      if (Number(from.balance || 0) < amount) return sendJson(res, 400, { error: 'The source simulator account has insufficient balance.' });
-      if (['auto-loan', 'mortgage'].includes(to.type) && amount > Number(to.balance || 0)) return sendJson(res, 400, { error: 'Payment amount cannot exceed the loan principal balance.' });
-      const transferId = uid();
+      const to = accounts.find((account) => account.id === body.toAccountId);
       const date = new Date(body.date || Date.now());
       if (Number.isNaN(+date)) return sendJson(res, 400, { error: 'Choose a valid transfer date.' });
-      const label = cleanText(body.description || `Simulated transfer to ${to.name}`, 100);
-      from.balance = round2(Number(from.balance || 0) - amount);
-      from.transactions.unshift({ id: uid(), transferId, date: date.toISOString(), description: label, amount: -amount, category: 'Transfer', status: 'posted' });
+      if (!to || !Number.isFinite(amount) || amount <= 0 || amount > 10000000) {
+        return sendJson(res, 400, { error: 'Choose valid accounts and a positive transfer amount.' });
+      }
+      if (['auto-loan', 'mortgage'].includes(to.type) && amount > Number(to.balance || 0)) {
+        return sendJson(res, 400, { error: 'Payment amount cannot exceed the loan principal balance.' });
+      }
+
+      const transferId = uid();
+      const customNote = cleanText(body.description, 100);
+      const customerFrom = accounts.find((account) => account.id === body.fromAccountId && DEPOSIT_TYPES.has(account.type));
+
+      if (!isSuperAdmin && !customerFrom && operator?.linkedUserId && operator.linkedUserId !== target.id) {
+        const linkedOwner = findUserById(operator.linkedUserId);
+        if (!linkedOwner) return sendJson(res, 400, { error: 'Linked personal funding account is unavailable.' });
+        const ownerCopy = JSON.parse(JSON.stringify(linkedOwner));
+        const fundingAccount = (ownerCopy.accounts || []).find(
+          (account) => account.type === 'checking' && (!body.fromAccountId || account.id === body.fromAccountId)
+        );
+        if (!fundingAccount) {
+          return sendJson(res, 400, { error: 'You must have an active personal checking account to fund transfers.' });
+        }
+        if (Number(fundingAccount.balance || 0) < amount) {
+          return sendJson(res, 400, { error: 'Your linked personal checking account has insufficient funds.' });
+        }
+        const debitLabel = sanitizeCustomerDescription(customNote || `${transferMeta.label} to ${target.fullName}`, `${transferMeta.label} to ${target.fullName}`);
+        const creditLabel = sanitizeCustomerDescription(customNote || `${transferMeta.label} from ${linkedOwner.fullName}`, `${transferMeta.label} from ${linkedOwner.fullName}`);
+        fundingAccount.balance = round2(Number(fundingAccount.balance || 0) - amount);
+        fundingAccount.transactions = sortTransactionsDesc([
+          { id: uid(), transferId, date: date.toISOString(), description: debitLabel, amount: -amount, category: transferMeta.fromCategory, status: 'posted' },
+          ...(fundingAccount.transactions || []),
+        ]);
+        const paysDebt = ['credit-card', 'auto-loan', 'mortgage'].includes(to.type);
+        if (paysDebt) {
+          to.balance = round2(Number(to.balance || 0) - amount);
+          to.transactions = sortTransactionsDesc([
+            { id: uid(), transferId, date: date.toISOString(), description: creditLabel, amount: -amount, category: to.type === 'credit-card' ? 'Card payment' : 'Loan payment', status: 'posted' },
+            ...(to.transactions || []),
+          ]);
+        } else {
+          to.balance = round2(Number(to.balance || 0) + amount);
+          to.transactions = sortTransactionsDesc([
+            { id: uid(), transferId, date: date.toISOString(), description: creditLabel, amount, category: transferMeta.toCategory, status: 'posted' },
+            ...(to.transactions || []),
+          ]);
+        }
+        if (to.type === 'credit-card') to.statementBalance = to.balance;
+        updateUser(ownerCopy);
+        const updated = { ...target, accounts };
+        updateUser(updated);
+        recordAdminAudit('Completed funded transfer', { userId, username: target.username, fromOwnerId: linkedOwner.id, fromAccountId: fundingAccount.id, toAccountId: to.id, amount, transferType: transferTypeKey });
+        return sendJson(res, 200, { user: publicUser(updated), transferId, amount, transferType: transferTypeKey });
+      }
+
+      if (!customerFrom || customerFrom.id === to.id) {
+        return sendJson(res, 400, { error: 'Choose valid source/destination accounts and a positive transfer amount.' });
+      }
+      if (Number(customerFrom.balance || 0) < amount) {
+        return sendJson(res, 400, { error: 'The source simulator account has insufficient balance.' });
+      }
+      const fromLabel = sanitizeCustomerDescription(customNote || `${transferMeta.label} to ${to.name}`, `${transferMeta.label} to ${to.name}`);
+      const toLabel = sanitizeCustomerDescription(
+        customNote || (['credit-card', 'auto-loan', 'mortgage'].includes(to.type) ? `${transferMeta.label} from ${customerFrom.name}` : `${transferMeta.label} from ${customerFrom.name}`),
+        `${transferMeta.label} from ${customerFrom.name}`
+      );
+      customerFrom.balance = round2(Number(customerFrom.balance || 0) - amount);
+      customerFrom.transactions = sortTransactionsDesc([
+        { id: uid(), transferId, date: date.toISOString(), description: fromLabel, amount: -amount, category: transferMeta.fromCategory, status: 'posted' },
+        ...(customerFrom.transactions || []),
+      ]);
       const paysDebt = ['credit-card', 'auto-loan', 'mortgage'].includes(to.type);
       if (paysDebt) {
         to.balance = round2(Number(to.balance || 0) - amount);
-        to.transactions.unshift({ id: uid(), transferId, date: date.toISOString(), description: `Simulated payment from ${from.name}`, amount: -amount, category: to.type === 'credit-card' ? 'Card payment' : 'Loan payment', status: 'posted' });
+        to.transactions = sortTransactionsDesc([
+          { id: uid(), transferId, date: date.toISOString(), description: toLabel, amount: -amount, category: to.type === 'credit-card' ? 'Card payment' : 'Loan payment', status: 'posted' },
+          ...(to.transactions || []),
+        ]);
       } else {
         to.balance = round2(Number(to.balance || 0) + amount);
-        to.transactions.unshift({ id: uid(), transferId, date: date.toISOString(), description: `Simulated transfer from ${from.name}`, amount, category: 'Transfer', status: 'posted' });
+        to.transactions = sortTransactionsDesc([
+          { id: uid(), transferId, date: date.toISOString(), description: toLabel, amount, category: transferMeta.toCategory, status: 'posted' },
+          ...(to.transactions || []),
+        ]);
       }
       if (to.type === 'credit-card') to.statementBalance = to.balance;
       const updated = { ...target, accounts };
       updateUser(updated);
-      recordAdminAudit('Completed simulated admin transfer', { userId, username: target.username, fromAccountId: from.id, toAccountId: to.id, amount });
-      return sendJson(res, 200, { user: publicUser(updated), transferId, amount });
+      recordAdminAudit('Completed simulated admin transfer', { userId, username: target.username, fromAccountId: customerFrom.id, toAccountId: to.id, amount, transferType: transferTypeKey });
+      return sendJson(res, 200, { user: publicUser(updated), transferId, amount, transferType: transferTypeKey });
     }
 
     const payeeRoute = pathname.match(/^\/api\/admin\/users\/([^/]+)\/payees(?:\/([^/]+))?$/);
@@ -2331,9 +2476,16 @@ async function handleApi(req, res, url) {
 
         const updated = JSON.parse(JSON.stringify(target));
         const accounts = updated.accounts || [];
-        const checking = accounts.find((a) => a.type === 'checking');
-        const savings = accounts.find((a) => a.type === 'savings');
-        const creditCards = accounts.filter((a) => a.type === 'credit-card');
+        const requestedAccountId = typeof body.accountId === 'string' && body.accountId.trim() ? body.accountId.trim() : 'all';
+        const selectedAccounts = requestedAccountId === 'all'
+          ? accounts
+          : accounts.filter((a) => a.id === requestedAccountId);
+        if (!selectedAccounts.length) {
+          return sendJson(res, 404, { error: 'Selected simulator account not found.' });
+        }
+        const checkingAccounts = selectedAccounts.filter((a) => a.type === 'checking');
+        const savingsAccounts = selectedAccounts.filter((a) => a.type === 'savings');
+        const creditCards = selectedAccounts.filter((a) => a.type === 'credit-card');
         const purchases = [
           { merchant: 'Whole Foods Market', category: 'Groceries', min: 18, max: 185 },
           { merchant: 'Local Market', category: 'Groceries', min: 12, max: 92 },
@@ -2358,14 +2510,18 @@ async function handleApi(req, res, url) {
         let eventsGenerated = 0;
         let transactionCount = 0;
         let eventRowStartCount = 0;
-        const isOpenOnDate = (account, date) => !account.createdAt || String(account.createdAt).slice(0, 10) <= date.toISOString().slice(0, 10);
+        const isOpenOnDate = (account, date) => {
+          const openIso = effectiveAccountOpenIso(account);
+          return !openIso || String(openIso).slice(0, 10) <= date.toISOString().slice(0, 10);
+        };
         const addTransaction = (account, description, amount, category, date) => {
           if (transactionCount === eventRowStartCount) eventsGenerated += 1;
           if (!Array.isArray(account.transactions)) account.transactions = [];
           const occurredAt = new Date(date);
           occurredAt.setUTCHours(8 + Math.floor(Math.random() * 12), Math.floor(Math.random() * 60), 0, 0);
-          const opened = new Date(account.createdAt);
-          if (!Number.isNaN(+opened) && occurredAt < opened) occurredAt.setTime(opened.getTime());
+          const openIso = effectiveAccountOpenIso(account);
+          const opened = openIso ? new Date(openIso) : null;
+          if (opened && !Number.isNaN(+opened) && occurredAt < opened) occurredAt.setTime(opened.getTime());
           account.transactions.push({
             id: uid(),
             date: occurredAt.toISOString(),
@@ -2385,11 +2541,13 @@ async function handleApi(req, res, url) {
             date.setUTCHours(Math.min(21, 9 + slot * 3), 0, 0, 0);
             eventIndex += 1;
             const roll = Math.random();
-            const eligibleChecking = checking && isOpenOnDate(checking, date);
-            const eligibleSavings = savings && isOpenOnDate(savings, date);
+            const eligibleCheckings = checkingAccounts.filter((a) => isOpenOnDate(a, date));
+            const eligibleChecking = eligibleCheckings.length ? eligibleCheckings[eventIndex % eligibleCheckings.length] : null;
+            const eligibleSavingsList = savingsAccounts.filter((a) => isOpenOnDate(a, date));
+            const eligibleSavings = eligibleSavingsList.length ? eligibleSavingsList[eventIndex % eligibleSavingsList.length] : null;
             const eligibleCards = creditCards.filter((card) => isOpenOnDate(card, date) && Number(card.balance) < Number(card.creditLimit || 100000));
-            const eligibleYieldAccount = accounts.find((account) => ['savings', 'cd'].includes(account.type) && isOpenOnDate(account, date));
-            const eligibleLoan = accounts.find((account) => ['mortgage', 'auto-loan'].includes(account.type) && isOpenOnDate(account, date) && Number(account.balance || 0) > 0);
+            const eligibleYieldAccount = selectedAccounts.find((account) => ['savings', 'cd'].includes(account.type) && isOpenOnDate(account, date));
+            const eligibleLoan = selectedAccounts.find((account) => ['mortgage', 'auto-loan'].includes(account.type) && isOpenOnDate(account, date) && Number(account.balance || 0) > 0);
 
             if (roll < 0.36 && eligibleCards.length) {
               const card = eligibleCards[Math.floor(Math.random() * eligibleCards.length)];
@@ -2406,38 +2564,38 @@ async function handleApi(req, res, url) {
 
             if (roll < 0.68 && eligibleChecking) {
               const purchase = purchases[Math.floor(Math.random() * purchases.length)];
-              const amount = Math.min(amountBetween(purchase.min, purchase.max), Math.max(0, Number(checking.balance || 0) - 5));
+              const amount = Math.min(amountBetween(purchase.min, purchase.max), Math.max(0, Number(eligibleChecking.balance || 0) - 5));
               if (amount >= 1) {
-                checking.balance = roundAmount(Number(checking.balance || 0) - amount);
-                addTransaction(checking, `${purchase.merchant} · simulated debit`, -amount, purchase.category, date);
+                eligibleChecking.balance = roundAmount(Number(eligibleChecking.balance || 0) - amount);
+                addTransaction(eligibleChecking, `${purchase.merchant} · simulated debit`, -amount, purchase.category, date);
                 continue;
               }
             }
 
             if (roll < 0.83 && eligibleChecking) {
               const amount = amountBetween(850, 3400);
-              checking.balance = roundAmount(Number(checking.balance || 0) + amount);
-              addTransaction(checking, 'Direct deposit · Northstar Payroll', amount, 'Income', date);
+              eligibleChecking.balance = roundAmount(Number(eligibleChecking.balance || 0) + amount);
+              addTransaction(eligibleChecking, 'Direct deposit · Northstar Payroll', amount, 'Income', date);
               continue;
             }
 
-            if (roll < 0.93 && eligibleChecking && eligibleSavings && Number(checking.balance || 0) > 100) {
-              const amount = Math.min(amountBetween(50, 425), Number(checking.balance || 0) - 25);
-              checking.balance = roundAmount(Number(checking.balance || 0) - amount);
-              savings.balance = roundAmount(Number(savings.balance || 0) + amount);
-              addTransaction(checking, `Transfer to ${savings.name} · simulated`, -amount, 'Transfer', date);
-              addTransaction(savings, `Transfer from ${checking.name} · simulated`, amount, 'Transfer', date);
+            if (roll < 0.93 && eligibleChecking && eligibleSavings && Number(eligibleChecking.balance || 0) > 100) {
+              const amount = Math.min(amountBetween(50, 425), Number(eligibleChecking.balance || 0) - 25);
+              eligibleChecking.balance = roundAmount(Number(eligibleChecking.balance || 0) - amount);
+              eligibleSavings.balance = roundAmount(Number(eligibleSavings.balance || 0) + amount);
+              addTransaction(eligibleChecking, `Transfer to ${eligibleSavings.name} · simulated`, -amount, 'Transfer', date);
+              addTransaction(eligibleSavings, `Transfer from ${eligibleChecking.name} · simulated`, amount, 'Transfer', date);
               continue;
             }
 
             if (eligibleChecking && eligibleCards.length) {
               const card = creditCards.filter((item) => isOpenOnDate(item, date) && Number(item.balance || 0) > 0)[0];
               if (card) {
-                const amount = Math.min(amountBetween(35, 250), Number(card.balance), Number(checking.balance || 0));
+                const amount = Math.min(amountBetween(35, 250), Number(card.balance), Number(eligibleChecking.balance || 0));
                 if (amount >= 1) {
-                  checking.balance = roundAmount(Number(checking.balance || 0) - amount);
+                  eligibleChecking.balance = roundAmount(Number(eligibleChecking.balance || 0) - amount);
                   card.balance = roundAmount(Number(card.balance || 0) - amount);
-                  addTransaction(checking, `Payment to ${card.name} · simulated`, -amount, 'Credit card payment', date);
+                  addTransaction(eligibleChecking, `Payment to ${card.name} · simulated`, -amount, 'Credit card payment', date);
                   addTransaction(card, 'Payment received — thank you · simulated', -amount, 'Payment', date);
                   continue;
                 }
@@ -2446,11 +2604,11 @@ async function handleApi(req, res, url) {
 
             if (eligibleChecking && eligibleLoan && cadence === 'monthly' && date.getUTCDate() <= 5) {
               const due = Number(eligibleLoan.monthlyPayment || 250);
-              const amount = Math.min(due, Number(eligibleLoan.balance || 0), Number(checking.balance || 0));
+              const amount = Math.min(due, Number(eligibleLoan.balance || 0), Number(eligibleChecking.balance || 0));
               if (amount >= 1) {
-                checking.balance = roundAmount(Number(checking.balance || 0) - amount);
+                eligibleChecking.balance = roundAmount(Number(eligibleChecking.balance || 0) - amount);
                 eligibleLoan.balance = roundAmount(Number(eligibleLoan.balance || 0) - amount);
-                addTransaction(checking, `Payment to ${eligibleLoan.name} · simulated`, -amount, 'Loan payment', date);
+                addTransaction(eligibleChecking, `Payment to ${eligibleLoan.name} · simulated`, -amount, 'Loan payment', date);
                 addTransaction(eligibleLoan, 'Monthly loan payment received · simulated', -amount, 'Loan payment', date);
                 continue;
               }
@@ -2458,8 +2616,8 @@ async function handleApi(req, res, url) {
 
             if (eligibleChecking) {
               const amount = amountBetween(850, 3400);
-              checking.balance = roundAmount(Number(checking.balance || 0) + amount);
-              addTransaction(checking, 'Direct deposit · Northstar Payroll', amount, 'Income', date);
+              eligibleChecking.balance = roundAmount(Number(eligibleChecking.balance || 0) + amount);
+              addTransaction(eligibleChecking, 'Direct deposit · Northstar Payroll', amount, 'Income', date);
               continue;
             }
 
@@ -2495,12 +2653,12 @@ async function handleApi(req, res, url) {
 
         if (transactionCount === 0) return sendJson(res, 400, { error: 'No transactions could be generated for the selected accounts and dates. Check account opening dates and balances.' });
         for (const account of accounts) {
-          account.transactions = (account.transactions || []).sort((a, b) => new Date(b.date) - new Date(a.date));
+          account.transactions = sortTransactionsDesc(account.transactions);
           if (account.type === 'credit-card') account.statementBalance = roundAmount(Number(account.balance || 0));
         }
         updateUser(updated);
         recordAdminAudit('Generated simulator transaction history', {
-          userId: target.id, username: target.username, startDate: body.startDate, endDate: body.endDate,
+          userId: target.id, username: target.username, accountId: requestedAccountId, startDate: body.startDate, endDate: body.endDate,
           cadence, periods: periods.length, eventsRequested: eventIndex, eventsGenerated, transactionsAdded: transactionCount,
         });
         return sendJson(res, 200, { user: publicUser(updated), eventsGenerated, transactionsAdded: transactionCount });
@@ -2542,6 +2700,15 @@ async function handleApi(req, res, url) {
         }
         const status = patch.status ?? target.status ?? 'active';
         if (!['active', 'suspended'].includes(status)) return sendJson(res, 400, { error: 'Status must be active or suspended.' });
+        const normalizedAccounts = [];
+        for (const a of accounts) {
+          const normalizedOpen = a.openedDate !== undefined ? normalizeOpenedDate(a.openedDate) : undefined;
+          if (normalizedOpen === null) return sendJson(res, 400, { error: 'Each account opening date must be a valid YYYY-MM-DD date.' });
+          const nextAcc = { ...a, balance: round2(Number(a.balance)), transactions: sortTransactionsDesc(a.transactions) };
+          if (normalizedOpen) nextAcc.openedDate = normalizedOpen;
+          else if (a.openedDate === '' || a.openedDate === null) delete nextAcc.openedDate;
+          normalizedAccounts.push(nextAcc);
+        }
         const updated = {
           ...target,
           ...patch,
@@ -2554,7 +2721,7 @@ async function handleApi(req, res, url) {
           fullName: cleanText(patch.fullName ?? target.fullName, 80),
           email: cleanText(patch.email ?? target.email, 120),
           status,
-          accounts: accounts.map((a) => ({ ...a, balance: round2(Number(a.balance)) })),
+          accounts: normalizedAccounts,
           passwordHash: target.passwordHash,
           updatedAt: new Date().toISOString(),
         };
@@ -2634,11 +2801,13 @@ async function handleApi(req, res, url) {
     if (String(body.newPassword || '').length < minLen) {
       return sendJson(res, 400, { error: `New password must be at least ${minLen} characters${linkedAdmin ? ' because this account has linked administrator access' : ''}.` });
     }
-    updateUser({ ...user, passwordHash: hashPassword(String(body.newPassword)) }, { preserveToken: resolvedAuth.token });
+    const updatedUser = { ...user, passwordHash: hashPassword(String(body.newPassword)) };
+    updateUser(updatedUser, { preserveToken: resolvedAuth.token });
     if (linkedAdmin) {
       auditAdmin('Linked customer changed shared password', { userId: user.id, adminId: linkedAdmin.id, username: user.username }, user.username);
     }
-    return sendJson(res, 200, { ok: true });
+    const linkedSummary = resolvedAuth.sessionRole === 'impersonated' ? null : buildLinkedAdminSummary(user.id);
+    return sendJson(res, 200, { ok: true, user: publicUser(updatedUser), ...(linkedSummary ? { linkedAdmin: linkedSummary } : {}) });
   }
 
   if (pathname === '/api/accounts' && method === 'POST') {
