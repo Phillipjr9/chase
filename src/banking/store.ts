@@ -796,7 +796,9 @@ function setLocalSession(userId: string | null): void {
 
 function findUserByUsernameLocal(username: string): User | undefined {
   const needle = username.trim().toLowerCase();
-  return loadUsers().find((u) => u.username.toLowerCase() === needle);
+  return loadUsers().find(
+    (u) => u.username.toLowerCase() === needle || u.email.trim().toLowerCase() === needle
+  );
 }
 
 function buildAccount(product: ProductInfo, openingDeposit: number): Account {
@@ -921,7 +923,7 @@ export async function authenticate(
   const user = findUserByUsernameLocal(username);
   if (!user) {
     return {
-      error: "We don't recognize this username. Please check your username or enroll in Chase Online.",
+      error: "We don't recognize this username or email. Please check your username or enroll in Chase Online.",
     };
   }
   if (user.password !== password) {
@@ -958,7 +960,11 @@ export async function resetPassword(
     return;
   }
   const users = loadUsers();
-  const idx = users.findIndex((u) => u.username.toLowerCase() === username.trim().toLowerCase());
+  const idx = users.findIndex(
+    (u) =>
+      u.username.toLowerCase() === username.trim().toLowerCase() ||
+      u.email.trim().toLowerCase() === username.trim().toLowerCase()
+  );
   const user = idx >= 0 ? users[idx] : null;
   if (!user || user.email.trim().toLowerCase() !== email.trim().toLowerCase()) {
     throw new Error("We couldn't verify that username and email. Check them and try again.");

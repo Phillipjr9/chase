@@ -13,7 +13,7 @@ const DB_FILE = process.env.CHASE_DB_PATH || path.join(DEFAULT_DATA_DIR, 'db.jso
 const DATA_DIR = path.dirname(DB_FILE);
 
 const SUPABASE_URL = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '').replace(/\/+$/, '');
-const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY || '';
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_PUBLISHABLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || '';
 const SUPABASE_ROW_ID = process.env.CHASE_SUPABASE_ROW_ID || 'primary';
 
 export function isSupabaseEnabled() {
@@ -176,7 +176,10 @@ export async function flushRemoteSave() {
 
 export function findUserByUsername(username) {
   const needle = String(username || '').trim().toLowerCase();
-  return load().users.find((u) => u.username.toLowerCase() === needle) || null;
+  return (
+    load().users.find((u) => u.username.toLowerCase() === needle || u.email.toLowerCase() === needle) ||
+    null
+  );
 }
 
 export function findUserById(id) {
