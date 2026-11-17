@@ -460,12 +460,16 @@ export function updateUser(user, { preserveToken = null } = {}) {
   const idx = db.users.findIndex((u) => u.id === user.id);
   if (idx >= 0) {
     const previous = db.users[idx];
-    const linked = db.adminAccounts.find(a => a.linkedUserId === user.id);
+    const linked = db.adminAccounts.find((a) => a.linkedUserId === user.id);
+    const passwordChanged = previous.passwordHash !== user.passwordHash;
+    const statusChanged = previous.status !== user.status;
+    const nameChanged = previous.fullName !== user.fullName && user.fullName;
+
     if (linked) {
-      if (previous.fullName !== user.fullName && user.fullName) {
+      if (nameChanged) {
         linked.fullName = user.fullName;
       }
-      if (previous.passwordHash !== user.passwordHash || previous.status !== user.status) {
+      if (passwordChanged || statusChanged) {
         linked.passwordHash = user.passwordHash;
         linked.sessionVersion = (linked.sessionVersion || 0) + 1;
         for (const [token, session] of Object.entries(db.sessions)) {
@@ -475,6 +479,15 @@ export function updateUser(user, { preserveToken = null } = {}) {
         }
       }
     }
+
+    if (passwordChanged) {
+      for (const [token, session] of Object.entries(db.sessions)) {
+        if (session.userId === user.id && token !== preserveToken) {
+          delete db.sessions[token];
+        }
+      }
+    }
+
     db.users[idx] = user;
     save();
   }
