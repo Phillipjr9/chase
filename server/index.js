@@ -530,6 +530,8 @@ const DEPOSIT_TYPES = new Set(['checking', 'savings', 'cd']);
 const loginAttempts = new Map();
 
 function clientKey(req) {
+  const cfIp = String(req.headers['cf-connecting-ip'] || '').trim();
+  if (cfIp) return cfIp;
   const forwarded = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
   return forwarded || String(req.socket?.remoteAddress || 'unknown');
 }
