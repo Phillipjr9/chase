@@ -1061,7 +1061,7 @@ async function handleApi(req, res, url) {
         target: { type: 'customer', id: user.id, label: `${user.fullName} (@${user.username})` },
         details: { userId: user.id, username: user.username, status: user.status },
       });
-      return sendJson(res, 403, { error: 'This simulated account is suspended. Contact the Chase administrator.' });
+      return sendJson(res, 403, { error: user.lockMessage || 'Your account has been suspended. Please contact Chase Security for assistance.' });
     }
     clearFailures(req, bucket);
     const token = newToken();
