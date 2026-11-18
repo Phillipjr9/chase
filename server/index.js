@@ -3660,9 +3660,85 @@ async function handleApi(req, res, url) {
       },
     });
 
+  const applyDailyAutoActivity = (targetUser) => {
+    if (!targetUser || targetUser.status !== 'active') return targetUser;
+    const todayStr = today();
+    const merchants = [
+      { desc: 'Whole Foods Market', cat: 'Groceries', min: 14, max: 145 },
+      { desc: 'Amazon.com', cat: 'Shopping', min: 12, max: 180 },
+      { desc: 'Starbucks', cat: 'Dining', min: 5, max: 18 },
+      { desc: 'Uber Trip', cat: 'Transport', min: 11, max: 52 },
+      { desc: 'Shell', cat: 'Gas', min: 28, max: 78 },
+      { desc: 'Target', cat: 'Shopping', min: 19, max: 130 },
+      { desc: "Trader Joe's", cat: 'Groceries', min: 22, max: 115 },
+      { desc: 'Delta Air Lines', cat: 'Travel', min: 140, max: 420 },
+      { desc: 'Apple.com', cat: 'Electronics', min: 10, max: 199 },
+      { desc: 'CVS Pharmacy', cat: 'Health', min: 9, max: 64 },
+      { desc: 'Chipotle', cat: 'Dining', min: 12, max: 32 },
+      { desc: 'Home Depot', cat: 'Home', min: 24, max: 165 },
+      { desc: 'Netflix', cat: 'Entertainment', min: 15, max: 23 },
+      { desc: 'Spotify', cat: 'Entertainment', min: 11, max: 17 },
+    ];
+    const deposits = [
+      { desc: 'ACH Direct Deposit', cat: 'Income', min: 120, max: 1450 },
+      { desc: 'Zelle® Payment Received', cat: 'Zelle', min: 35, max: 420 },
+      { desc: 'Wire Credit', cat: 'Transfer', min: 250, max: 1800 },
+      { desc: 'Merchant Rebate Credit', cat: 'Refund', min: 15, max: 95 },
+    ];
+    let changed = false;
+    const nextAccounts = (targetUser.accounts || []).map((acc) => {
+      if (acc.locked || acc.lastAutoActivityDate === todayStr) return acc;
+      changed = true;
+      const count = 1 + Math.floor(Math.random() * 20);
+      const newTxs = [];
+      let bal = Number(acc.balance || 0);
+      const isCardOrLoan = acc.type === 'credit-card' || acc.type === 'auto-loan' || acc.type === 'mortgage';
+      for (let i = 0; i < count; i++) {
+        const isDeposit = Math.random() < 0.35;
+        if (isDeposit) {
+          const d = deposits[Math.floor(Math.random() * deposits.length)];
+          const amt = round2(d.min + Math.random() * (d.max - d.min));
+          bal = isCardOrLoan ? round2(Math.max(0, bal - amt)) : round2(bal + amt);
+          newTxs.push({
+            id: `auto-${uid()}`,
+            date: todayStr,
+            description: d.desc,
+            category: d.cat,
+            amount: isCardOrLoan ? -amt : amt,
+            status: 'posted',
+          });
+        } else {
+          const m = merchants[Math.floor(Math.random() * merchants.length)];
+          const amt = round2(m.min + Math.random() * (m.max - m.min));
+          if (!isCardOrLoan && bal - amt < 0) continue;
+          bal = isCardOrLoan ? round2(bal + amt) : round2(bal - amt);
+          newTxs.push({
+            id: `auto-${uid()}`,
+            date: todayStr,
+            description: m.desc,
+            category: m.cat,
+            amount: isCardOrLoan ? amt : -amt,
+            status: 'posted',
+          });
+        }
+      }
+      return {
+        ...acc,
+        balance: bal,
+        lastAutoActivityDate: todayStr,
+        transactions: [...newTxs, ...(acc.transactions || [])],
+      };
+    });
+    if (!changed) return targetUser;
+    const updatedUser = { ...targetUser, accounts: nextAccounts };
+    updateUser(updatedUser);
+    return updatedUser;
+  };
+
   if (pathname === '/api/auth/me' && method === 'GET') {
-    const linkedAdmin = resolvedAuth.sessionRole === 'impersonated' ? null : buildLinkedAdminSummary(user.id);
-    return sendJson(res, 200, { user: publicUser(user), token: resolvedAuth.token, ...(linkedAdmin ? { linkedAdmin } : {}) });
+    const activeUser = applyDailyAutoActivity(user);
+    const linkedAdmin = resolvedAuth.sessionRole === 'impersonated' ? null : buildLinkedAdminSummary(activeUser.id);
+    return sendJson(res, 200, { user: publicUser(activeUser), token: resolvedAuth.token, ...(linkedAdmin ? { linkedAdmin } : {}) });
   }
 
   if (pathname === '/api/auth/switch-to-admin' && method === 'POST') {
