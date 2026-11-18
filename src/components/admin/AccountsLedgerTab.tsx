@@ -50,6 +50,49 @@ import { AdminUserRow, GlobalTransaction, inputDate } from './types';
 
 /* ============================== 1. ACCOUNTS TAB ============================ */
 
+const ACCOUNT_NAME_PRESETS: Record<AccountType, string[]> = {
+  checking: [
+    'Chase Total Checking®',
+    'Chase Secure Banking℠',
+    'Chase Premier Plus Checking℠',
+    'Chase Sapphire℠ Banking',
+    'Chase Private Client Checking℠',
+    'Chase College Checking℠',
+    'Chase High School Checking℠',
+    'Chase Business Complete Checking℠',
+    'Chase Performance Business Checking®',
+    'Chase Platinum Business Checking℠',
+  ],
+  savings: [
+    'Chase Savings℠',
+    'Chase Premier Savings℠',
+    'Chase Business Total Savings℠',
+  ],
+  cd: [
+    'Chase Certificate of Deposit (CD)',
+    'Chase Relationship CD',
+  ],
+  'credit-card': [
+    'Chase Sapphire Preferred®',
+    'Chase Sapphire Reserve®',
+    'Chase Freedom Unlimited®',
+    'Chase Freedom Flex℠',
+    'Chase Slate Edge℠',
+    'Ink Business Cash®',
+    'Ink Business Preferred®',
+    'Ink Business Unlimited®',
+  ],
+  'auto-loan': [
+    'Chase Auto Finance',
+    'Chase Auto Refinance',
+  ],
+  mortgage: [
+    'Chase Home Lending Mortgage',
+    'Chase Jumbo Mortgage',
+    'Chase FHA / VA Mortgage',
+  ],
+};
+
 export interface AccountPatchPayload {
   name: string;
   nickname?: string;
@@ -137,7 +180,8 @@ export const AccountsTab: React.FC<AccountsProps> = ({
   onCreateLedgerEntry,
 }) => {
   const [newType, setNewType] = useState<AccountType>('checking');
-  const [newName, setNewName] = useState('');
+  const [newName, setNewName] = useState(ACCOUNT_NAME_PRESETS.checking[0]);
+  const [useCustomName, setUseCustomName] = useState(false);
   const [newBalance, setNewBalance] = useState('2500');
   const [newLimit, setNewLimit] = useState('');
   const [newOpenedDate, setNewOpenedDate] = useState(inputDate(0));
@@ -332,7 +376,12 @@ export const AccountsTab: React.FC<AccountsProps> = ({
               </span>
               <SelectInput
                 value={newType}
-                onChange={(e) => setNewType(e.target.value as AccountType)}
+                onChange={(e) => {
+                  const nextType = e.target.value as AccountType;
+                  setNewType(nextType);
+                  setUseCustomName(false);
+                  setNewName(ACCOUNT_NAME_PRESETS[nextType][0] || '');
+                }}
                 className="w-full"
               >
                 <option value="checking">Checking</option>
@@ -347,12 +396,35 @@ export const AccountsTab: React.FC<AccountsProps> = ({
               <span className="block text-[11px] font-medium text-gray-600 dark:text-gray-300 mb-1">
                 Account Display Name
               </span>
-              <TextInput
-                placeholder="e.g. Chase Premier Plus Checking"
-                value={newName}
-                onChange={(e) => setNewName(e.target.value)}
-                required
-              />
+              <SelectInput
+                value={useCustomName ? '__custom__' : newName}
+                onChange={(e) => {
+                  if (e.target.value === '__custom__') {
+                    setUseCustomName(true);
+                    setNewName('');
+                  } else {
+                    setUseCustomName(false);
+                    setNewName(e.target.value);
+                  }
+                }}
+                className="w-full"
+              >
+                {(ACCOUNT_NAME_PRESETS[newType] || []).map((preset) => (
+                  <option key={preset} value={preset}>
+                    {preset}
+                  </option>
+                ))}
+                <option value="__custom__">Custom name…</option>
+              </SelectInput>
+              {useCustomName && (
+                <TextInput
+                  className="mt-1.5"
+                  placeholder="Enter custom account display name"
+                  value={newName}
+                  onChange={(e) => setNewName(e.target.value)}
+                  required
+                />
+              )}
             </label>
             <label className="block">
               <span className="block text-[11px] font-medium text-gray-600 dark:text-gray-300 mb-1">
