@@ -1829,13 +1829,13 @@ const AsideCard: React.FC<{
   rows: { k: string; v: string }[];
   help: string;
 }> = ({ title, rows, help }) => (
-  <div>
+  <div className="xl:col-span-5 min-w-0">
     <div className="border rounded-[6px] bg-white p-5" style={{ borderColor: LINE }}>
       <h3 className="text-[15px] font-semibold" style={{ color: INK }}>{title}</h3>
       <dl className="mt-3 space-y-2.5 text-[13px]">
         {rows.map((r) => (
-          <div key={r.k} className="flex justify-between gap-3 border-b border-[#EFF0F1] pb-2 last:border-b-0">
-            <dt style={{ color: MUTED }}>{r.k}</dt>
+          <div key={r.k} className="flex justify-between items-baseline gap-4 border-b border-[#EFF0F1] pb-2 last:border-b-0 last:pb-0">
+            <dt className="shrink-0" style={{ color: MUTED }}>{r.k}</dt>
             <dd className="font-medium text-right" style={{ color: INK }}>{r.v}</dd>
           </div>
         ))}
