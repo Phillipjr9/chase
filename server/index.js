@@ -702,7 +702,7 @@ async function handleApi(req, res, url) {
           target: { type: 'admin', id: storedAdmin.id, label: `${storedAdmin.fullName} (@${storedAdmin.username})` },
         }
       );
-      return sendJson(res, 403, { error: storedAdmin.lockMessage || 'This administrator account is disabled. Contact the super administrator.' });
+      return sendJson(res, 403, { error: storedAdmin.lockMessage || 'This account is disabled. Please contact Chase Security for assistance.' });
     }
     if (validStoredPassword && storedAdmin.linkedUserId && (!linkedCustomer || linkedCustomer.status !== 'active')) {
       auditAdmin(
