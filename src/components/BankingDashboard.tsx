@@ -1177,7 +1177,7 @@ export const BankingDashboard: React.FC<Props> = ({
                                           <span className="w-[84px] shrink-0" style={{ color: MUTED }}>{fmtDate(t.date)}</span>
                                           <span className="flex-1 min-w-0 truncate" style={{ color: INK }}>{t.description}</span>
                                           <span className={`shrink-0 font-medium ${t.amount < 0 ? '' : 'text-[#138842]'}`}>
-                                            {t.amount < 0 ? `-${fmtMoney(Math.abs(t.amount))}` : fmtMoney(t.amount)}
+                                            {fmtMoney(Math.abs(t.amount))}
                                           </span>
                                         </button>
                                       </li>
@@ -1221,7 +1221,7 @@ export const BankingDashboard: React.FC<Props> = ({
                                 </span>
                               </span>
                               <span className={`text-[13.5px] font-medium shrink-0 ${tx.amount < 0 ? '' : 'text-[#138842]'}`}>
-                                {tx.amount < 0 ? `-${fmtMoney(Math.abs(tx.amount))}` : fmtMoney(tx.amount)}
+                                {fmtMoney(Math.abs(tx.amount))}
                               </span>
                             </button>
                           </li>
@@ -1643,7 +1643,7 @@ export const BankingDashboard: React.FC<Props> = ({
                                 </span>
                               </span>
                               <span className={`text-[13.5px] font-medium shrink-0 ${t.amount < 0 ? '' : 'text-[#138842]'}`}>
-                                {t.amount < 0 ? `-${fmtMoney(Math.abs(t.amount))}` : fmtMoney(t.amount)}
+                                {fmtMoney(Math.abs(t.amount))}
                               </span>
                             </button>
                           </li>
@@ -1938,7 +1938,7 @@ export const BankingDashboard: React.FC<Props> = ({
               <div className="flex items-baseline justify-between gap-4">
                 <p className="text-[15px] font-semibold" style={{ color: INK }}>{detailTx.tx.description}</p>
                 <p className={`text-[20px] font-light shrink-0 ${detailTx.tx.amount < 0 ? '' : 'text-[#138842]'}`}>
-                  {detailTx.tx.amount < 0 ? `-${fmtMoney(Math.abs(detailTx.tx.amount))}` : fmtMoney(detailTx.tx.amount)}
+                  {fmtMoney(Math.abs(detailTx.tx.amount))}
                 </p>
               </div>
               <dl className="space-y-2.5 text-[13px] border-t pt-3" style={{ borderColor: LINE }}>
