@@ -193,8 +193,9 @@ const ReceiptCard: React.FC<{ receipt: Receipt; onReset: () => void; onAccounts:
         </div>
       ))}
     </dl>
-    <div className="mt-5 flex flex-wrap justify-center gap-2.5">
+    <div className="mt-5 flex flex-wrap justify-center gap-2.5 print:hidden">
       <PrimaryBtn onClick={onReset}>Make another</PrimaryBtn>
+      <GhostBtn onClick={() => window.print()}>Print / Save PDF</GhostBtn>
       <GhostBtn onClick={onAccounts}>View accounts</GhostBtn>
     </div>
   </div>
@@ -1477,6 +1478,17 @@ const WirePage: React.FC<{
   const [accountNumber, setAccountNumber] = useState('');
   const [amount, setAmount] = useState('');
   const [type, setType] = useState<'domestic' | 'international'>('domestic');
+  const saveRecipient = true;
+  const [savedRecipients, setSavedRecipients] = useState<
+    { id: string; name: string; routing: string; accountNumber: string; type: 'domestic' | 'international' }[]
+  >(() => {
+    try {
+      const raw = localStorage.getItem('chase_app_wire_recipients');
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  });
   const [msg, setMsg] = useState<Notice>(null);
   const [receipt, setReceipt] = useState<Receipt | null>(null);
   const [busy, setBusy] = useState(false);
@@ -1486,16 +1498,40 @@ const WirePage: React.FC<{
 
   const submit = async () => {
     const amt = parseFloat(amount);
-    if (!recipient.trim() || !routing.trim() || !accountNumber.trim())
+    const cleanRouting = routing.trim().replace(/\s+/g, '');
+    const cleanAcct = accountNumber.trim().replace(/\s+/g, '');
+    if (!recipient.trim() || !cleanRouting || !cleanAcct)
       return setMsg({ kind: 'error', text: 'Enter the recipient name, ABA routing / SWIFT code, and account number.' });
+    if (type === 'domestic' && !/^\d{9}$/.test(cleanRouting))
+      return setMsg({ kind: 'error', text: 'Domestic ABA routing number must be exactly 9 digits.' });
+    if (type === 'international' && !/^[A-Za-z0-9]{8,11}$/.test(cleanRouting))
+      return setMsg({ kind: 'error', text: 'International SWIFT / BIC code must be 8 to 11 letters/numbers.' });
+    if (cleanAcct.length < 4)
+      return setMsg({ kind: 'error', text: 'Enter a valid recipient account number or IBAN (at least 4 characters).' });
     if (isNaN(amt) || amt <= 0) return setMsg({ kind: 'error', text: 'Enter a wire amount greater than $0.' });
     if (!from) return setMsg({ kind: 'error', text: 'Select a funding account.' });
     if (amt + fee > from.balance)
       return setMsg({ kind: 'error', text: `Insufficient funds — you need ${fmtMoney(amt + fee)} including the $${fee} fee.` });
     setBusy(true);
     try {
-      const u = await apiSendWire(from.id, recipient.trim(), routing.trim(), amt, type, accountNumber.trim());
+      const u = await apiSendWire(from.id, recipient.trim(), cleanRouting, amt, type, cleanAcct);
       onUpdateUser(u);
+      if (saveRecipient) {
+        const nextEntry = {
+          id: `${recipient.trim().toLowerCase()}-${cleanRouting}-${cleanAcct.slice(-4)}`,
+          name: recipient.trim(),
+          routing: cleanRouting,
+          accountNumber: cleanAcct,
+          type,
+        };
+        const updatedList = [nextEntry, ...savedRecipients.filter((r) => r.id !== nextEntry.id)].slice(0, 8);
+        setSavedRecipients(updatedList);
+        try {
+          localStorage.setItem('chase_app_wire_recipients', JSON.stringify(updatedList));
+        } catch {
+          // ignore storage quota errors
+        }
+      }
       setReceipt({
         ref: confNumber('CHWR'),
         title: `${type === 'domestic' ? 'Domestic' : 'International'} wire initiated`,
@@ -1548,6 +1584,29 @@ const WirePage: React.FC<{
               </button>
             ))}
           </div>
+          {savedRecipients.length > 0 && (
+            <div>
+              <p className="text-[11.5px] font-semibold mb-1.5" style={{ color: MUTED }}>Saved wire recipients</p>
+              <div className="flex flex-wrap gap-1.5">
+                {savedRecipients.map((r) => (
+                  <button
+                    key={r.id}
+                    type="button"
+                    onClick={() => {
+                      setType(r.type);
+                      setRecipient(r.name);
+                      setRouting(r.routing);
+                      setAccountNumber(r.accountNumber);
+                    }}
+                    className="text-[12px] px-2.5 py-1 rounded-[4px] border bg-[#FAFBFC] hover:bg-[#F2F6FB] cursor-pointer"
+                    style={{ borderColor: LINE, color: INK }}
+                  >
+                    {r.name} (…{r.accountNumber.slice(-4)})
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           <Field label="From account">
             <select className={selectCls} value={fromId} onChange={(e) => setFromId(e.target.value)}>
               {deposits.map((a) => (

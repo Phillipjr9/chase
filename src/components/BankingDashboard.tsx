@@ -7,6 +7,10 @@ import {
   ArrowLeft,
   CheckCircle2,
   AlertCircle,
+  Eye,
+  EyeOff,
+  Copy,
+  Check,
   ShieldCheck,
   Lock,
   Unlock,
@@ -213,6 +217,13 @@ export const BankingDashboard: React.FC<Props> = ({
   const t = (en: string, es: string) => (spanishMode ? es : en);
   const [view, setView] = useState<View>(initialView);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [showAcctNums, setShowAcctNums] = useState(false);
+  const [copiedDetail, setCopiedDetail] = useState<string | null>(null);
+  const copyDetail = (key: string, val: string) => {
+    navigator.clipboard?.writeText(val).catch(() => {});
+    setCopiedDetail(key);
+    setTimeout(() => setCopiedDetail((prev) => (prev === key ? null : prev)), 2000);
+  };
   const [showDetails, setShowDetails] = useState(false);
   const [showAllTx, setShowAllTx] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -1652,10 +1663,61 @@ export const BankingDashboard: React.FC<Props> = ({
 
                 <aside className="lg:col-span-4 space-y-4">
                   <div className="bg-white border rounded-[6px] p-4" style={{ borderColor: LINE }}>
-                    <h2 className="text-[15px] font-semibold" style={{ color: INK }}>Account details</h2>
+                    <div className="flex items-center justify-between gap-2">
+                      <h2 className="text-[15px] font-semibold" style={{ color: INK }}>Account details</h2>
+                      {(selected.type === 'checking' || selected.type === 'savings' || selected.type === 'cd') && (
+                        <button
+                          type="button"
+                          onClick={() => setShowAcctNums((v) => !v)}
+                          className="inline-flex items-center gap-1 text-[12px] font-semibold hover:underline cursor-pointer"
+                          style={{ color: BTN_BLUE }}
+                        >
+                          {showAcctNums ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                          {showAcctNums ? 'Hide' : 'Show'}
+                        </button>
+                      )}
+                    </div>
                     <dl className="mt-2.5 space-y-2 text-[12.5px]">
+                      {(selected.type === 'checking' || selected.type === 'savings' || selected.type === 'cd') ? (
+                        <>
+                          <div className="flex justify-between items-center gap-2 border-b border-[#EFF0F1] pb-2">
+                            <dt style={{ color: MUTED }}>Routing number</dt>
+                            <dd className="flex items-center gap-1.5 font-mono" style={{ color: INK }}>
+                              <span>{showAcctNums ? (selected.routingNumber || '021000021') : `•••••${(selected.routingNumber || '021000021').slice(-4)}`}</span>
+                              <button
+                                type="button"
+                                onClick={() => copyDetail('routing', selected.routingNumber || '021000021')}
+                                className="p-0.5 rounded hover:bg-[#F2F6FB] cursor-pointer"
+                                style={{ color: BTN_BLUE }}
+                                title="Copy routing number"
+                              >
+                                {copiedDetail === 'routing' ? <Check className="w-3.5 h-3.5 text-[#0F7B45]" /> : <Copy className="w-3.5 h-3.5" />}
+                              </button>
+                            </dd>
+                          </div>
+                          <div className="flex justify-between items-center gap-2 border-b border-[#EFF0F1] pb-2">
+                            <dt style={{ color: MUTED }}>Account number</dt>
+                            <dd className="flex items-center gap-1.5 font-mono" style={{ color: INK }}>
+                              <span>{showAcctNums ? (selected.accountNumber || `000000${selected.mask || '0000'}`) : `••••••${(selected.accountNumber || selected.mask || '0000').slice(-4)}`}</span>
+                              <button
+                                type="button"
+                                onClick={() => copyDetail('account', selected.accountNumber || `000000${selected.mask || '0000'}`)}
+                                className="p-0.5 rounded hover:bg-[#F2F6FB] cursor-pointer"
+                                style={{ color: BTN_BLUE }}
+                                title="Copy account number"
+                              >
+                                {copiedDetail === 'account' ? <Check className="w-3.5 h-3.5 text-[#0F7B45]" /> : <Copy className="w-3.5 h-3.5" />}
+                              </button>
+                            </dd>
+                          </div>
+                        </>
+                      ) : (
+                        <div className="flex justify-between gap-3 border-b border-[#EFF0F1] pb-2">
+                          <dt style={{ color: MUTED }}>Account number</dt>
+                          <dd style={{ color: INK }}>…{selected.mask}</dd>
+                        </div>
+                      )}
                       {[
-                        { k: 'Account number', v: `…${selected.mask}` },
                         { k: 'Account type', v: selected.type.replace('-', ' ') },
                         ...(selected.creditLimit ? [{ k: 'Credit limit', v: fmtMoney(selected.creditLimit) }] : []),
                         ...(selected.apr ? [{ k: selected.type === 'credit-card' ? 'Purchase APR' : 'APR', v: `${selected.apr}%` }] : []),
