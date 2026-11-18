@@ -116,6 +116,9 @@ type View = DashboardView;
 
 type Notice = { kind: 'success' | 'error'; text: string } | null;
 
+const cleanTxDesc = (s: string) =>
+  String(s || '').replace(/\s*[—–]\s*/g, ' ').replace(/\s{2,}/g, ' ').trim();
+
 const fmtDate = (iso: string) => {
   if (!iso) return '—';
   const normalized = /^\d{4}-\d{2}-\d{2}$/.test(iso) ? `${iso}T12:00:00` : iso;
@@ -689,7 +692,7 @@ export const BankingDashboard: React.FC<Props> = ({
       if (txFilter === 'in' && t.amount <= 0) return false;
       if (txFilter === 'out' && t.amount >= 0) return false;
       if (q) {
-        const hay = `${t.description} ${t.category} ${fmtDate(t.date)} ${t.date} ${t.amount}`.toLowerCase();
+        const hay = `${cleanTxDesc(t.description)} ${t.category} ${fmtDate(t.date)} ${t.date} ${t.amount}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
       return true;
@@ -1175,7 +1178,7 @@ export const BankingDashboard: React.FC<Props> = ({
                                           className="w-full flex items-center gap-3 py-2 text-left text-[12.5px] hover:bg-[#F2F5F8] -mx-2 px-2 rounded cursor-pointer"
                                         >
                                           <span className="w-[84px] shrink-0" style={{ color: MUTED }}>{fmtDate(t.date)}</span>
-                                          <span className="flex-1 min-w-0 truncate" style={{ color: INK }}>{t.description}</span>
+                                          <span className="flex-1 min-w-0 truncate" style={{ color: INK }}>{cleanTxDesc(t.description)}</span>
                                           <span className={`shrink-0 font-medium ${t.amount < 0 ? '' : 'text-[#138842]'}`}>
                                             {fmtMoney(Math.abs(t.amount))}
                                           </span>
@@ -1215,7 +1218,7 @@ export const BankingDashboard: React.FC<Props> = ({
                             >
                               <span className="w-[84px] shrink-0 text-[12px]" style={{ color: MUTED }}>{fmtDate(tx.date)}</span>
                               <span className="flex-1 min-w-0">
-                                <span className="block text-[13.5px] truncate" style={{ color: INK }}>{tx.description}</span>
+                                <span className="block text-[13.5px] truncate" style={{ color: INK }}>{cleanTxDesc(tx.description)}</span>
                                 <span className="block text-[11px] truncate" style={{ color: '#8A929A' }}>
                                   {account.nickname?.trim() || account.name} (…{account.mask}) · {tx.category}
                                 </span>
@@ -1637,7 +1640,7 @@ export const BankingDashboard: React.FC<Props> = ({
                             >
                               <span className="w-[84px] shrink-0 text-[12px]" style={{ color: MUTED }}>{fmtDate(t.date)}</span>
                               <span className="flex-1 min-w-0">
-                                <span className="block text-[13.5px] truncate" style={{ color: INK }}>{t.description}</span>
+                                <span className="block text-[13.5px] truncate" style={{ color: INK }}>{cleanTxDesc(t.description)}</span>
                                 <span className="block text-[11px]" style={{ color: '#8A929A' }}>
                                   {t.category}{t.status === 'pending' ? ' · Pending' : ''}
                                 </span>

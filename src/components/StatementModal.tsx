@@ -3,6 +3,9 @@ import { Printer, Download, X, FileText, Landmark } from 'lucide-react';
 import type { Account, User } from '../banking/store';
 import { ChaseLogo } from './ChaseLogo';
 
+const cleanTxDesc = (s: string) =>
+  String(s || '').replace(/\s*[—–]\s*/g, ' ').replace(/\s{2,}/g, ' ').trim();
+
 interface StatementModalProps {
   user: User;
   initialAccountId?: string;
@@ -145,7 +148,7 @@ export const StatementModal: React.FC<StatementModalProps> = ({
       for (const t of a.transactions || []) {
         if (
           Number(t.amount) > 0 &&
-          /interest|apy|dividend/i.test(`${t.description} ${t.category}`)
+          /interest|apy|dividend/i.test(`${cleanTxDesc(t.description)} ${t.category}`)
         ) {
           postedInterest += Number(t.amount);
         }
@@ -480,7 +483,7 @@ export const StatementModal: React.FC<StatementModalProps> = ({
                           <td className="py-2 pr-3 whitespace-nowrap text-slate-600 tabular-nums">
                             {fmtShortDate(t.date)}
                           </td>
-                          <td className="py-2 pr-3 font-medium text-slate-900">{t.description}</td>
+                          <td className="py-2 pr-3 font-medium text-slate-900">{cleanTxDesc(t.description)}</td>
                           <td className="py-2 pr-3 text-slate-500">{t.category}</td>
                           <td className="py-2 pr-3 capitalize text-slate-500">{t.status}</td>
                           <td
