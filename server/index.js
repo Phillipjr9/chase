@@ -2662,10 +2662,15 @@ async function handleApi(req, res, url) {
           return sendJson(res, 400, { error: 'Provide a valid account type, name, balance, and optional credit limit.' });
         }
         const nowIso = new Date().toISOString();
+        const routingNumber = body.routingNumber !== undefined ? cleanText(String(body.routingNumber), 34).replace(/\s/g, '') : '';
+        const accountNumber = body.accountNumber !== undefined ? cleanText(String(body.accountNumber), 34).replace(/\s/g, '') : '';
+        const accountDigits = accountNumber.replace(/\D/g, '');
         const account = {
-          id: uid(), type, name, mask: mask4(), balance: round2(balance),
+          id: uid(), type, name, mask: accountDigits.length >= 4 ? accountDigits.slice(-4) : mask4(), balance: round2(balance),
           ...(creditLimit !== undefined ? { creditLimit: round2(creditLimit) } : {}),
           ...(openedDate ? { openedDate } : {}),
+          ...(routingNumber ? { routingNumber } : {}),
+          ...(accountNumber ? { accountNumber } : {}),
           locked: false, autopay: false, transactions: [], createdAt: nowIso,
         };
         const updated = { ...target, accounts: [...accounts, account] };

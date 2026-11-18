@@ -83,6 +83,8 @@ interface AccountsProps {
     balance: number;
     creditLimit?: number;
     openedDate?: string;
+    routingNumber?: string;
+    accountNumber?: string;
   }) => Promise<boolean>;
   onSaveAccount: (accountId: string, patch: AccountPatchPayload) => Promise<void>;
   onDeleteAccount: (accountId: string) => Promise<void>;
@@ -139,6 +141,8 @@ export const AccountsTab: React.FC<AccountsProps> = ({
   const [newBalance, setNewBalance] = useState('2500');
   const [newLimit, setNewLimit] = useState('');
   const [newOpenedDate, setNewOpenedDate] = useState(inputDate(0));
+  const [newRoutingNumber, setNewRoutingNumber] = useState('');
+  const [newAccountNumber, setNewAccountNumber] = useState('');
   const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>([]);
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState('');
@@ -195,12 +199,16 @@ export const AccountsTab: React.FC<AccountsProps> = ({
       balance: Number(newBalance) || 0,
       creditLimit: newLimit === '' ? undefined : Number(newLimit),
       openedDate: newOpenedDate || inputDate(0),
+      routingNumber: newRoutingNumber.trim() || undefined,
+      accountNumber: newAccountNumber.trim() || undefined,
     });
     if (ok) {
       setNewName('');
       setNewBalance('0');
       setNewLimit('');
       setNewOpenedDate(inputDate(0));
+      setNewRoutingNumber('');
+      setNewAccountNumber('');
     }
   };
 
@@ -354,6 +362,26 @@ export const AccountsTab: React.FC<AccountsProps> = ({
                 type="date"
                 value={newOpenedDate}
                 onChange={(e) => setNewOpenedDate(e.target.value)}
+              />
+            </label>
+            <label className="block">
+              <span className="block text-[10.5px] font-semibold text-gray-500 dark:text-gray-400 mb-1">
+                Routing Number (optional)
+              </span>
+              <TextInput
+                value={newRoutingNumber}
+                onChange={(e) => setNewRoutingNumber(e.target.value)}
+                placeholder="021000021"
+              />
+            </label>
+            <label className="block">
+              <span className="block text-[10.5px] font-semibold text-gray-500 dark:text-gray-400 mb-1">
+                Account Number (optional)
+              </span>
+              <TextInput
+                value={newAccountNumber}
+                onChange={(e) => setNewAccountNumber(e.target.value)}
+                placeholder="0000001234"
               />
             </label>
             <label className="block">
