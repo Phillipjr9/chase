@@ -414,6 +414,19 @@ export const StatementModal: React.FC<StatementModalProps> = ({
                   </div>
                 </div>
 
+                {/* Authentic Chase Customer Service Information Bar */}
+                <div className="mb-4 rounded border border-slate-300 bg-[#F8FAFC] px-4 py-2.5 text-[11px] text-slate-700 flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <span className="font-bold uppercase tracking-wider text-[#081427]">Customer Service Information</span>
+                    <span className="ml-2 text-slate-500">JPMorgan Chase Bank, N.A. · P.O. Box 182051, Columbus, OH 43218-2051</span>
+                  </div>
+                  <div className="flex flex-wrap gap-x-4 gap-y-1 font-medium text-slate-700">
+                    <span>Web site: <strong>Chase.com</strong></span>
+                    <span>Service Center: <strong>1-800-935-9935</strong></span>
+                    <span>TDD: <strong>1-800-242-7383</strong></span>
+                  </div>
+                </div>
+
                 {/* Credit Card / Loan APR & Rewards Disclosure Box */}
                 {['credit-card', 'auto-loan', 'mortgage', 'savings', 'cd'].includes(account.type) && (
                   <div className="mt-3 grid grid-cols-2 gap-3 rounded border border-slate-200 bg-white p-3 text-xs sm:grid-cols-4">
