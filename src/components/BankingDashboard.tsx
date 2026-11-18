@@ -222,6 +222,12 @@ export const BankingDashboard: React.FC<Props> = ({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showAcctNums, setShowAcctNums] = useState(false);
   const [copiedDetail, setCopiedDetail] = useState<string | null>(null);
+  const [directDepositOpen, setDirectDepositOpen] = useState(false);
+  const [checkDepositOpen, setCheckDepositOpen] = useState(false);
+  const [checkAmt, setCheckAmt] = useState('');
+  const [checkNum, setCheckNum] = useState('');
+  const [editingNickname, setEditingNickname] = useState(false);
+  const [nicknameDraft, setNicknameDraft] = useState('');
   const copyDetail = (key: string, val: string) => {
     navigator.clipboard?.writeText(val).catch(() => {});
     setCopiedDetail(key);
@@ -1560,6 +1566,11 @@ export const BankingDashboard: React.FC<Props> = ({
                     <OutlineBtn onClick={() => goPay('loan')}>Make a payment</OutlineBtn>
                     <OutlineBtn onClick={() => go('statements')}>Statements</OutlineBtn>
                     <OutlineBtn onClick={() => downloadStatement(selected)}>Download statement</OutlineBtn>
+                    {(selected.type === 'checking' || selected.type === 'savings') && (
+                      <OutlineBtn onClick={() => { setCheckAmt(''); setCheckNum(''); setCheckDepositOpen(true); }}>
+                        Deposit checks
+                      </OutlineBtn>
+                    )}
                     {selected.type === 'mortgage' && (
                       <OutlineBtn onClick={() => go('myhome')}>Chase MyHome®</OutlineBtn>
                     )}
@@ -1733,7 +1744,80 @@ export const BankingDashboard: React.FC<Props> = ({
                         </div>
                       ))}
                     </dl>
+                    {(selected.type === 'checking' || selected.type === 'savings') && (
+                      <div className="mt-3 pt-3 border-t border-[#EFF0F1] flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setDirectDepositOpen(true)}
+                          className="text-[12px] font-semibold hover:underline cursor-pointer"
+                          style={{ color: BTN_BLUE }}
+                        >
+                          Direct deposit form →
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setNicknameDraft(selected.nickname || '');
+                            setEditingNickname((v) => !v);
+                          }}
+                          className="text-[12px] font-semibold hover:underline cursor-pointer ml-auto"
+                          style={{ color: MUTED }}
+                        >
+                          {editingNickname ? 'Cancel' : 'Edit nickname'}
+                        </button>
+                      </div>
+                    )}
+                    {editingNickname && (
+                      <div className="mt-2.5 flex items-center gap-1.5">
+                        <input
+                          className="flex-1 h-8 px-2.5 text-[12.5px] border border-[#B7BEC6] rounded-[4px]"
+                          placeholder="Account nickname"
+                          value={nicknameDraft}
+                          onChange={(e) => setNicknameDraft(e.target.value)}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const updatedAccounts = user.accounts.map((a) =>
+                              a.id === selected.id ? { ...a, nickname: nicknameDraft.trim() || undefined } : a
+                            );
+                            onUpdateUser({ ...user, accounts: updatedAccounts });
+                            setEditingNickname(false);
+                          }}
+                          className="h-8 px-3 text-[12px] font-semibold text-white rounded-[4px] cursor-pointer"
+                          style={{ backgroundColor: BTN_BLUE }}
+                        >
+                          Save
+                        </button>
+                      </div>
+                    )}
                   </div>
+
+                  {/* 30-day Cash Flow Card */}
+                  {(() => {
+                    const cutoff = Date.now() - 30 * 86400000;
+                    const recent = (selected.transactions || []).filter((t) => new Date(t.date).getTime() >= cutoff);
+                    const moneyIn = recent.filter((t) => t.amount > 0).reduce((s, t) => s + t.amount, 0);
+                    const moneyOut = recent.filter((t) => t.amount < 0).reduce((s, t) => s + Math.abs(t.amount), 0);
+                    const total = moneyIn + moneyOut || 1;
+                    return (
+                      <div className="bg-white border rounded-[6px] p-4" style={{ borderColor: LINE }}>
+                        <h2 className="text-[15px] font-semibold" style={{ color: INK }}>30-day cash flow</h2>
+                        <div className="mt-2.5 flex justify-between text-[12.5px]">
+                          <span style={{ color: MUTED }}>Money in</span>
+                          <span className="font-semibold text-[#138842]">+{fmtMoney(moneyIn)}</span>
+                        </div>
+                        <div className="mt-1 flex justify-between text-[12.5px]">
+                          <span style={{ color: MUTED }}>Money out</span>
+                          <span className="font-semibold" style={{ color: INK }}>-{fmtMoney(moneyOut)}</span>
+                        </div>
+                        <div className="mt-2.5 h-2 rounded-full bg-[#ECEFF2] overflow-hidden flex">
+                          <div className="h-full bg-[#138842]" style={{ width: `${Math.round((moneyIn / total) * 100)}%` }} />
+                          <div className="h-full bg-[#1A4488]" style={{ width: `${Math.round((moneyOut / total) * 100)}%` }} />
+                        </div>
+                      </div>
+                    );
+                  })()}
 
                   {selected.type === 'credit-card' && (
                     <div className="bg-white border rounded-[6px] p-4" style={{ borderColor: LINE }}>
@@ -1911,6 +1995,95 @@ export const BankingDashboard: React.FC<Props> = ({
           onClose={() => setStatementModal(null)}
         />
       )}
+      {directDepositOpen && selected && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
+          <div className="bg-white rounded-[8px] max-w-md w-full p-6 shadow-xl border" style={{ borderColor: LINE }}>
+            <h3 className="text-[17px] font-semibold" style={{ color: INK }}>Direct deposit &amp; voided check</h3>
+            <p className="text-[12.5px] mt-1" style={{ color: MUTED }}>
+              Share these details with your employer or payroll provider.
+            </p>
+            <div className="mt-4 border rounded-[6px] p-4 bg-[#FAFBFC] space-y-2 text-[13px]" style={{ borderColor: LINE }}>
+              <div className="flex justify-between"><span style={{ color: MUTED }}>Account holder</span><span className="font-semibold" style={{ color: INK }}>{user.fullName}</span></div>
+              <div className="flex justify-between"><span style={{ color: MUTED }}>Account</span><span className="font-semibold" style={{ color: INK }}>{selected.name}</span></div>
+              <div className="flex justify-between"><span style={{ color: MUTED }}>Routing number</span><span className="font-mono font-semibold" style={{ color: INK }}>{selected.routingNumber || '021000021'}</span></div>
+              <div className="flex justify-between"><span style={{ color: MUTED }}>Account number</span><span className="font-mono font-semibold" style={{ color: INK }}>{selected.accountNumber || `000000${selected.mask || '0000'}`}</span></div>
+            </div>
+            <div className="mt-5 flex justify-end gap-2 print:hidden">
+              <OutlineBtn onClick={() => window.print()}>Print / Save PDF</OutlineBtn>
+              <button
+                type="button"
+                onClick={() => setDirectDepositOpen(false)}
+                className="px-4 py-2 text-[13px] font-semibold text-white rounded-[4px] cursor-pointer"
+                style={{ backgroundColor: BTN_BLUE }}
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {checkDepositOpen && selected && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
+          <div className="bg-white rounded-[8px] max-w-md w-full p-6 shadow-xl border" style={{ borderColor: LINE }}>
+            <h3 className="text-[17px] font-semibold" style={{ color: INK }}>Mobile check deposit</h3>
+            <p className="text-[12.5px] mt-1" style={{ color: MUTED }}>
+              Deposit a check into {selected.name} (…{selected.mask}).
+            </p>
+            <div className="mt-4 space-y-3">
+              <label className="block">
+                <span className="block text-[12px] font-medium mb-1" style={{ color: MUTED }}>Check amount ($)</span>
+                <input
+                  className="w-full h-10 px-3 border border-[#B7BEC6] rounded-[4px] text-[14px]"
+                  inputMode="decimal"
+                  placeholder="0.00"
+                  value={checkAmt}
+                  onChange={(e) => setCheckAmt(e.target.value)}
+                />
+              </label>
+              <label className="block">
+                <span className="block text-[12px] font-medium mb-1" style={{ color: MUTED }}>Check number (optional)</span>
+                <input
+                  className="w-full h-10 px-3 border border-[#B7BEC6] rounded-[4px] text-[14px]"
+                  placeholder="e.g. 1042"
+                  value={checkNum}
+                  onChange={(e) => setCheckNum(e.target.value)}
+                />
+              </label>
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <OutlineBtn onClick={() => setCheckDepositOpen(false)}>Cancel</OutlineBtn>
+              <button
+                type="button"
+                onClick={() => {
+                  const amt = parseFloat(checkAmt);
+                  if (isNaN(amt) || amt <= 0) return;
+                  const tx = {
+                    id: `chk-${Date.now()}`,
+                    date: new Date().toISOString().slice(0, 10),
+                    description: checkNum.trim() ? `Mobile Check Deposit #${checkNum.trim()}` : 'Mobile Check Deposit',
+                    category: 'Deposit',
+                    amount: Math.round(amt * 100) / 100,
+                    status: 'posted' as const,
+                  };
+                  const updatedAccounts = user.accounts.map((a) =>
+                    a.id === selected.id
+                      ? { ...a, balance: Math.round((a.balance + tx.amount) * 100) / 100, transactions: [tx, ...(a.transactions || [])] }
+                      : a
+                  );
+                  onUpdateUser({ ...user, accounts: updatedAccounts });
+                  setCheckDepositOpen(false);
+                }}
+                className="px-4 py-2 text-[13px] font-semibold text-white rounded-[4px] cursor-pointer"
+                style={{ backgroundColor: BTN_BLUE }}
+              >
+                Submit deposit
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {detailTx && (
         <div
           className="fixed inset-0 z-50 bg-black/45 flex items-center justify-center p-4"
