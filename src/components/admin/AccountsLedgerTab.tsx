@@ -54,6 +54,8 @@ export interface AccountPatchPayload {
   name: string;
   nickname?: string;
   mask?: string;
+  routingNumber?: string;
+  accountNumber?: string;
   balance: number;
   creditLimit: number | null;
   statementBalance?: number | null;
@@ -104,6 +106,8 @@ interface AccountDraft {
   name: string;
   nickname: string;
   mask: string;
+  routingNumber: string;
+  accountNumber: string;
   balance: string;
   creditLimit: string;
   statementBalance: string;
@@ -163,6 +167,8 @@ export const AccountsTab: React.FC<AccountsProps> = ({
             name: a.name,
             nickname: a.nickname || '',
             mask: a.mask || '0000',
+            routingNumber: a.routingNumber || '021000021',
+            accountNumber: a.accountNumber || `000000${a.mask || '0000'}`,
             balance: String(a.balance),
             creditLimit: a.creditLimit == null ? '' : String(a.creditLimit),
             statementBalance: a.statementBalance == null ? '' : String(a.statementBalance),
@@ -660,6 +666,42 @@ export const AccountsTab: React.FC<AccountsProps> = ({
                   </label>
                   <label className="block">
                     <span className="block text-[10.5px] font-semibold text-gray-500 dark:text-gray-400 mb-1">
+                      Routing Number
+                    </span>
+                    <TextInput
+                      value={draft.routingNumber}
+                      placeholder="021000021"
+                      onChange={(e) =>
+                        setDrafts((prev) => ({
+                          ...prev,
+                          [account.id]: { ...draft, routingNumber: e.target.value },
+                        }))
+                      }
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="block text-[10.5px] font-semibold text-gray-500 dark:text-gray-400 mb-1">
+                      Account Number
+                    </span>
+                    <TextInput
+                      value={draft.accountNumber}
+                      placeholder="0000001234"
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        const digits = val.replace(/\D/g, '');
+                        setDrafts((prev) => ({
+                          ...prev,
+                          [account.id]: {
+                            ...draft,
+                            accountNumber: val,
+                            ...(digits.length >= 4 ? { mask: digits.slice(-4) } : {}),
+                          },
+                        }));
+                      }}
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="block text-[10.5px] font-semibold text-gray-500 dark:text-gray-400 mb-1">
                       Opened On
                     </span>
                     <TextInput
@@ -848,6 +890,8 @@ export const AccountsTab: React.FC<AccountsProps> = ({
                             name: draft.name,
                             nickname: draft.nickname,
                             mask: draft.mask.length === 4 ? draft.mask : account.mask,
+                            routingNumber: draft.routingNumber.trim() || account.routingNumber || '021000021',
+                            accountNumber: draft.accountNumber.trim() || account.accountNumber || `000000${account.mask}`,
                             balance: Number(draft.balance),
                             creditLimit:
                               draft.creditLimit === '' ? null : Number(draft.creditLimit),

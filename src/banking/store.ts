@@ -20,6 +20,8 @@ export interface Account {
   type: AccountType;
   name: string;
   mask: string;
+  routingNumber?: string;
+  accountNumber?: string;
   balance: number;
   creditLimit?: number;
   /** Balance shown on the most recent card statement. */

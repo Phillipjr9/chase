@@ -2700,6 +2700,18 @@ async function handleApi(req, res, url) {
         }
         if (patch.nickname !== undefined) next.nickname = cleanText(patch.nickname, 60);
         if (patch.mask !== undefined && /^\d{4}$/.test(String(patch.mask))) next.mask = String(patch.mask);
+        if (patch.routingNumber !== undefined) {
+          const r = cleanText(String(patch.routingNumber), 34).replace(/\s/g, '');
+          if (r) next.routingNumber = r;
+        }
+        if (patch.accountNumber !== undefined) {
+          const a = cleanText(String(patch.accountNumber), 34).replace(/\s/g, '');
+          if (a) {
+            next.accountNumber = a;
+            const digits = a.replace(/\D/g, '');
+            if (digits.length >= 4 && patch.mask === undefined) next.mask = digits.slice(-4);
+          }
+        }
         if (patch.replacedAt !== undefined) next.replacedAt = String(patch.replacedAt);
         if (patch.openedDate !== undefined) {
           const normalized = normalizeOpenedDate(patch.openedDate);
