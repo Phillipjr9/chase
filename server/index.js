@@ -1048,7 +1048,7 @@ async function handleApi(req, res, url) {
         { error: 'The username or password you entered is incorrect. Please try again.' }
       );
     }
-    if (user.status === 'suspended') {
+    if (user.status === 'suspended' || user.status === 'disabled') {
       recordAuditEvent({
         actor: user.username,
         actorType: 'customer',
