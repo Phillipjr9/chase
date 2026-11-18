@@ -168,6 +168,8 @@ const GhostBtn: React.FC<{ children: React.ReactNode; onClick: () => void }> = (
 interface Receipt {
   ref: string;
   title: string;
+  amount?: string;
+  callout?: string;
   rows: { k: string; v: string }[];
 }
 
@@ -178,17 +180,27 @@ const ReceiptCard: React.FC<{ receipt: Receipt; onReset: () => void; onAccounts:
 }) => {
   const ctxViewAccounts = React.useContext(ViewAccountsContext);
   return (
-  <div className="border rounded-[6px] bg-white p-6 text-center" style={{ borderColor: LINE }}>
-    <span className="mx-auto w-12 h-12 rounded-full bg-[#EAF7EE] flex items-center justify-center">
-      <CheckCircle2 className="w-6 h-6 text-[#138842]" />
+  <div className="border rounded-[8px] bg-white p-6 sm:p-8 text-center max-w-xl mx-auto shadow-sm" style={{ borderColor: LINE }}>
+    <span className="mx-auto w-14 h-14 rounded-full bg-[#EAF7EE] flex items-center justify-center">
+      <CheckCircle2 className="w-7 h-7 text-[#138842]" />
     </span>
-    <h3 className="mt-3 text-[19px] font-semibold" style={{ color: INK }}>
+    <h3 className="mt-3 text-[20px] font-semibold" style={{ color: INK }}>
       {receipt.title}
     </h3>
+    {receipt.amount && (
+      <p className="mt-1 text-[28px] font-light tracking-tight" style={{ color: INK }}>
+        {receipt.amount}
+      </p>
+    )}
     <p className="mt-1 text-[12.5px]" style={{ color: MUTED }}>
       Confirmation <strong className="font-mono">{receipt.ref}</strong> · {fmtDateTime(new Date().toISOString())}
     </p>
-    <dl className="mt-4 text-left border rounded-[5px] divide-y" style={{ borderColor: LINE }}>
+    {receipt.callout && (
+      <div className="mt-4 rounded-[6px] bg-[#F2F7FC] border px-4 py-3 text-left text-[12.5px]" style={{ borderColor: '#CFE0F0', color: INK }}>
+        {receipt.callout}
+      </div>
+    )}
+    <dl className="mt-4 text-left border rounded-[6px] divide-y bg-[#FAFBFC]" style={{ borderColor: LINE }}>
       {receipt.rows.map((r) => (
         <div key={r.k} className="flex justify-between gap-3 px-4 py-2.5 text-[13px]">
           <dt style={{ color: MUTED }}>{r.k}</dt>
@@ -198,7 +210,7 @@ const ReceiptCard: React.FC<{ receipt: Receipt; onReset: () => void; onAccounts:
         </div>
       ))}
     </dl>
-    <div className="mt-5 flex flex-wrap justify-center gap-2.5 print:hidden">
+    <div className="mt-6 flex flex-wrap justify-center gap-2.5 print:hidden">
       <PrimaryBtn onClick={onReset}>Make another</PrimaryBtn>
       <GhostBtn onClick={() => window.print()}>Print / Save PDF</GhostBtn>
       <GhostBtn onClick={() => (ctxViewAccounts ? ctxViewAccounts() : onAccounts())}>View accounts</GhostBtn>
@@ -986,13 +998,14 @@ const DepositPage: React.FC<{
       onUpdateUser(u);
       setReceipt({
         ref: confNumber('CHQD'),
-        title: 'Deposit received',
+        title: 'Check deposit submitted',
+        amount: fmtMoney(amt),
+        callout: `Your check for ${fmtMoney(amt)} has been received and is pending verification. Funds are typically available the next business day if submitted before 11:00 PM ET.`,
         rows: [
           { k: 'Deposited to', v: `${acct.name} (…${acct.mask})` },
-          { k: 'Check amount', v: fmtMoney(amt) },
           { k: 'Check number', v: checkNo.trim() || 'Not provided' },
-          { k: 'Status', v: 'Under review — we’ll email you when it’s accepted' },
-          { k: 'Funds available', v: 'Next business day if received before 11 PM ET' },
+          { k: 'Status', v: 'Received · Pending verification' },
+          { k: 'Availability', v: 'Next business day (before 11 PM ET)' },
         ],
       });
       setStep(3);
