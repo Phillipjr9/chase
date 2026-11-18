@@ -948,17 +948,41 @@ export const CreditCardPage: React.FC<Props> = ({
             </div>
             {revealed ? (
               <div className="mt-4">
-                <div className="border rounded-[6px] p-4" style={{ borderColor: LINE, background: '#F7FAFD' }}>
-                  <p className="text-[11px] font-semibold" style={{ color: MUTED }}>Card number</p>
-                  <p className="text-[20px] font-mono tracking-wider" style={{ color: INK }}>{revealed.cardNumber}</p>
-                  <div className="mt-2 flex gap-6 text-[12.5px]">
-                    <span style={{ color: MUTED }}>Expires <strong style={{ color: INK }}>{revealed.expiry}</strong></span>
-                    <span style={{ color: MUTED }}>CVV <strong style={{ color: INK }}>{revealed.cvv}</strong></span>
+                <div
+                  className="rounded-[10px] p-5 text-white shadow-md"
+                  style={{ background: 'linear-gradient(135deg, #0B3A75 0%, #1156A8 55%, #092B57 100%)' }}
+                >
+                  <div className="flex items-center justify-between text-[11px] uppercase tracking-widest opacity-85">
+                    <span>{account.name}</span>
+                    <span className="font-bold">VISA</span>
+                  </div>
+                  <p className="mt-5 text-[19px] sm:text-[21px] font-mono tracking-widest">
+                    {revealed.cardNumber}
+                  </p>
+                  <div className="mt-4 flex items-end justify-between text-[12px]">
+                    <div className="flex gap-6">
+                      <div>
+                        <span className="block text-[9.5px] uppercase opacity-75">Expires</span>
+                        <strong className="font-mono">{revealed.expiry}</strong>
+                      </div>
+                      <div>
+                        <span className="block text-[9.5px] uppercase opacity-75">CVV</span>
+                        <strong className="font-mono">{revealed.cvv}</strong>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard?.writeText(revealed.cardNumber.replace(/\s+/g, '')).catch(() => {});
+                      }}
+                      className="text-[11.5px] font-semibold bg-white/15 hover:bg-white/25 px-2.5 py-1 rounded cursor-pointer"
+                    >
+                      Copy number
+                    </button>
                   </div>
                 </div>
                 <p className="mt-3 text-[11.5px] leading-relaxed" style={{ color: MUTED }}>
-                  Sample number only. This site does not store real card numbers. Never share a card
-                  number with someone who contacts you unexpectedly.
+                  Never share your card number, expiration date, or security code with someone who contacts you unexpectedly.
                 </p>
               </div>
             ) : (
