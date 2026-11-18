@@ -1048,7 +1048,7 @@ async function handleApi(req, res, url) {
         { error: 'The username or password you entered is incorrect. Please try again.' }
       );
     }
-    if (user.status === 'suspended') {
+    if (user.status === 'suspended' || user.status === 'disabled') {
       recordAuditEvent({
         actor: user.username,
         actorType: 'customer',
@@ -1770,6 +1770,9 @@ async function handleApi(req, res, url) {
           if (!['active', 'disabled'].includes(body.status)) return sendJson(res, 400, { error: 'Status must be active or disabled.' });
           if (body.status !== existing.status) auditChanges.status = { from: existing.status, to: body.status };
           patch.status = body.status;
+        }
+        if (body.lockMessage !== undefined) {
+          patch.lockMessage = cleanText(body.lockMessage, 240);
         }
         if (body.autoTransactionsEnabled !== undefined) {
           const nextAuto = Boolean(body.autoTransactionsEnabled);
