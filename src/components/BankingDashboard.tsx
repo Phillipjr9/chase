@@ -118,7 +118,11 @@ type View = DashboardView;
 type Notice = { kind: 'success' | 'error'; text: string } | null;
 
 const cleanTxDesc = (s: string) =>
-  String(s || '').replace(/\s*[—–]\s*/g, ' ').replace(/\s{2,}/g, ' ').trim();
+  String(s || '')
+    .replace(/\s*·?\s*simulated debit/gi, '')
+    .replace(/\s*[—–]\s*/g, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
 
 const fmtDate = (iso: string) => {
   if (!iso) return '—';

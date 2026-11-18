@@ -4,7 +4,11 @@ import type { Account, User } from '../banking/store';
 import { ChaseLogo } from './ChaseLogo';
 
 const cleanTxDesc = (s: string) =>
-  String(s || '').replace(/\s*[—–]\s*/g, ' ').replace(/\s{2,}/g, ' ').trim();
+  String(s || '')
+    .replace(/\s*·?\s*simulated debit/gi, '')
+    .replace(/\s*[—–]\s*/g, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
 
 interface StatementModalProps {
   user: User;
