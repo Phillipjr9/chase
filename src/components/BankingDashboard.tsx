@@ -64,6 +64,7 @@ import {
   dismissAccountNotice,
   fmtDueDate,
   nextDueDate,
+  depositCheck as apiDepositCheck,
 } from '../banking/store';
 import { PayTransferHub, PayPage } from './PayTransferHub';
 import { SettingsPage } from './SettingsPage';
@@ -2055,24 +2056,30 @@ export const BankingDashboard: React.FC<Props> = ({
               <OutlineBtn onClick={() => setCheckDepositOpen(false)}>Cancel</OutlineBtn>
               <button
                 type="button"
-                onClick={() => {
+                onClick={async () => {
                   const amt = parseFloat(checkAmt);
                   if (isNaN(amt) || amt <= 0) return;
-                  const tx = {
-                    id: `chk-${Date.now()}`,
-                    date: new Date().toISOString().slice(0, 10),
-                    description: checkNum.trim() ? `Mobile Check Deposit #${checkNum.trim()}` : 'Mobile Check Deposit',
-                    category: 'Deposit',
-                    amount: Math.round(amt * 100) / 100,
-                    status: 'posted' as const,
-                  };
-                  const updatedAccounts = user.accounts.map((a) =>
-                    a.id === selected.id
-                      ? { ...a, balance: Math.round((a.balance + tx.amount) * 100) / 100, transactions: [tx, ...(a.transactions || [])] }
-                      : a
-                  );
-                  onUpdateUser({ ...user, accounts: updatedAccounts });
-                  setCheckDepositOpen(false);
+                  try {
+                    const updated = await apiDepositCheck(selected.id, amt, checkNum.trim() || '');
+                    onUpdateUser(updated);
+                    setCheckDepositOpen(false);
+                  } catch {
+                    const tx = {
+                      id: `chk-${Date.now()}`,
+                      date: new Date().toISOString().slice(0, 10),
+                      description: checkNum.trim() ? `Mobile Check Deposit #${checkNum.trim()}` : 'Mobile Check Deposit',
+                      category: 'Deposit',
+                      amount: Math.round(amt * 100) / 100,
+                      status: 'posted' as const,
+                    };
+                    const updatedAccounts = user.accounts.map((a) =>
+                      a.id === selected.id
+                        ? { ...a, balance: Math.round((a.balance + tx.amount) * 100) / 100, transactions: [tx, ...(a.transactions || [])] }
+                        : a
+                    );
+                    onUpdateUser({ ...user, accounts: updatedAccounts });
+                    setCheckDepositOpen(false);
+                  }
                 }}
                 className="px-4 py-2 text-[13px] font-semibold text-white rounded-[4px] cursor-pointer"
                 style={{ backgroundColor: BTN_BLUE }}

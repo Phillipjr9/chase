@@ -4095,6 +4095,39 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, { user: publicUser(updated) });
   }
 
+  const checkDepositMatch = pathname.match(/^\/api\/accounts\/([^/]+)\/check-deposit$/);
+  if (checkDepositMatch && method === 'POST') {
+    const accountId = decodeURIComponent(checkDepositMatch[1]);
+    const body = await readBody(req);
+    const amount = money(body.amount);
+    const checkNumber = cleanText(body.checkNumber || '', 30);
+    if (amount === null || amount <= 0) {
+      return sendJson(res, 400, { error: 'Enter a valid check amount.' });
+    }
+    const updated = JSON.parse(JSON.stringify(user));
+    const target = updated.accounts.find((a) => a.id === accountId && (a.type === 'checking' || a.type === 'savings'));
+    if (!target) return sendJson(res, 404, { error: 'Deposit account not found.' });
+    const tx = {
+      id: `chk-${uid()}`,
+      date: today(),
+      description: checkNumber ? `Mobile Check Deposit #${checkNumber}` : 'Mobile Check Deposit',
+      category: 'Deposit',
+      amount: round2(amount),
+      status: 'posted',
+    };
+    target.balance = round2(target.balance + tx.amount);
+    target.transactions = [tx, ...(target.transactions || [])];
+    updateUser(updated);
+    recordCustomerAudit('Mobile check deposit', {
+      category: 'money',
+      outcome: 'success',
+      severity: 'info',
+      summary: `${user.fullName} (@${user.username}) deposited a ${formatUsdSimple(tx.amount)} check${checkNumber ? ` (#${checkNumber})` : ''} into ${target.name} (…${target.mask}).`,
+      details: { accountId: target.id, accountName: target.name, amount: tx.amount, checkNumber: checkNumber || null },
+    });
+    return sendJson(res, 200, { user: sanitizeUser(updated), transaction: tx });
+  }
+
   if (pathname === '/api/wires' && method === 'POST') {
     const body = await readBody(req);
     const amount = money(body.amount);
