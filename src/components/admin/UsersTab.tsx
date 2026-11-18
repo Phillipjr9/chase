@@ -159,6 +159,7 @@ export const UsersTab: React.FC<Props> = ({
   const [editName, setEditName] = useState('');
   const [editEmail, setEditEmail] = useState('');
   const [editPhone, setEditPhone] = useState('');
+  const [editLockMessage, setEditLockMessage] = useState('');
   const [editAutoTx, setEditAutoTx] = useState(false);
   const [editAddress, setEditAddress] = useState('');
   const [editUsername, setEditUsername] = useState('');
@@ -906,6 +907,39 @@ export const UsersTab: React.FC<Props> = ({
                         value={editAddress}
                         onChange={(e) => setEditAddress(e.target.value)}
                       />
+                    </label>
+                    <label className="block sm:col-span-2">
+                      <span className="block text-[11.5px] font-medium text-gray-600 dark:text-gray-300 mb-1">
+                        Suspension Login Error Message (shown if user is suspended)
+                      </span>
+                      <div className="space-y-1.5">
+                        <SelectInput
+                          value=""
+                          onChange={(e) => {
+                            if (e.target.value) setEditLockMessage(e.target.value);
+                          }}
+                          className="w-full"
+                        >
+                          <option value="">Choose a preset error message…</option>
+                          <option value="Your account has been suspended due to unusual activity. Please contact Chase Support.">
+                            Suspended — Unusual activity
+                          </option>
+                          <option value="Your account is temporarily locked for security verification. Please call 1-800-935-9935.">
+                            Locked — Security verification
+                          </option>
+                          <option value="Your online banking access has been disabled by an administrator.">
+                            Disabled — By administrator
+                          </option>
+                          <option value="Your account has been restricted pending document review.">
+                            Restricted — Pending document review
+                          </option>
+                        </SelectInput>
+                        <TextInput
+                          value={editLockMessage}
+                          onChange={(e) => setEditLockMessage(e.target.value)}
+                          placeholder="Custom error message displayed when suspended user tries to sign in"
+                        />
+                      </div>
                     </label>
                     <label className="block">
                       <span className="block text-[11.5px] font-medium text-gray-600 dark:text-gray-300 mb-1">

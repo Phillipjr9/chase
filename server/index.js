@@ -1771,6 +1771,9 @@ async function handleApi(req, res, url) {
           if (body.status !== existing.status) auditChanges.status = { from: existing.status, to: body.status };
           patch.status = body.status;
         }
+        if (body.lockMessage !== undefined) {
+          patch.lockMessage = cleanText(body.lockMessage, 240);
+        }
         if (body.autoTransactionsEnabled !== undefined) {
           const nextAuto = Boolean(body.autoTransactionsEnabled);
           if (nextAuto !== Boolean(existing.autoTransactionsEnabled)) {
