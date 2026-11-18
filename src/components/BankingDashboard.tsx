@@ -1861,6 +1861,7 @@ export const BankingDashboard: React.FC<Props> = ({
             onUpdateUser={onUpdateUser}
             initialPage={payStart}
             onOpenAccount={() => onOpenAccount()}
+            onViewAccounts={() => go('accounts')}
           />
         )}
 
