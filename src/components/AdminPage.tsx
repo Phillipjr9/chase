@@ -125,6 +125,19 @@ export const AdminPage: React.FC<{
   const [headerSupportOpen, setHeaderSupportOpen] = useState(false);
   const [headerSupportEmail, setHeaderSupportEmail] = useState('');
   const [headerSupportPhone, setHeaderSupportPhone] = useState('');
+  const [quickSearchOpen, setQuickSearchOpen] = useState(false);
+  const [quickSearchQuery, setQuickSearchQuery] = useState('');
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setQuickSearchOpen((v) => !v);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   // Public header state (for unauthenticated sign-in view)
   const [publicSegment, setPublicSegment] = useState<SegmentKey>('personal');
@@ -2183,6 +2196,20 @@ export const AdminPage: React.FC<{
                 </button>
               )}
 
+              <button
+                type="button"
+                onClick={() => {
+                  setQuickSearchQuery('');
+                  setQuickSearchOpen(true);
+                }}
+                className="inline-flex items-center gap-1.5 rounded-[4px] border border-white/30 hover:bg-white/10 text-white text-[12px] font-semibold px-2.5 py-1.5 cursor-pointer"
+                title="Quick search customers, accounts, or admins (Ctrl+K)"
+              >
+                <Search className="w-3.5 h-3.5" />
+                <span className="hidden md:inline">Quick Jump</span>
+                <kbd className="hidden lg:inline text-[10px] px-1 py-0.5 rounded bg-white/15 font-mono">⌘K</kbd>
+              </button>
+
               {/* Support Contact — accessible for active limited admins to set their customer support email & phone */}
               {!isSuperAdmin && !isReadOnly && (
                 <button
@@ -2819,6 +2846,62 @@ export const AdminPage: React.FC<{
               onChange={(e) => setHeaderNextPwd(e.target.value)}
             />
           </label>
+        </div>
+      </Modal>
+
+      {/* Global Quick Search Modal (Ctrl/Cmd + K) */}
+      <Modal
+        open={quickSearchOpen}
+        onClose={() => setQuickSearchOpen(false)}
+        title="Quick Jump — Customers, Accounts & Admins"
+      >
+        <div className="space-y-3">
+          <TextInput
+            autoFocus
+            value={quickSearchQuery}
+            onChange={(e) => setQuickSearchQuery(e.target.value)}
+            placeholder="Search by name, @username, email, phone, account mask, or routing/account #..."
+          />
+          <div className="max-h-72 overflow-y-auto divide-y divide-gray-100 dark:divide-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg">
+            {(() => {
+              const q = quickSearchQuery.trim().toLowerCase();
+              const matchedUsers = users.filter((u) => {
+                if (!q) return true;
+                return (
+                  u.fullName.toLowerCase().includes(q) ||
+                  u.username.toLowerCase().includes(q) ||
+                  (u.email || '').toLowerCase().includes(q)
+                );
+              }).slice(0, 12);
+
+              if (matchedUsers.length === 0) {
+                return (
+                  <p className="p-4 text-xs text-gray-500 text-center">No matching customers.</p>
+                );
+              }
+              return matchedUsers.map((u) => (
+                <button
+                  key={u.id}
+                  type="button"
+                  onClick={() => {
+                    void selectUserAndMaybeGo(u.id, 'users');
+                    setQuickSearchOpen(false);
+                  }}
+                  className="w-full text-left px-3 py-2.5 hover:bg-gray-50 dark:hover:bg-white/[0.04] flex items-center justify-between gap-2 cursor-pointer"
+                >
+                  <div>
+                    <p className="text-xs font-semibold text-gray-900 dark:text-white">
+                      {u.fullName} <span className="text-gray-400 font-normal">@{u.username}</span>
+                    </p>
+                    <p className="text-[11px] text-gray-500">
+                      {u.email} · {u.accountCount} accounts
+                    </p>
+                  </div>
+                  <span className="text-[11px] font-semibold text-[#005EB8]">Open →</span>
+                </button>
+              ));
+            })()}
+          </div>
         </div>
       </Modal>
 
