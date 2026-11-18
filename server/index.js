@@ -3453,7 +3453,7 @@ async function handleApi(req, res, url) {
               const amount = Math.min(amountBetween(purchase.min, purchase.max), Math.max(0, Number(eligibleChecking.balance || 0) - 5));
               if (amount >= 1) {
                 eligibleChecking.balance = roundAmount(Number(eligibleChecking.balance || 0) - amount);
-                addTransaction(eligibleChecking, `${purchase.merchant} · simulated debit`, -amount, purchase.category, date);
+                addTransaction(eligibleChecking, purchase.merchant, -amount, purchase.category, date);
                 continue;
               }
             }
