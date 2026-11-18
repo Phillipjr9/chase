@@ -493,7 +493,7 @@ export const StatementModal: React.FC<StatementModalProps> = ({
                                 : 'text-slate-900'
                             }`}
                           >
-                            {t.amount >= 0 ? `+${fmtCurrency(t.amount)}` : fmtCurrency(Math.abs(t.amount))}
+                            {t.amount >= 0 ? `+${fmtCurrency(t.amount)}` : fmtCurrency(t.amount)}
                           </td>
                         </tr>
                       ))}
