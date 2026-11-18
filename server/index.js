@@ -4193,7 +4193,7 @@ async function handleApi(req, res, url) {
     if (!target) return sendJson(res, 404, { error: 'Deposit account not found.' });
     const tx = {
       id: `chk-${uid()}`,
-      date: today(),
+      date: new Date().toISOString(),
       description: checkNumber ? `Mobile Check Deposit #${checkNumber}` : 'Mobile Check Deposit',
       category: 'Deposit',
       amount: round2(amount),
