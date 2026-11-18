@@ -7,6 +7,8 @@ import {
   Plane,
   Eye,
   EyeOff,
+  Copy,
+  Check,
   Star,
   CheckCircle2,
   AlertCircle,
@@ -203,6 +205,14 @@ export const SettingsPage: React.FC<Props> = ({ user, onUpdateUser, onSignOut, i
     address: user.address,
   });
   const [savingProfile, setSavingProfile] = useState(false);
+  const [revealedNumbers, setRevealedNumbers] = useState<Record<string, boolean>>({});
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+
+  const copyField = (key: string, value: string) => {
+    navigator.clipboard?.writeText(value).catch(() => {});
+    setCopiedKey(key);
+    setTimeout(() => setCopiedKey((prev) => (prev === key ? null : prev)), 2000);
+  };
 
   const saveProfile = async () => {
     if (profile.fullName.trim().length < 2) return setNotice({ kind: 'error', text: 'Enter your full name.' });
@@ -389,6 +399,7 @@ export const SettingsPage: React.FC<Props> = ({ user, onUpdateUser, onSignOut, i
           )}
 
           {section === 'personal' && (
+            <>
             <div className="border rounded-[6px] bg-white p-5 sm:p-6" style={{ borderColor: LINE }}>
               <h2 className="text-[17px] font-semibold" style={{ color: INK }}>Personal details</h2>
               <p className="mt-0.5 text-[12.5px]" style={{ color: MUTED }}>
@@ -420,6 +431,84 @@ export const SettingsPage: React.FC<Props> = ({ user, onUpdateUser, onSignOut, i
                 </PrimaryBtn>
               </div>
             </div>
+
+            {user.accounts.some((a) => a.type === 'checking' || a.type === 'savings' || a.type === 'cd') && (
+              <div className="mt-5 border rounded-[6px] bg-white p-5 sm:p-6" style={{ borderColor: LINE }}>
+                <h3 className="text-[16px] font-semibold" style={{ color: INK }}>Direct deposit &amp; transfer numbers</h3>
+                <p className="text-[12.5px] mt-0.5 mb-4" style={{ color: MUTED }}>
+                  Use these routing and account numbers for direct deposits, ACH transfers, and wire instructions.
+                </p>
+                <div className="space-y-3">
+                  {user.accounts
+                    .filter((a) => a.type === 'checking' || a.type === 'savings' || a.type === 'cd')
+                    .map((a) => {
+                      const routing = a.routingNumber || '021000021';
+                      const acctNum = a.accountNumber || `000000${a.mask || '0000'}`;
+                      const isShown = !!revealedNumbers[a.id];
+                      const maskedRouting = `•••••${routing.slice(-4)}`;
+                      const maskedAcct = `••••••${acctNum.slice(-4)}`;
+                      return (
+                        <div key={a.id} className="border rounded-[6px] p-4 bg-[#FAFBFC]" style={{ borderColor: LINE }}>
+                          <div className="flex items-center justify-between gap-2 mb-3">
+                            <div>
+                              <p className="text-[14px] font-semibold" style={{ color: INK }}>{a.name}</p>
+                              <p className="text-[11.5px]" style={{ color: FAINT }}>Account ending in {a.mask}</p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setRevealedNumbers((prev) => ({ ...prev, [a.id]: !prev[a.id] }))}
+                              className="inline-flex items-center gap-1.5 text-[12.5px] font-semibold px-3 py-1.5 rounded-[4px] border bg-white hover:bg-[#F2F6FB] cursor-pointer"
+                              style={{ borderColor: '#B7BEC6', color: BLUE }}
+                            >
+                              {isShown ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                              {isShown ? 'Hide' : 'Show'}
+                            </button>
+                          </div>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <div className="flex items-center justify-between gap-2 border rounded-[4px] bg-white px-3 py-2" style={{ borderColor: LINE }}>
+                              <div>
+                                <p className="text-[11px] uppercase tracking-wider font-semibold" style={{ color: FAINT }}>Routing number</p>
+                                <p className="text-[14px] font-mono font-semibold mt-0.5" style={{ color: INK }}>
+                                  {isShown ? routing : maskedRouting}
+                                </p>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => copyField(`${a.id}-routing`, routing)}
+                                className="inline-flex items-center gap-1 text-[12px] font-semibold px-2.5 py-1 rounded-[4px] hover:bg-[#F2F6FB] cursor-pointer"
+                                style={{ color: BLUE }}
+                                title="Copy routing number"
+                              >
+                                {copiedKey === `${a.id}-routing` ? <Check className="w-3.5 h-3.5 text-[#0F7B45]" /> : <Copy className="w-3.5 h-3.5" />}
+                                {copiedKey === `${a.id}-routing` ? 'Copied' : 'Copy'}
+                              </button>
+                            </div>
+                            <div className="flex items-center justify-between gap-2 border rounded-[4px] bg-white px-3 py-2" style={{ borderColor: LINE }}>
+                              <div>
+                                <p className="text-[11px] uppercase tracking-wider font-semibold" style={{ color: FAINT }}>Account number</p>
+                                <p className="text-[14px] font-mono font-semibold mt-0.5" style={{ color: INK }}>
+                                  {isShown ? acctNum : maskedAcct}
+                                </p>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => copyField(`${a.id}-acct`, acctNum)}
+                                className="inline-flex items-center gap-1 text-[12px] font-semibold px-2.5 py-1 rounded-[4px] hover:bg-[#F2F6FB] cursor-pointer"
+                                style={{ color: BLUE }}
+                                title="Copy account number"
+                              >
+                                {copiedKey === `${a.id}-acct` ? <Check className="w-3.5 h-3.5 text-[#0F7B45]" /> : <Copy className="w-3.5 h-3.5" />}
+                                {copiedKey === `${a.id}-acct` ? 'Copied' : 'Copy'}
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                </div>
+              </div>
+            )}
+            </>
           )}
 
           {section === 'security' && (

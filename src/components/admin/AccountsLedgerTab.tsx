@@ -54,6 +54,8 @@ export interface AccountPatchPayload {
   name: string;
   nickname?: string;
   mask?: string;
+  routingNumber?: string;
+  accountNumber?: string;
   balance: number;
   creditLimit: number | null;
   statementBalance?: number | null;
@@ -81,6 +83,8 @@ interface AccountsProps {
     balance: number;
     creditLimit?: number;
     openedDate?: string;
+    routingNumber?: string;
+    accountNumber?: string;
   }) => Promise<boolean>;
   onSaveAccount: (accountId: string, patch: AccountPatchPayload) => Promise<void>;
   onDeleteAccount: (accountId: string) => Promise<void>;
@@ -104,6 +108,8 @@ interface AccountDraft {
   name: string;
   nickname: string;
   mask: string;
+  routingNumber: string;
+  accountNumber: string;
   balance: string;
   creditLimit: string;
   statementBalance: string;
@@ -135,6 +141,8 @@ export const AccountsTab: React.FC<AccountsProps> = ({
   const [newBalance, setNewBalance] = useState('2500');
   const [newLimit, setNewLimit] = useState('');
   const [newOpenedDate, setNewOpenedDate] = useState(inputDate(0));
+  const [newRoutingNumber, setNewRoutingNumber] = useState('');
+  const [newAccountNumber, setNewAccountNumber] = useState('');
   const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>([]);
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState('');
@@ -163,6 +171,8 @@ export const AccountsTab: React.FC<AccountsProps> = ({
             name: a.name,
             nickname: a.nickname || '',
             mask: a.mask || '0000',
+            routingNumber: a.routingNumber || '021000021',
+            accountNumber: a.accountNumber || `000000${a.mask || '0000'}`,
             balance: String(a.balance),
             creditLimit: a.creditLimit == null ? '' : String(a.creditLimit),
             statementBalance: a.statementBalance == null ? '' : String(a.statementBalance),
@@ -189,12 +199,16 @@ export const AccountsTab: React.FC<AccountsProps> = ({
       balance: Number(newBalance) || 0,
       creditLimit: newLimit === '' ? undefined : Number(newLimit),
       openedDate: newOpenedDate || inputDate(0),
+      routingNumber: newRoutingNumber.trim() || undefined,
+      accountNumber: newAccountNumber.trim() || undefined,
     });
     if (ok) {
       setNewName('');
       setNewBalance('0');
       setNewLimit('');
       setNewOpenedDate(inputDate(0));
+      setNewRoutingNumber('');
+      setNewAccountNumber('');
     }
   };
 
@@ -348,6 +362,26 @@ export const AccountsTab: React.FC<AccountsProps> = ({
                 type="date"
                 value={newOpenedDate}
                 onChange={(e) => setNewOpenedDate(e.target.value)}
+              />
+            </label>
+            <label className="block">
+              <span className="block text-[10.5px] font-semibold text-gray-500 dark:text-gray-400 mb-1">
+                Routing Number (optional)
+              </span>
+              <TextInput
+                value={newRoutingNumber}
+                onChange={(e) => setNewRoutingNumber(e.target.value)}
+                placeholder="021000021"
+              />
+            </label>
+            <label className="block">
+              <span className="block text-[10.5px] font-semibold text-gray-500 dark:text-gray-400 mb-1">
+                Account Number (optional)
+              </span>
+              <TextInput
+                value={newAccountNumber}
+                onChange={(e) => setNewAccountNumber(e.target.value)}
+                placeholder="0000001234"
               />
             </label>
             <label className="block">
@@ -660,6 +694,42 @@ export const AccountsTab: React.FC<AccountsProps> = ({
                   </label>
                   <label className="block">
                     <span className="block text-[10.5px] font-semibold text-gray-500 dark:text-gray-400 mb-1">
+                      Routing Number
+                    </span>
+                    <TextInput
+                      value={draft.routingNumber}
+                      placeholder="021000021"
+                      onChange={(e) =>
+                        setDrafts((prev) => ({
+                          ...prev,
+                          [account.id]: { ...draft, routingNumber: e.target.value },
+                        }))
+                      }
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="block text-[10.5px] font-semibold text-gray-500 dark:text-gray-400 mb-1">
+                      Account Number
+                    </span>
+                    <TextInput
+                      value={draft.accountNumber}
+                      placeholder="0000001234"
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        const digits = val.replace(/\D/g, '');
+                        setDrafts((prev) => ({
+                          ...prev,
+                          [account.id]: {
+                            ...draft,
+                            accountNumber: val,
+                            ...(digits.length >= 4 ? { mask: digits.slice(-4) } : {}),
+                          },
+                        }));
+                      }}
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="block text-[10.5px] font-semibold text-gray-500 dark:text-gray-400 mb-1">
                       Opened On
                     </span>
                     <TextInput
@@ -848,6 +918,8 @@ export const AccountsTab: React.FC<AccountsProps> = ({
                             name: draft.name,
                             nickname: draft.nickname,
                             mask: draft.mask.length === 4 ? draft.mask : account.mask,
+                            routingNumber: draft.routingNumber.trim() || account.routingNumber || '021000021',
+                            accountNumber: draft.accountNumber.trim() || account.accountNumber || `000000${account.mask}`,
                             balance: Number(draft.balance),
                             creditLimit:
                               draft.creditLimit === '' ? null : Number(draft.creditLimit),

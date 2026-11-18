@@ -2662,10 +2662,15 @@ async function handleApi(req, res, url) {
           return sendJson(res, 400, { error: 'Provide a valid account type, name, balance, and optional credit limit.' });
         }
         const nowIso = new Date().toISOString();
+        const routingNumber = body.routingNumber !== undefined ? cleanText(String(body.routingNumber), 34).replace(/\s/g, '') : '';
+        const accountNumber = body.accountNumber !== undefined ? cleanText(String(body.accountNumber), 34).replace(/\s/g, '') : '';
+        const accountDigits = accountNumber.replace(/\D/g, '');
         const account = {
-          id: uid(), type, name, mask: mask4(), balance: round2(balance),
+          id: uid(), type, name, mask: accountDigits.length >= 4 ? accountDigits.slice(-4) : mask4(), balance: round2(balance),
           ...(creditLimit !== undefined ? { creditLimit: round2(creditLimit) } : {}),
           ...(openedDate ? { openedDate } : {}),
+          ...(routingNumber ? { routingNumber } : {}),
+          ...(accountNumber ? { accountNumber } : {}),
           locked: false, autopay: false, transactions: [], createdAt: nowIso,
         };
         const updated = { ...target, accounts: [...accounts, account] };
@@ -2700,6 +2705,18 @@ async function handleApi(req, res, url) {
         }
         if (patch.nickname !== undefined) next.nickname = cleanText(patch.nickname, 60);
         if (patch.mask !== undefined && /^\d{4}$/.test(String(patch.mask))) next.mask = String(patch.mask);
+        if (patch.routingNumber !== undefined) {
+          const r = cleanText(String(patch.routingNumber), 34).replace(/\s/g, '');
+          if (r) next.routingNumber = r;
+        }
+        if (patch.accountNumber !== undefined) {
+          const a = cleanText(String(patch.accountNumber), 34).replace(/\s/g, '');
+          if (a) {
+            next.accountNumber = a;
+            const digits = a.replace(/\D/g, '');
+            if (digits.length >= 4 && patch.mask === undefined) next.mask = digits.slice(-4);
+          }
+        }
         if (patch.replacedAt !== undefined) next.replacedAt = String(patch.replacedAt);
         if (patch.openedDate !== undefined) {
           const normalized = normalizeOpenedDate(patch.openedDate);
@@ -4085,6 +4102,7 @@ async function handleApi(req, res, url) {
     const fee = wireType === 'international' ? 40 : 25;
     const recipient = cleanText(body.recipient, 80);
     const routingNumber = cleanText(body.routingNumber, 34).replace(/\s/g, '');
+    const accountNumber = cleanText(body.accountNumber || '', 34).replace(/\s/g, '');
     if (!recipient || routingNumber.length < 8) {
       return sendJson(res, 400, { error: 'Recipient name and a valid routing/SWIFT number are required.' });
     }

@@ -20,6 +20,8 @@ export interface Account {
   type: AccountType;
   name: string;
   mask: string;
+  routingNumber?: string;
+  accountNumber?: string;
   balance: number;
   creditLimit?: number;
   /** Balance shown on the most recent card statement. */
@@ -1330,12 +1332,13 @@ export async function sendWire(
   recipient: string,
   routingNumber: string,
   amount: number,
-  wireType: 'domestic' | 'international'
+  wireType: 'domestic' | 'international',
+  accountNumber?: string
 ): Promise<User> {
   if (await detectApi()) {
     const data = await apiFetch('/api/wires', {
       method: 'POST',
-      body: JSON.stringify({ fromId, recipient, routingNumber, amount, wireType }),
+      body: JSON.stringify({ fromId, recipient, routingNumber, amount, wireType, accountNumber }),
     });
     return hydrateDefaults(data.user as User);
   }
