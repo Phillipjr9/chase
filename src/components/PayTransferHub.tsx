@@ -59,7 +59,10 @@ export type PayPage =
   | 'billpay'
   | 'wire';
 
+const ViewAccountsContext = React.createContext<(() => void) | undefined>(undefined);
+
 interface HubProps {
+  onViewAccounts?: () => void;
   user: User;
   onUpdateUser: (u: User) => void;
   initialPage?: PayPage;
@@ -172,7 +175,9 @@ const ReceiptCard: React.FC<{ receipt: Receipt; onReset: () => void; onAccounts:
   receipt,
   onReset,
   onAccounts,
-}) => (
+}) => {
+  const ctxViewAccounts = React.useContext(ViewAccountsContext);
+  return (
   <div className="border rounded-[6px] bg-white p-6 text-center" style={{ borderColor: LINE }}>
     <span className="mx-auto w-12 h-12 rounded-full bg-[#EAF7EE] flex items-center justify-center">
       <CheckCircle2 className="w-6 h-6 text-[#138842]" />
@@ -196,10 +201,11 @@ const ReceiptCard: React.FC<{ receipt: Receipt; onReset: () => void; onAccounts:
     <div className="mt-5 flex flex-wrap justify-center gap-2.5 print:hidden">
       <PrimaryBtn onClick={onReset}>Make another</PrimaryBtn>
       <GhostBtn onClick={() => window.print()}>Print / Save PDF</GhostBtn>
-      <GhostBtn onClick={onAccounts}>View accounts</GhostBtn>
+      <GhostBtn onClick={() => (ctxViewAccounts ? ctxViewAccounts() : onAccounts())}>View accounts</GhostBtn>
     </div>
   </div>
-);
+  );
+};
 
 const MENU: { id: PayPage; label: string; desc: string }[] = [
   { id: 'transfer', label: 'Transfer money', desc: 'Between your Chase accounts' },
@@ -237,6 +243,7 @@ export const PayTransferHub: React.FC<HubProps> = ({
   onUpdateUser,
   initialPage = 'overview',
   onOpenAccount,
+  onViewAccounts,
 }) => {
   const [page, setPage] = useState<PayPage>(initialPage);
   const [hubNotice, setHubNotice] = useState<Notice>(null);
@@ -303,6 +310,7 @@ export const PayTransferHub: React.FC<HubProps> = ({
   const active = MENU.find((m) => m.id === page);
 
   return (
+    <ViewAccountsContext.Provider value={onViewAccounts}>
     <div className="max-w-[1260px] mx-auto px-4 sm:px-8 py-6">
       {/* Breadcrumb + title */}
       <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-[12.5px]" style={{ color: MUTED }}>
@@ -441,6 +449,7 @@ export const PayTransferHub: React.FC<HubProps> = ({
         </div>
       </div>
     </div>
+    </ViewAccountsContext.Provider>
   );
 };
 
