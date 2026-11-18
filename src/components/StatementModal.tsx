@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { Printer, Download, X, FileText, Landmark } from 'lucide-react';
+import { jsPDF } from 'jspdf';
 import type { Account, User } from '../banking/store';
 import { ChaseLogo } from './ChaseLogo';
 
@@ -203,6 +204,138 @@ export const StatementModal: React.FC<StatementModalProps> = ({
     URL.revokeObjectURL(url);
   };
 
+  const downloadRealPdf = () => {
+    const doc = new jsPDF({ unit: 'pt', format: 'letter' });
+    const pageW = doc.internal.pageSize.getWidth();
+    const pageH = doc.internal.pageSize.getHeight();
+    const margin = 44;
+    let y = 48;
+
+    // Header
+    doc.setFillColor(17, 122, 202);
+    doc.rect(0, 0, pageW, 10, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(20);
+    doc.setTextColor(8, 20, 39);
+    doc.text('CHASE', margin, y);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.setTextColor(71, 85, 105);
+    doc.text('JPMorgan Chase Bank, N.A.', pageW - margin, y - 8, { align: 'right' });
+    doc.text('P.O. Box 182051, Columbus, OH 43218-2051', pageW - margin, y + 4, { align: 'right' });
+    y += 22;
+
+    doc.setDrawColor(203, 213, 225);
+    doc.line(margin, y, pageW - margin, y);
+    y += 18;
+
+    // Statement Period & Account Info
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(12);
+    doc.setTextColor(8, 20, 39);
+    doc.text(`${account.name} — Monthly Statement`, margin, y);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9.5);
+    doc.setTextColor(51, 65, 85);
+    doc.text(`Statement Period: ${period.label}`, pageW - margin, y, { align: 'right' });
+    y += 16;
+    doc.text(`Account Holder: ${user.fullName}`, margin, y);
+    doc.text(`Account Number: ••••${account.mask}`, pageW - margin, y, { align: 'right' });
+    y += 14;
+    doc.setFontSize(8.5);
+    doc.setTextColor(100, 116, 139);
+    doc.text('Customer Service: Chase.com  |  1-800-935-9935  |  TDD: 1-800-242-7383', margin, y);
+    y += 20;
+
+    // Summary Box
+    doc.setFillColor(248, 250, 252);
+    doc.setDrawColor(203, 213, 225);
+    doc.rect(margin, y, pageW - margin * 2, 54, 'FD');
+    const colW = (pageW - margin * 2) / 4;
+    const summaryCols = [
+      { label: 'Beginning Balance', val: fmtCurrency(statementSummary.openingBalance) },
+      { label: 'Deposits & Additions', val: `+${fmtCurrency(statementSummary.totalCredits)}` },
+      { label: 'Withdrawals & Debits', val: `-${fmtCurrency(statementSummary.totalDebits)}` },
+      { label: 'Ending Balance', val: fmtCurrency(statementSummary.closingBalance) },
+    ];
+    summaryCols.forEach((c, idx) => {
+      const cx = margin + idx * colW + 10;
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+      doc.setTextColor(100, 116, 139);
+      doc.text(c.label, cx, y + 18);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(11);
+      doc.setTextColor(8, 20, 39);
+      doc.text(c.val, cx, y + 38);
+    });
+    y += 74;
+
+    // Transaction Detail Header
+    const drawTableHeader = () => {
+      doc.setFillColor(241, 245, 249);
+      doc.rect(margin, y, pageW - margin * 2, 20, 'F');
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8.5);
+      doc.setTextColor(51, 65, 85);
+      doc.text('DATE', margin + 6, y + 13);
+      doc.text('DESCRIPTION', margin + 78, y + 13);
+      doc.text('CATEGORY', margin + 330, y + 13);
+      doc.text('AMOUNT', pageW - margin - 6, y + 13, { align: 'right' });
+      y += 24;
+    };
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10.5);
+    doc.setTextColor(8, 20, 39);
+    doc.text('TRANSACTION DETAIL', margin, y);
+    y += 10;
+    drawTableHeader();
+
+    const txs = statementSummary.txs;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8.5);
+    if (txs.length === 0) {
+      doc.setTextColor(100, 116, 139);
+      doc.text('No transactions posted during this statement period.', margin + 6, y + 10);
+    } else {
+      txs.forEach((t, idx) => {
+        if (y > pageH - 60) {
+          doc.addPage();
+          y = 48;
+          drawTableHeader();
+          doc.setFont('helvetica', 'normal');
+          doc.setFontSize(8.5);
+        }
+        if (idx % 2 === 1) {
+          doc.setFillColor(250, 251, 252);
+          doc.rect(margin, y - 10, pageW - margin * 2, 16, 'F');
+        }
+        doc.setTextColor(51, 65, 85);
+        doc.text(String(t.date || '').slice(0, 10), margin + 6, y);
+        doc.setTextColor(15, 23, 42);
+        doc.text(cleanTxDesc(t.description).slice(0, 48), margin + 78, y);
+        doc.setTextColor(100, 116, 139);
+        doc.text(String(t.category || 'General').slice(0, 18), margin + 330, y);
+        doc.setTextColor(t.amount >= 0 ? 19 : 15, t.amount >= 0 ? 136 : 23, t.amount >= 0 ? 66 : 42);
+        doc.text(t.amount >= 0 ? `+${fmtCurrency(t.amount)}` : fmtCurrency(t.amount), pageW - margin - 6, y, { align: 'right' });
+        y += 16;
+      });
+    }
+
+    const totalPages = doc.getNumberOfPages();
+    for (let p = 1; p <= totalPages; p++) {
+      doc.setPage(p);
+      doc.setFontSize(8);
+      doc.setTextColor(148, 163, 184);
+      doc.text(`Page ${p} of ${totalPages}`, pageW - margin, pageH - 24, { align: 'right' });
+      doc.text('JPMorgan Chase Bank, N.A. Member FDIC', margin, pageH - 24);
+    }
+
+    doc.save(`Chase_Statement_${account.mask}_${period.id}.pdf`);
+  };
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-950/65 p-3 sm:p-6 print:static print:bg-white print:p-0"
@@ -274,6 +407,13 @@ export const StatementModal: React.FC<StatementModalProps> = ({
                 <Download className="h-3.5 w-3.5" /> CSV
               </button>
             )}
+            <button
+              type="button"
+              onClick={downloadRealPdf}
+              className="inline-flex items-center gap-1.5 rounded bg-[#117ACA] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#0D62A3] cursor-pointer"
+            >
+              <Download className="h-3.5 w-3.5" /> Download PDF
+            </button>
             <button
               type="button"
               onClick={() => window.print()}
