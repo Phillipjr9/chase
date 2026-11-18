@@ -188,7 +188,7 @@ const SolidBtn: React.FC<{ children: React.ReactNode; onClick: () => void }> = (
 
 const balanceLabel = (a: Account) =>
   a.type === 'credit-card'
-    ? 'Remaining statement balance'
+    ? 'Current balance'
     : a.type === 'auto-loan' || a.type === 'mortgage'
       ? 'Remaining loan balance'
       : 'Available balance';
