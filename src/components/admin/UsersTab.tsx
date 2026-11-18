@@ -927,8 +927,8 @@ export const UsersTab: React.FC<Props> = ({
                           <option value="Your account is temporarily locked for security verification. Please call 1-800-935-9935.">
                             Locked — Security verification
                           </option>
-                          <option value="Your online banking access has been disabled by an administrator.">
-                            Disabled — By administrator
+                          <option value="Your online banking access has been disabled by Chase Security.">
+                            Disabled — By Chase Security
                           </option>
                           <option value="Your account has been restricted pending document review.">
                             Restricted — Pending document review
