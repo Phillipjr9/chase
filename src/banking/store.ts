@@ -1330,12 +1330,13 @@ export async function sendWire(
   recipient: string,
   routingNumber: string,
   amount: number,
-  wireType: 'domestic' | 'international'
+  wireType: 'domestic' | 'international',
+  accountNumber?: string
 ): Promise<User> {
   if (await detectApi()) {
     const data = await apiFetch('/api/wires', {
       method: 'POST',
-      body: JSON.stringify({ fromId, recipient, routingNumber, amount, wireType }),
+      body: JSON.stringify({ fromId, recipient, routingNumber, amount, wireType, accountNumber }),
     });
     return hydrateDefaults(data.user as User);
   }

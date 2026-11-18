@@ -1474,6 +1474,7 @@ const WirePage: React.FC<{
   const [fromId, setFromId] = useState(deposits[0]?.id || '');
   const [recipient, setRecipient] = useState('');
   const [routing, setRouting] = useState('');
+  const [accountNumber, setAccountNumber] = useState('');
   const [amount, setAmount] = useState('');
   const [type, setType] = useState<'domestic' | 'international'>('domestic');
   const [msg, setMsg] = useState<Notice>(null);
@@ -1485,21 +1486,22 @@ const WirePage: React.FC<{
 
   const submit = async () => {
     const amt = parseFloat(amount);
-    if (!recipient.trim() || !routing.trim())
-      return setMsg({ kind: 'error', text: 'Enter the recipient name and ABA routing / SWIFT code.' });
+    if (!recipient.trim() || !routing.trim() || !accountNumber.trim())
+      return setMsg({ kind: 'error', text: 'Enter the recipient name, ABA routing / SWIFT code, and account number.' });
     if (isNaN(amt) || amt <= 0) return setMsg({ kind: 'error', text: 'Enter a wire amount greater than $0.' });
     if (!from) return setMsg({ kind: 'error', text: 'Select a funding account.' });
     if (amt + fee > from.balance)
       return setMsg({ kind: 'error', text: `Insufficient funds — you need ${fmtMoney(amt + fee)} including the $${fee} fee.` });
     setBusy(true);
     try {
-      const u = await apiSendWire(from.id, recipient.trim(), routing.trim(), amt, type);
+      const u = await apiSendWire(from.id, recipient.trim(), routing.trim(), amt, type, accountNumber.trim());
       onUpdateUser(u);
       setReceipt({
         ref: confNumber('CHWR'),
         title: `${type === 'domestic' ? 'Domestic' : 'International'} wire initiated`,
         rows: [
           { k: 'To', v: `${recipient.trim()} (${routing.trim()})` },
+          { k: 'Account number', v: `…${accountNumber.trim().slice(-4)}` },
           { k: 'From', v: `${from.name} (…${from.mask})` },
           { k: 'Amount', v: fmtMoney(amt) },
           { k: 'Wire fee', v: fmtMoney(fee) },
@@ -1509,6 +1511,7 @@ const WirePage: React.FC<{
       setMsg(null);
       setRecipient('');
       setRouting('');
+      setAccountNumber('');
       setAmount('');
     } catch (e) {
       setMsg({ kind: 'error', text: e instanceof Error ? e.message : 'Wire transfer failed.' });
@@ -1562,12 +1565,17 @@ const WirePage: React.FC<{
               <input className={inputCls} placeholder={type === 'domestic' ? '021000021' : 'CHASUS33'} value={routing} onChange={(e) => setRouting(e.target.value)} />
             </Field>
           </div>
-          <Field label="Wire amount">
-            <div className="relative max-w-[240px]">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[#5C5C5C]">$</span>
-              <input className={`${inputCls} pl-7`} inputMode="decimal" placeholder="0.00" value={amount} onChange={(e) => setAmount(e.target.value)} />
-            </div>
-          </Field>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <Field label={type === 'domestic' ? 'Recipient account number' : 'Account number / IBAN'} hint={type === 'domestic' ? 'Checking or savings account number' : 'IBAN or local account number'}>
+              <input className={inputCls} placeholder={type === 'domestic' ? 'e.g. 1234567890' : 'e.g. GB29NWBK60161331926819'} value={accountNumber} onChange={(e) => setAccountNumber(e.target.value)} />
+            </Field>
+            <Field label="Wire amount">
+              <div className="relative">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[#5C5C5C]">$</span>
+                <input className={`${inputCls} pl-7`} inputMode="decimal" placeholder="0.00" value={amount} onChange={(e) => setAmount(e.target.value)} />
+              </div>
+            </Field>
+          </div>
           <NoticeBox msg={msg} />
           <PrimaryBtn onClick={submit} busy={busy}>
             {busy ? 'Sending wire…' : `Send wire · ${fmtMoney((parseFloat(amount) || 0) + fee)} total`}

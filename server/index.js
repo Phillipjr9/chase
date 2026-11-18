@@ -4085,6 +4085,7 @@ async function handleApi(req, res, url) {
     const fee = wireType === 'international' ? 40 : 25;
     const recipient = cleanText(body.recipient, 80);
     const routingNumber = cleanText(body.routingNumber, 34).replace(/\s/g, '');
+    const accountNumber = cleanText(body.accountNumber || '', 34).replace(/\s/g, '');
     if (!recipient || routingNumber.length < 8) {
       return sendJson(res, 400, { error: 'Recipient name and a valid routing/SWIFT number are required.' });
     }
