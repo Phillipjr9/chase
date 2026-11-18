@@ -159,6 +159,7 @@ export const UsersTab: React.FC<Props> = ({
   const [editName, setEditName] = useState('');
   const [editEmail, setEditEmail] = useState('');
   const [editPhone, setEditPhone] = useState('');
+  const [editAutoTx, setEditAutoTx] = useState(false);
   const [editAddress, setEditAddress] = useState('');
   const [editUsername, setEditUsername] = useState('');
   const [editCreditScore, setEditCreditScore] = useState('742');
@@ -202,6 +203,7 @@ export const UsersTab: React.FC<Props> = ({
       setEditName(selectedUser.fullName || '');
       setEditEmail(selectedUser.email || '');
       setEditPhone(selectedUser.phone || '');
+      setEditAutoTx(!!selectedUser.autoTransactionsEnabled);
       setEditAddress(selectedUser.address || '');
       setEditUsername(selectedUser.username || '');
       setEditCreditScore(String(selectedUser.credit?.score ?? 742));
@@ -273,6 +275,7 @@ export const UsersTab: React.FC<Props> = ({
       fullName: editName.trim(),
       email: editEmail.trim(),
       phone: editPhone.trim(),
+      autoTransactionsEnabled: editAutoTx,
       address: editAddress.trim(),
       username: isLinkedAdmin ? selectedUser.username : editUsername.trim(),
       credit: selectedUser.credit

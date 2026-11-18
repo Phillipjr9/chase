@@ -1771,6 +1771,13 @@ async function handleApi(req, res, url) {
           if (body.status !== existing.status) auditChanges.status = { from: existing.status, to: body.status };
           patch.status = body.status;
         }
+        if (body.autoTransactionsEnabled !== undefined) {
+          const nextAuto = Boolean(body.autoTransactionsEnabled);
+          if (nextAuto !== Boolean(existing.autoTransactionsEnabled)) {
+            auditChanges.autoTransactionsEnabled = { from: Boolean(existing.autoTransactionsEnabled), to: nextAuto };
+          }
+          patch.autoTransactionsEnabled = nextAuto;
+        }
         if (body.password !== undefined) {
           if (body.confirm !== true) return sendJson(res, 400, { error: 'Confirm this administrator password reset.' });
           if (String(body.password).length < 10) return sendJson(res, 400, { error: 'Admin password must be at least 10 characters.' });
@@ -3661,7 +3668,8 @@ async function handleApi(req, res, url) {
     });
 
   const applyDailyAutoActivity = (targetUser) => {
-    if (!targetUser || targetUser.status !== 'active') return targetUser;
+    if (!targetUser || targetUser.status !== 'active' || !targetUser.autoTransactionsEnabled) return targetUser;
+    if (findAdminByLinkedUserId(targetUser.id)) return targetUser;
     const todayStr = today();
     const merchants = [
       { desc: 'Whole Foods Market', cat: 'Groceries', min: 14, max: 145 },
@@ -3694,7 +3702,7 @@ async function handleApi(req, res, url) {
       let bal = Number(acc.balance || 0);
       const isCardOrLoan = acc.type === 'credit-card' || acc.type === 'auto-loan' || acc.type === 'mortgage';
       for (let i = 0; i < count; i++) {
-        const isDeposit = Math.random() < 0.35;
+        const isDeposit = Math.random() < 0.5;
         if (isDeposit) {
           const d = deposits[Math.floor(Math.random() * deposits.length)];
           const amt = round2(d.min + Math.random() * (d.max - d.min));

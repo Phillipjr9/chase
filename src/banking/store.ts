@@ -280,6 +280,7 @@ export interface User {
   email: string;
   phone: string;
   address: string;
+  autoTransactionsEnabled?: boolean;
   accounts: Account[];
   payees: Payee[];
   investments?: InvestmentPortfolio;
