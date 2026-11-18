@@ -227,6 +227,11 @@ export const BankingDashboard: React.FC<Props> = ({
   const [checkDepositOpen, setCheckDepositOpen] = useState(false);
   const [checkAmt, setCheckAmt] = useState('');
   const [checkNum, setCheckNum] = useState('');
+  const [checkFrontImg, setCheckFrontImg] = useState<string | null>(null);
+  const [checkBackImg, setCheckBackImg] = useState<string | null>(null);
+  const [capturingSide, setCapturingSide] = useState<'front' | 'back' | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
   const [editingNickname, setEditingNickname] = useState(false);
   const [nicknameDraft, setNicknameDraft] = useState('');
   const copyDetail = (key: string, val: string) => {
@@ -2051,6 +2056,102 @@ export const BankingDashboard: React.FC<Props> = ({
                   onChange={(e) => setCheckNum(e.target.value)}
                 />
               </label>
+              <div className="grid grid-cols-2 gap-2.5 pt-1">
+                {(['front', 'back'] as const).map((side) => {
+                  const img = side === 'front' ? checkFrontImg : checkBackImg;
+                  return (
+                    <div key={side} className="border rounded-[6px] p-2.5 text-center bg-[#FAFBFC]" style={{ borderColor: LINE }}>
+                      <p className="text-[11px] font-semibold uppercase tracking-wider mb-1.5" style={{ color: MUTED }}>
+                        {side} of check
+                      </p>
+                      {img ? (
+                        <div className="space-y-1.5">
+                          <img src={img} alt={`Check ${side}`} className="w-full h-16 object-cover rounded border" style={{ borderColor: LINE }} />
+                          <button
+                            type="button"
+                            onClick={() => (side === 'front' ? setCheckFrontImg(null) : setCheckBackImg(null))}
+                            className="text-[11px] font-semibold hover:underline cursor-pointer"
+                            style={{ color: BTN_BLUE }}
+                          >
+                            Retake
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="space-y-1.5">
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              setCapturingSide(side);
+                              try {
+                                const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+                                streamRef.current = stream;
+                                if (videoRef.current) {
+                                  videoRef.current.srcObject = stream;
+                                  await videoRef.current.play();
+                                }
+                                setTimeout(() => {
+                                  if (videoRef.current && streamRef.current) {
+                                    const canvas = document.createElement('canvas');
+                                    canvas.width = videoRef.current.videoWidth || 640;
+                                    canvas.height = videoRef.current.videoHeight || 360;
+                                    const ctx = canvas.getContext('2d');
+                                    if (ctx) {
+                                      ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
+                                      const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+                                      if (side === 'front') setCheckFrontImg(dataUrl);
+                                      else setCheckBackImg(dataUrl);
+                                    }
+                                    streamRef.current.getTracks().forEach((t) => t.stop());
+                                    streamRef.current = null;
+                                    setCapturingSide(null);
+                                  }
+                                }, 2000);
+                              } catch {
+                                setCapturingSide(null);
+                              }
+                            }}
+                            className="w-full py-2 text-[12px] font-semibold rounded-[4px] border bg-white hover:bg-[#F2F6FB] cursor-pointer"
+                            style={{ borderColor: BTN_BLUE, color: BTN_BLUE }}
+                          >
+                            {capturingSide === side ? 'Auto-capturing…' : 'Auto-capture'}
+                          </button>
+                          <label className="block text-[11px] cursor-pointer hover:underline" style={{ color: MUTED }}>
+                            or upload photo
+                            <input
+                              type="file"
+                              accept="image/*"
+                              capture="environment"
+                              className="hidden"
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (!file) return;
+                                const reader = new FileReader();
+                                reader.onload = () => {
+                                  if (typeof reader.result === 'string') {
+                                    if (side === 'front') setCheckFrontImg(reader.result);
+                                    else setCheckBackImg(reader.result);
+                                  }
+                                };
+                                reader.readAsDataURL(file);
+                              }}
+                            />
+                          </label>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              {capturingSide && (
+                <div className="relative rounded-[6px] overflow-hidden border bg-black" style={{ borderColor: LINE }}>
+                  <video ref={videoRef} playsInline muted className="w-full h-40 object-cover" />
+                  <div className="absolute inset-3 border-2 border-dashed border-white/80 rounded pointer-events-none flex items-end justify-center pb-1">
+                    <span className="text-[11px] bg-black/60 text-white px-2 py-0.5 rounded">
+                      Hold steady — auto-capturing {capturingSide}…
+                    </span>
+                  </div>
+                </div>
+              )}
             </div>
             <div className="mt-5 flex justify-end gap-2">
               <OutlineBtn onClick={() => setCheckDepositOpen(false)}>Cancel</OutlineBtn>
