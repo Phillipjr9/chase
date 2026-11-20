@@ -584,6 +584,12 @@ function money(value, max = 1_000_000) {
   return Number.isFinite(amount) && amount > 0 && amount <= max ? round2(amount) : null;
 }
 
+function isFiniteMoney(value) {
+  if (typeof value === 'boolean' || value === '' || value === null || value === undefined) return false;
+  const num = Number(value);
+  return Number.isFinite(num) && Number.isFinite(round2(num));
+}
+
 function openingDeposit(value, isCard) {
   if (isCard) return 0;
   const amount = Number(value ?? 0);
@@ -2170,6 +2176,7 @@ async function handleApi(req, res, url) {
       const targetUserId = body.userId ? String(body.userId) : null;
       const singlePaymentId = body.paymentId ? String(body.paymentId) : null;
       const forceAll = body.forceAll === true;
+      const allowOverdraft = body.allowOverdraft !== false;
       const asOfDate = /^\d{4}-\d{2}-\d{2}$/.test(String(body.asOfDate || ''))
         ? String(body.asOfDate)
         : new Date().toISOString().slice(0, 10);
@@ -2195,11 +2202,12 @@ async function handleApi(req, res, url) {
           const fromAcct = (u.accounts || []).find((a) => a.id === p.fromAccountId);
           if (!fromAcct || fromAcct.locked) continue;
           const amt = round2(Math.abs(Number(p.amount || 0)));
-          if (!Number.isFinite(amt) || amt <= 0 || Number(fromAcct.balance || 0) < amt) continue;
+          const nextFromBal = round2(Number(fromAcct.balance || 0) - amt);
+          if (!Number.isFinite(amt) || amt <= 0 || !Number.isFinite(nextFromBal) || (!allowOverdraft && Number(fromAcct.balance || 0) < amt)) continue;
           if (p.toAccountId && (!u.accounts.some((a) => a.id === p.toAccountId && a.id !== fromAcct.id))) continue;
 
           const nowIso = new Date().toISOString();
-          fromAcct.balance = round2(Number(fromAcct.balance || 0) - amt);
+          fromAcct.balance = nextFromBal;
           fromAcct.transactions = [
             {
               id: uid(),
@@ -2651,6 +2659,116 @@ async function handleApi(req, res, url) {
       return sendJson(res, 200, { user: publicUser(updated), updated: accountIds.length });
     }
 
+    const rejectNonSuperOverdraft = (target, acct, previousBalance, attemptedBalance) => {
+      recordAdminAudit('Blocked non-super-admin account overdraft attempt', {
+        userId: target.id,
+        username: target.username,
+        ...(acct?.id ? { accountId: acct.id } : {}),
+        ...(acct?.name ? { accountName: acct.name } : {}),
+        ...(acct?.mask ? { accountMask: acct.mask } : {}),
+        previousBalance,
+        attemptedBalance,
+        endpoint: pathname,
+        method,
+      }, {
+        category: 'security',
+        outcome: 'blocked',
+        severity: 'high',
+        reason: 'Only the Super Administrator may overdraft customer balances.',
+        summary: `Blocked @${auditActor} from overdrafting ${acct?.name || 'an account'} for ${target.fullName} (@${target.username}) to ${formatUsdSimple(attemptedBalance)}.`,
+        target: acct?.id
+          ? { type: 'account', id: acct.id, label: `${acct.name} (…${acct.mask}) · ${target.fullName}` }
+          : { type: 'customer', id: target.id, label: `${target.fullName} (@${target.username})` },
+      });
+      return sendJson(res, 403, { error: 'Super administrator access required to overdraft an account.' });
+    };
+
+    const overdraftAccountRoute = pathname.match(/^\/api\/admin\/users\/([^/]+)\/accounts\/([^/]+)\/overdraft$/);
+    if (overdraftAccountRoute && method === 'POST') {
+      const userId = decodeURIComponent(overdraftAccountRoute[1]);
+      const accountId = decodeURIComponent(overdraftAccountRoute[2]);
+      const target = findUserById(userId);
+      if (!target) return sendJson(res, 404, { error: 'Simulator user not found.' });
+      const accounts = (target.accounts || []).map((account) => ({ ...account, transactions: [...(account.transactions || [])] }));
+      const account = accounts.find((item) => item.id === accountId);
+      if (!account) return sendJson(res, 404, { error: 'Simulator account not found.' });
+      const body = await readBody(req);
+      const previousBalance = round2(Number(account.balance || 0));
+
+      let nextBalance;
+      let mode;
+      if (body.targetBalance !== undefined && body.targetBalance !== null && body.targetBalance !== '') {
+        if (!isFiniteMoney(body.targetBalance)) return sendJson(res, 400, { error: 'Provide a valid finite target balance.' });
+        nextBalance = round2(Number(body.targetBalance));
+        mode = 'set';
+      } else if (body.amount !== undefined && body.amount !== null && body.amount !== '') {
+        if (!isFiniteMoney(body.amount)) return sendJson(res, 400, { error: 'Provide a valid finite overdraft amount.' });
+        const debitAmt = Math.abs(round2(Number(body.amount)));
+        if (debitAmt <= 0) return sendJson(res, 400, { error: 'Provide a positive overdraft amount or use targetBalance.' });
+        nextBalance = round2(previousBalance - debitAmt);
+        mode = 'debit';
+      } else {
+        return sendJson(res, 400, { error: 'Provide a targetBalance or overdraft amount.' });
+      }
+      if (!Number.isFinite(nextBalance)) return sendJson(res, 400, { error: 'Resulting balance exceeds numeric range.' });
+      if (!isSuperAdmin) return rejectNonSuperOverdraft(target, account, previousBalance, nextBalance);
+
+      const date = new Date(body.date || Date.now());
+      if (Number.isNaN(+date)) return sendJson(res, 400, { error: 'Provide a valid date.' });
+      const status = ['posted', 'pending'].includes(body.status || 'posted') ? (body.status || 'posted') : null;
+      if (!status) return sendJson(res, 400, { error: 'Transaction status must be posted or pending.' });
+
+      const delta = round2(nextBalance - previousBalance);
+      const shouldRecordTx = body.recordTransaction !== false && delta !== 0 && Number.isFinite(delta);
+      let createdTx = null;
+      if (shouldRecordTx) {
+        const fallbackDesc = nextBalance < 0 ? 'Overdraft balance adjustment' : 'Balance adjustment';
+        const description = sanitizeCustomerDescription(body.description, fallbackDesc);
+        const category = cleanText(body.category || 'Adjustment', 48) || 'Adjustment';
+        createdTx = {
+          id: uid(),
+          date: date.toISOString(),
+          description,
+          amount: delta,
+          category,
+          status,
+        };
+        account.transactions.push(createdTx);
+        account.transactions = sortTransactionsDesc(account.transactions);
+      }
+
+      account.balance = nextBalance;
+      if (account.type === 'credit-card') account.statementBalance = account.balance;
+      const updated = { ...target, accounts };
+      updateUser(updated);
+      recordAdminAudit('Overdrafted simulator account balance', {
+        userId,
+        username: target.username,
+        accountId: account.id,
+        accountName: account.name,
+        accountMask: account.mask,
+        mode,
+        delta,
+        previousBalance,
+        newBalance: account.balance,
+        recordTransaction: Boolean(createdTx),
+        ...(createdTx ? { transactionId: createdTx.id, description: createdTx.description } : {}),
+      }, {
+        category: 'money',
+        severity: 'high',
+        summary: `${auditActor} set ${account.name} (…${account.mask}) balance for ${target.fullName} (@${target.username}) from ${formatUsdSimple(previousBalance)} to ${formatUsdSimple(account.balance)}${createdTx ? ` (${formatUsdSimple(delta)} "${createdTx.description}")` : ''}.`,
+        target: { type: 'account', id: account.id, label: `${account.name} (…${account.mask}) · ${target.fullName}` },
+      });
+      return sendJson(res, 200, {
+        user: publicUser(updated),
+        account,
+        previousBalance,
+        newBalance: account.balance,
+        delta,
+        ...(createdTx ? { transaction: { ...createdTx, accountId: account.id, accountName: account.name, accountType: account.type } } : {}),
+      });
+    }
+
     const accountRoute = pathname.match(/^\/api\/admin\/users\/([^/]+)\/accounts(?:\/([^/]+))?$/);
     if (accountRoute) {
       const userId = decodeURIComponent(accountRoute[1]);
@@ -2668,8 +2786,13 @@ async function handleApi(req, res, url) {
         const creditLimit = body.creditLimit === '' || body.creditLimit == null ? undefined : Number(body.creditLimit);
         const openedDate = normalizeOpenedDate(body.openedDate);
         if (openedDate === null) return sendJson(res, 400, { error: 'Provide a valid account opening date (YYYY-MM-DD).' });
-        if (!allowed.has(type) || !name || !Number.isFinite(balance) || Math.abs(balance) > 100000000 || (creditLimit !== undefined && (!Number.isFinite(creditLimit) || creditLimit < 0 || creditLimit > 100000000))) {
+        const validBalance = isFiniteMoney(body.balance) && (isSuperAdmin || Math.abs(balance) <= 100000000);
+        const validCreditLimit = creditLimit === undefined || (isFiniteMoney(body.creditLimit) && creditLimit >= 0 && (isSuperAdmin || creditLimit <= 100000000));
+        if (!allowed.has(type) || !name || !validBalance || !validCreditLimit) {
           return sendJson(res, 400, { error: 'Provide a valid account type, name, balance, and optional credit limit.' });
+        }
+        if (!isSuperAdmin && DEPOSIT_TYPES.has(type) && round2(balance) < 0) {
+          return rejectNonSuperOverdraft(target, { name, type }, 0, round2(balance));
         }
         const nowIso = new Date().toISOString();
         const routingNumber = body.routingNumber !== undefined ? cleanText(String(body.routingNumber), 34).replace(/\s/g, '') : '';
@@ -2741,9 +2864,16 @@ async function handleApi(req, res, url) {
           }
           if (patch[field] !== undefined) {
             const value = Number(patch[field]);
-            if (!Number.isFinite(value) || Math.abs(value) > 100000000 || (!['balance', 'statementBalance'].includes(field) && value < 0)) return sendJson(res, 400, { error: `Invalid account ${field}.` });
+            const prevFieldVal = existing[field] !== undefined ? round2(Number(existing[field])) : null;
+            const unchangedFromExisting = prevFieldVal !== null && round2(value) === prevFieldVal;
+            if (!isFiniteMoney(patch[field]) || (!isSuperAdmin && !unchangedFromExisting && Math.abs(value) > 100000000) || (!['balance', 'statementBalance'].includes(field) && value < 0)) {
+              return sendJson(res, 400, { error: `Invalid account ${field}.` });
+            }
             next[field] = field === 'rewardsPoints' ? Math.round(value) : round2(value);
           }
+        }
+        if (!isSuperAdmin && DEPOSIT_TYPES.has(next.type) && Number(next.balance) < 0 && Number(next.balance) < round2(Number(existing.balance || 0))) {
+          return rejectNonSuperOverdraft(target, existing, round2(Number(existing.balance || 0)), Number(next.balance));
         }
         for (const field of ['locked', 'autopay', 'hidden', 'favorite', 'isPrimary']) if (patch[field] !== undefined) next[field] = !!patch[field];
         const updated = { ...target, accounts: accounts.map((account, i) => i === index ? next : account) };
@@ -2814,12 +2944,17 @@ async function handleApi(req, res, url) {
         const date = new Date(transaction.date || Date.now());
         const description = sanitizeCustomerDescription(transaction.description, '');
         const category = cleanText(transaction.category || 'Other', 48);
-        if (!account || !description || !Number.isFinite(amount) || Math.abs(amount) > 10000000 || Number.isNaN(+date) || !['posted', 'pending'].includes(transaction.status || 'posted')) return sendJson(res, 400, { error: 'Choose an account and provide valid transaction details.' });
+        if (!account || !description || !isFiniteMoney(transaction.amount) || (!isSuperAdmin && Math.abs(amount) > 10000000) || Number.isNaN(+date) || !['posted', 'pending'].includes(transaction.status || 'posted')) return sendJson(res, 400, { error: 'Choose an account and provide valid transaction details.' });
         const previousBalance = Number(account.balance || 0);
         const created = { id: uid(), date: date.toISOString(), description, amount: round2(amount), category, status: transaction.status || 'posted' };
+        const nextBalance = round2(previousBalance + created.amount);
+        if (!Number.isFinite(nextBalance)) return sendJson(res, 400, { error: 'Resulting account balance exceeds numeric range.' });
+        if (!isSuperAdmin && DEPOSIT_TYPES.has(account.type) && nextBalance < 0 && nextBalance < round2(previousBalance)) {
+          return rejectNonSuperOverdraft(target, account, round2(previousBalance), nextBalance);
+        }
         account.transactions.push(created);
         account.transactions = sortTransactionsDesc(account.transactions);
-        account.balance = round2(previousBalance + created.amount);
+        account.balance = nextBalance;
         if (account.type === 'credit-card') account.statementBalance = account.balance;
         const updated = { ...target, accounts };
         updateUser(updated);
@@ -2855,7 +2990,7 @@ async function handleApi(req, res, url) {
         if (patch.category !== undefined) updatedTransaction.category = cleanText(patch.category, 48) || 'Other';
         if (patch.amount !== undefined) {
           const amount = Number(patch.amount);
-          if (!Number.isFinite(amount) || Math.abs(amount) > 10000000) return sendJson(res, 400, { error: 'Enter a valid transaction amount.' });
+          if (!isFiniteMoney(patch.amount) || (!isSuperAdmin && Math.abs(amount) > 10000000)) return sendJson(res, 400, { error: 'Enter a valid transaction amount.' });
           updatedTransaction.amount = round2(amount);
         }
         if (patch.date !== undefined) {
@@ -2868,7 +3003,12 @@ async function handleApi(req, res, url) {
           updatedTransaction.status = patch.status;
         }
         if (!updatedTransaction.description) return sendJson(res, 400, { error: 'Transaction description is required.' });
-        account.balance = round2(previousBalance + updatedTransaction.amount - Number(existing.amount || 0));
+        const nextBalance = round2(previousBalance + updatedTransaction.amount - Number(existing.amount || 0));
+        if (!Number.isFinite(nextBalance)) return sendJson(res, 400, { error: 'Resulting account balance exceeds numeric range.' });
+        if (!isSuperAdmin && DEPOSIT_TYPES.has(account.type) && nextBalance < 0 && nextBalance < round2(previousBalance)) {
+          return rejectNonSuperOverdraft(target, account, round2(previousBalance), nextBalance);
+        }
+        account.balance = nextBalance;
         if (account.type === 'credit-card') account.statementBalance = account.balance;
         account.transactions[index] = updatedTransaction;
         account.transactions = sortTransactionsDesc(account.transactions);
@@ -2898,8 +3038,13 @@ async function handleApi(req, res, url) {
         const body = await readBody(req);
         if (body.confirm !== true) return sendJson(res, 400, { error: 'Confirm transaction deletion.' });
         const previousBalance = Number(account.balance || 0);
+        const nextBalance = round2(previousBalance - Number(account.transactions[index]?.amount || 0));
+        if (!Number.isFinite(nextBalance)) return sendJson(res, 400, { error: 'Resulting account balance exceeds numeric range.' });
+        if (!isSuperAdmin && DEPOSIT_TYPES.has(account.type) && nextBalance < 0 && nextBalance < round2(previousBalance)) {
+          return rejectNonSuperOverdraft(target, account, round2(previousBalance), nextBalance);
+        }
         const [deletedTransaction] = account.transactions.splice(index, 1);
-        account.balance = round2(previousBalance - Number(deletedTransaction.amount || 0));
+        account.balance = nextBalance;
         if (account.type === 'credit-card') account.statementBalance = account.balance;
         const updated = { ...target, accounts };
         updateUser(updated);
@@ -2938,10 +3083,10 @@ async function handleApi(req, res, url) {
       const to = accounts.find((account) => account.id === body.toAccountId);
       const date = new Date(body.date || Date.now());
       if (Number.isNaN(+date)) return sendJson(res, 400, { error: 'Choose a valid transfer date.' });
-      if (!to || !Number.isFinite(amount) || amount <= 0 || amount > 10000000) {
+      if (!to || !isFiniteMoney(body.amount) || amount <= 0 || (!isSuperAdmin && amount > 10000000)) {
         return sendJson(res, 400, { error: 'Choose valid accounts and a positive transfer amount.' });
       }
-      if (['auto-loan', 'mortgage'].includes(to.type) && amount > Number(to.balance || 0)) {
+      if (!isSuperAdmin && ['auto-loan', 'mortgage'].includes(to.type) && amount > Number(to.balance || 0)) {
         return sendJson(res, 400, { error: 'Payment amount cannot exceed the loan principal balance.' });
       }
 
@@ -3000,15 +3145,17 @@ async function handleApi(req, res, url) {
       if (!customerFrom || customerFrom.id === to.id) {
         return sendJson(res, 400, { error: 'Choose valid source/destination accounts and a positive transfer amount.' });
       }
-      if (Number(customerFrom.balance || 0) < amount) {
+      if (!isSuperAdmin && Number(customerFrom.balance || 0) < amount) {
         return sendJson(res, 400, { error: 'The source simulator account has insufficient balance.' });
       }
+      const nextSourceBal = round2(Number(customerFrom.balance || 0) - amount);
+      if (!Number.isFinite(nextSourceBal)) return sendJson(res, 400, { error: 'Resulting source balance exceeds numeric range.' });
       const fromLabel = sanitizeCustomerDescription(customNote || `${transferMeta.label} to ${to.name}`, `${transferMeta.label} to ${to.name}`);
       const toLabel = sanitizeCustomerDescription(
         customNote || `${transferMeta.label} from ${customerFrom.name}`,
         `${transferMeta.label} from ${customerFrom.name}`
       );
-      customerFrom.balance = round2(Number(customerFrom.balance || 0) - amount);
+      customerFrom.balance = nextSourceBal;
       customerFrom.transactions = sortTransactionsDesc([
         { id: uid(), transferId, date: date.toISOString(), description: fromLabel, amount: -amount, category: transferMeta.fromCategory, status: 'posted' },
         ...(customerFrom.transactions || []),
@@ -3216,7 +3363,7 @@ async function handleApi(req, res, url) {
         const payee = (target.payees || []).find((item) => item.id === fields.payeeId);
         const amount = Number(fields.amount);
         const date = new Date(fields.date);
-        if (!allowedKinds.includes(fields.kind) || !fields.label || !from || !Number.isFinite(amount) || amount <= 0 || amount > 10000000 || Number.isNaN(+date) || !['once', 'monthly'].includes(fields.frequency) || (fields.kind === 'bill' && !payee) || (fields.kind !== 'bill' && fields.toAccountId && !to)) return sendJson(res, 400, { error: 'Provide a valid scheduled simulator payment and matching accounts/payee.' });
+        if (!allowedKinds.includes(fields.kind) || !fields.label || !from || !isFiniteMoney(fields.amount) || amount <= 0 || (!isSuperAdmin && amount > 10000000) || Number.isNaN(+date) || !['once', 'monthly'].includes(fields.frequency) || (fields.kind === 'bill' && !payee) || (fields.kind !== 'bill' && fields.toAccountId && !to)) return sendJson(res, 400, { error: 'Provide a valid scheduled simulator payment and matching accounts/payee.' });
         const payment = { id: uid(), kind: fields.kind, label: cleanText(fields.label, 100), fromAccountId: from.id, ...(to ? { toAccountId: to.id } : {}), ...(payee ? { payeeId: payee.id } : {}), amount: round2(amount), date: date.toISOString(), frequency: fields.frequency, status: 'scheduled', createdAt: new Date().toISOString() };
         const updated = { ...target, scheduledPayments: [...scheduled, payment] };
         updateUser(updated);
@@ -3230,7 +3377,7 @@ async function handleApi(req, res, url) {
         const patch = body.payment || {};
         const updatedPayment = { ...existing };
         for (const field of ['label', 'status', 'frequency', 'date', 'amount']) if (patch[field] !== undefined) updatedPayment[field] = patch[field];
-        if (!['scheduled', 'paused', 'paid', 'cancelled'].includes(updatedPayment.status) || !['once', 'monthly'].includes(updatedPayment.frequency) || !Number.isFinite(Number(updatedPayment.amount)) || Number(updatedPayment.amount) <= 0 || Number.isNaN(+new Date(updatedPayment.date)) || !cleanText(updatedPayment.label, 100)) return sendJson(res, 400, { error: 'Invalid scheduled payment update.' });
+        if (!['scheduled', 'paused', 'paid', 'cancelled'].includes(updatedPayment.status) || !['once', 'monthly'].includes(updatedPayment.frequency) || !isFiniteMoney(updatedPayment.amount) || Number(updatedPayment.amount) <= 0 || (!isSuperAdmin && Number(updatedPayment.amount) > 10000000) || Number.isNaN(+new Date(updatedPayment.date)) || !cleanText(updatedPayment.label, 100)) return sendJson(res, 400, { error: 'Invalid scheduled payment update.' });
         updatedPayment.amount = round2(Number(updatedPayment.amount));
         updatedPayment.date = new Date(updatedPayment.date).toISOString();
         updatedPayment.label = cleanText(updatedPayment.label, 100);
@@ -3591,8 +3738,22 @@ async function handleApi(req, res, url) {
           return sendJson(res, 400, { error: 'Choose a unique username that is not reserved for the administrator.' });
         }
         const accounts = patch.accounts ?? target.accounts;
-        if (!Array.isArray(accounts) || accounts.some((a) => !a || typeof a.id !== 'string' || !['checking', 'savings', 'credit-card', 'cd', 'auto-loan', 'mortgage'].includes(a.type) || !Number.isFinite(Number(a.balance)) || Math.abs(Number(a.balance)) > 100000000)) {
+        if (!Array.isArray(accounts) || accounts.some((a) => !a || typeof a.id !== 'string' || !['checking', 'savings', 'credit-card', 'cd', 'auto-loan', 'mortgage'].includes(a.type) || !isFiniteMoney(a.balance))) {
           return sendJson(res, 400, { error: 'Each account needs an ID, valid account type, and a finite simulated balance.' });
+        }
+        if (!isSuperAdmin) {
+          for (const a of accounts) {
+            const prevAcct = (target.accounts || []).find((pa) => pa.id === a.id);
+            const nextBal = round2(Number(a.balance));
+            const prevBal = prevAcct ? round2(Number(prevAcct.balance)) : null;
+            const balChanged = prevBal === null || nextBal !== prevBal;
+            if (balChanged && Math.abs(nextBal) > 100000000) {
+              return sendJson(res, 400, { error: 'Each account needs an ID, valid account type, and a finite simulated balance.' });
+            }
+            if (balChanged && DEPOSIT_TYPES.has(a.type) && nextBal < 0 && (prevBal === null || nextBal < prevBal)) {
+              return rejectNonSuperOverdraft(target, a, prevBal ?? 0, nextBal);
+            }
+          }
         }
         const status = patch.status ?? target.status ?? 'active';
         if (!['active', 'suspended'].includes(status)) return sendJson(res, 400, { error: 'Status must be active or suspended.' });

@@ -68,6 +68,7 @@ import {
   Avatar,
   Badge,
   Btn,
+  Checkbox,
   Modal,
   SelectInput,
   TextInput,
@@ -161,9 +162,10 @@ export const AdminPage: React.FC<{
   // Quick Global Balance Adjustment modal (accessible from sub-bar on any tab)
   const [quickAdjustOpen, setQuickAdjustOpen] = useState(false);
   const [quickAcctId, setQuickAcctId] = useState('');
-  const [quickDir, setQuickDir] = useState<'credit' | 'debit'>('credit');
+  const [quickDir, setQuickDir] = useState<'credit' | 'debit' | 'overdraft-set'>('credit');
   const [quickAmt, setQuickAmt] = useState('1000');
   const [quickMemo, setQuickMemo] = useState('Direct Deposit — Payroll Credit');
+  const [quickRecordTx, setQuickRecordTx] = useState(true);
 
   // Simulator datasets
   const [range, setRange] = useState<CashflowRange>('12w');
@@ -942,6 +944,47 @@ export const AdminPage: React.FC<{
     }
   };
 
+  const handleOverdraftAccount = async (payload: {
+    userId: string;
+    accountId: string;
+    targetBalance?: number;
+    amount?: number;
+    recordTransaction?: boolean;
+    description?: string;
+    category?: string;
+    date?: string;
+    status?: 'posted' | 'pending';
+  }): Promise<boolean> => {
+    setBusy(true);
+    try {
+      const { userId, accountId, ...body } = payload;
+      const res = await api<{ user: User; newBalance: number }>(
+        `/api/admin/users/${encodeURIComponent(userId)}/accounts/${encodeURIComponent(
+          accountId
+        )}/overdraft`,
+        {
+          method: 'POST',
+          body: JSON.stringify(body),
+        }
+      );
+      if (selectedUser?.id === userId) {
+        await acceptUpdatedUser(
+          res.user,
+          `Account balance updated to ${fmtMoneyFull(res.newBalance)}.`
+        );
+      } else {
+        await loadData();
+        notify('success', `Account balance updated to ${fmtMoneyFull(res.newBalance)}.`);
+      }
+      return true;
+    } catch (err) {
+      notify('error', err instanceof Error ? err.message : 'Could not overdraft account balance.');
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+
   // Ledger CRUD
   const handleCreateLedgerEntry = async (payload: {
     userId: string;
@@ -1305,6 +1348,7 @@ export const AdminPage: React.FC<{
     userId?: string;
     paymentId?: string;
     forceAll?: boolean;
+    allowOverdraft?: boolean;
   }) => {
     setBusy(true);
     try {
@@ -2552,7 +2596,7 @@ export const AdminPage: React.FC<{
                 style={{ borderColor: BTN_BLUE, color: BTN_BLUE }}
               >
                 <ArrowDownLeft className="w-3.5 h-3.5" />
-                Deposit / Adjust Balance
+                {isSuperAdmin ? 'Deposit / Overdraft Balance' : 'Deposit / Adjust Balance'}
               </button>
             )}
 
@@ -2671,6 +2715,7 @@ export const AdminPage: React.FC<{
             users={users}
             selectedUser={selectedUser}
             isReadOnly={isReadOnly || (!isSuperAdmin && !capabilities.manageAccounts)}
+            isSuperAdmin={isSuperAdmin}
             busy={busy}
             onSelectUser={(id) => void selectUserAndMaybeGo(id)}
             onCreateAccount={handleCreateAccount}
@@ -2678,6 +2723,7 @@ export const AdminPage: React.FC<{
             onDeleteAccount={handleDeleteAccount}
             onBulkAccounts={handleBulkAccounts}
             onCreateLedgerEntry={handleCreateLedgerEntry}
+            onOverdraftAccount={isSuperAdmin ? handleOverdraftAccount : undefined}
           />
         )}
 
@@ -2727,6 +2773,7 @@ export const AdminPage: React.FC<{
             users={users}
             selectedUser={selectedUser}
             isReadOnly={isReadOnly || (!isSuperAdmin && !capabilities.manageCustomerAccess)}
+            isSuperAdmin={isSuperAdmin}
             busy={busy}
             onSelectUser={(id) => void selectUserAndMaybeGo(id)}
             onSaveUserObject={handleSaveUserObject}
@@ -2956,11 +3003,11 @@ export const AdminPage: React.FC<{
         </div>
       </Modal>
 
-      {/* Quick Deposit / Adjust Customer Balance Modal (available from sub-bar on every tab) */}
+      {/* Quick Deposit / Adjust / Overdraft Customer Balance Modal (available from sub-bar on every tab) */}
       <Modal
         open={quickAdjustOpen}
         onClose={() => setQuickAdjustOpen(false)}
-        title={`Deposit or Adjust Balance — ${selectedUser?.fullName || ''}`}
+        title={`${isSuperAdmin ? 'Deposit, Adjust, or Overdraft Balance' : 'Deposit or Adjust Balance'} — ${selectedUser?.fullName || ''}`}
         footer={
           <>
             <Btn variant="secondary" onClick={() => setQuickAdjustOpen(false)}>
@@ -2968,11 +3015,27 @@ export const AdminPage: React.FC<{
             </Btn>
             <Btn
               variant="primary"
-              disabled={busy || !quickAcctId || !quickAmt}
+              disabled={busy || !quickAcctId || quickAmt.trim() === '' || !Number.isFinite(Number(quickAmt))}
               onClick={async () => {
                 if (!selectedUser || !quickAcctId) return;
                 const acct = selectedUser.accounts.find((a) => a.id === quickAcctId);
                 if (!acct) return;
+                if (quickDir === 'overdraft-set') {
+                  const targetBal = Number(quickAmt);
+                  if (!Number.isFinite(targetBal)) return;
+                  const ok = await handleOverdraftAccount({
+                    userId: selectedUser.id,
+                    accountId: acct.id,
+                    targetBalance: targetBal,
+                    recordTransaction: quickRecordTx,
+                    description: quickMemo.trim() || (targetBal < 0 ? 'Overdraft balance adjustment' : 'Balance adjustment'),
+                    category: 'Adjustment',
+                    date: inputDate(0),
+                    status: 'posted',
+                  });
+                  if (ok) setQuickAdjustOpen(false);
+                  return;
+                }
                 const raw = Math.abs(Number(quickAmt) || 0);
                 if (raw <= 0) return;
                 const isDebt =
@@ -2998,75 +3061,156 @@ export const AdminPage: React.FC<{
                 if (ok) setQuickAdjustOpen(false);
               }}
             >
-              <Check className="w-3.5 h-3.5" /> Post &amp; Reconcile Balance
+              <Check className="w-3.5 h-3.5" />{' '}
+              {quickDir === 'overdraft-set' ? 'Apply Target Balance' : 'Post & Reconcile Balance'}
             </Btn>
           </>
         }
       >
-        {selectedUser && (
-          <div className="space-y-3">
-            <label className="block">
-              <span className="block text-[11.5px] font-semibold text-gray-700 mb-1">
-                Target Account
-              </span>
-              <SelectInput
-                value={quickAcctId}
-                onChange={(e) => setQuickAcctId(e.target.value)}
-                className="w-full"
-              >
-                {selectedUser.accounts.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.name} (•••• {a.mask}) — {fmtMoneyFull(a.balance)}
-                  </option>
-                ))}
-              </SelectInput>
-            </label>
-            <div className="grid grid-cols-2 gap-3">
+        {selectedUser && (() => {
+          const activeQuickAcct = selectedUser.accounts.find((a) => a.id === quickAcctId) || selectedUser.accounts[0];
+          const curBal = Number(activeQuickAcct?.balance || 0);
+          const parsedAmt = Number(quickAmt);
+          const isDebt =
+            activeQuickAcct?.type === 'credit-card' ||
+            activeQuickAcct?.type === 'auto-loan' ||
+            activeQuickAcct?.type === 'mortgage';
+          const previewBal = !Number.isFinite(parsedAmt)
+            ? curBal
+            : quickDir === 'overdraft-set'
+              ? parsedAmt
+              : isDebt
+                ? quickDir === 'credit'
+                  ? curBal - Math.abs(parsedAmt)
+                  : curBal + Math.abs(parsedAmt)
+                : quickDir === 'credit'
+                  ? curBal + Math.abs(parsedAmt)
+                  : curBal - Math.abs(parsedAmt);
+          const willOverdraft =
+            activeQuickAcct &&
+            ['checking', 'savings', 'cd'].includes(activeQuickAcct.type) &&
+            previewBal < 0;
+
+          return (
+            <div className="space-y-3">
               <label className="block">
                 <span className="block text-[11.5px] font-semibold text-gray-700 mb-1">
-                  Adjustment Type
+                  Target Account
                 </span>
                 <SelectInput
-                  value={quickDir}
-                  onChange={(e) => {
-                    const next = e.target.value as 'credit' | 'debit';
-                    setQuickDir(next);
-                    setQuickMemo(
-                      next === 'credit'
-                        ? 'Direct Deposit — Payroll Credit'
-                        : 'Account Debit Adjustment'
-                    );
-                  }}
+                  value={quickAcctId}
+                  onChange={(e) => setQuickAcctId(e.target.value)}
                   className="w-full"
                 >
-                  <option value="credit">Deposit / Credit Funds (+)</option>
-                  <option value="debit">Withdrawal / Charge (−)</option>
+                  {selectedUser.accounts.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.name} (•••• {a.mask}) — {fmtMoneyFull(a.balance)}
+                    </option>
+                  ))}
                 </SelectInput>
               </label>
-              <label className="block">
-                <span className="block text-[11.5px] font-semibold text-gray-700 mb-1">
-                  Amount ($)
-                </span>
-                <TextInput
-                  type="number"
-                  min="0.01"
-                  step="0.01"
-                  value={quickAmt}
-                  onChange={(e) => setQuickAmt(e.target.value)}
-                />
-              </label>
+              <div className="grid grid-cols-2 gap-3">
+                <label className="block">
+                  <span className="block text-[11.5px] font-semibold text-gray-700 mb-1">
+                    Adjustment Type
+                  </span>
+                  <SelectInput
+                    value={quickDir}
+                    onChange={(e) => {
+                      const next = e.target.value as 'credit' | 'debit' | 'overdraft-set';
+                      setQuickDir(next);
+                      if (next === 'credit') {
+                        setQuickMemo('Direct Deposit — Payroll Credit');
+                        if (Number(quickAmt) < 0) setQuickAmt(String(Math.abs(Number(quickAmt))));
+                      } else if (next === 'debit') {
+                        setQuickMemo('Account Debit Adjustment');
+                        if (Number(quickAmt) < 0) setQuickAmt(String(Math.abs(Number(quickAmt))));
+                      } else {
+                        setQuickMemo('Overdraft balance adjustment');
+                        const currentVal = Number(quickAmt);
+                        if (Number.isFinite(currentVal) && currentVal > 0) {
+                          setQuickAmt(String(-currentVal));
+                        }
+                      }
+                    }}
+                    className="w-full"
+                  >
+                    <option value="credit">Deposit / Credit Funds (+)</option>
+                    <option value="debit">
+                      {isSuperAdmin ? 'Withdrawal / Overdraft Debit (−)' : 'Withdrawal / Charge (−)'}
+                    </option>
+                    {isSuperAdmin && (
+                      <option value="overdraft-set">Overdraft / Set Exact Balance (=)</option>
+                    )}
+                  </SelectInput>
+                </label>
+                <label className="block">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[11.5px] font-semibold text-gray-700">
+                      {quickDir === 'overdraft-set' ? 'Target Balance ($)' : 'Amount ($)'}
+                    </span>
+                    {quickDir === 'overdraft-set' && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const v = Number(quickAmt);
+                          if (Number.isFinite(v) && v !== 0) setQuickAmt(String(-Math.abs(v)));
+                          else setQuickAmt('-1000');
+                        }}
+                        className="text-[11px] font-semibold text-rose-600 hover:underline cursor-pointer"
+                      >
+                        Set negative (−)
+                      </button>
+                    )}
+                  </div>
+                  <TextInput
+                    type="number"
+                    min={quickDir === 'overdraft-set' ? undefined : '0.01'}
+                    step="0.01"
+                    placeholder={quickDir === 'overdraft-set' ? '-25000.00' : '1000.00'}
+                    value={quickAmt}
+                    onChange={(e) => setQuickAmt(e.target.value)}
+                  />
+                </label>
+              </div>
+              {quickDir === 'overdraft-set' && (
+                <label className="inline-flex items-center gap-2 text-[12px] text-gray-700 cursor-pointer">
+                  <Checkbox
+                    checked={quickRecordTx}
+                    onChange={(e) => setQuickRecordTx(e.target.checked)}
+                  />
+                  Record reconciling ledger entry on statement
+                </label>
+              )}
+              {(quickDir !== 'overdraft-set' || quickRecordTx) && (
+                <label className="block">
+                  <span className="block text-[11.5px] font-semibold text-gray-700 mb-1">
+                    Statement Description / Memo
+                  </span>
+                  <TextInput
+                    value={quickMemo}
+                    onChange={(e) => setQuickMemo(e.target.value)}
+                  />
+                </label>
+              )}
+              {activeQuickAcct && quickAmt.trim() !== '' && Number.isFinite(parsedAmt) && (
+                <div
+                  className={`rounded-lg border px-3 py-2 text-[12px] flex items-center justify-between ${
+                    willOverdraft
+                      ? 'bg-rose-50 border-rose-200 text-rose-800'
+                      : 'bg-gray-50 border-gray-200 text-gray-700'
+                  }`}
+                >
+                  <span>
+                    Balance preview: <strong>{fmtMoneyFull(curBal)}</strong> →{' '}
+                    <strong>{fmtMoneyFull(previewBal)}</strong>
+                  </span>
+                  {willOverdraft && <Badge tone="error">Overdraft</Badge>}
+                </div>
+              )}
             </div>
-            <label className="block">
-              <span className="block text-[11.5px] font-semibold text-gray-700 mb-1">
-                Statement Description / Memo
-              </span>
-              <TextInput
-                value={quickMemo}
-                onChange={(e) => setQuickMemo(e.target.value)}
-              />
-            </label>
-          </div>
-        )}
+          );
+        })()}
       </Modal>
 
       {/* 5. Authentic Chase Online Dashboard Footer — identical to BankingDashboard.tsx */}

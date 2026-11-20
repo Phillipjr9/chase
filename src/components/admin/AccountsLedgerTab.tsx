@@ -118,6 +118,7 @@ interface AccountsProps {
   users: AdminUserRow[];
   selectedUser: User | null;
   isReadOnly: boolean;
+  isSuperAdmin?: boolean;
   busy: boolean;
   onSelectUser: (id: string) => void;
   onCreateAccount: (payload: {
@@ -145,6 +146,17 @@ interface AccountsProps {
     date: string;
     status: 'posted' | 'pending';
   }) => Promise<boolean>;
+  onOverdraftAccount?: (payload: {
+    userId: string;
+    accountId: string;
+    targetBalance?: number;
+    amount?: number;
+    recordTransaction?: boolean;
+    description?: string;
+    category?: string;
+    date?: string;
+    status?: 'posted' | 'pending';
+  }) => Promise<boolean>;
 }
 
 interface AccountDraft {
@@ -171,6 +183,7 @@ export const AccountsTab: React.FC<AccountsProps> = ({
   users,
   selectedUser,
   isReadOnly,
+  isSuperAdmin = false,
   busy,
   onSelectUser,
   onCreateAccount,
@@ -178,6 +191,7 @@ export const AccountsTab: React.FC<AccountsProps> = ({
   onDeleteAccount,
   onBulkAccounts,
   onCreateLedgerEntry,
+  onOverdraftAccount,
 }) => {
   const [newType, setNewType] = useState<AccountType>('checking');
   const [newName, setNewName] = useState(ACCOUNT_NAME_PRESETS.checking[0]);
@@ -192,12 +206,13 @@ export const AccountsTab: React.FC<AccountsProps> = ({
   const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState('');
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
 
-  // Quick Deposit / Credit / Debit modal
+  // Quick Deposit / Credit / Debit / Overdraft modal
   const [adjustAcctId, setAdjustAcctId] = useState<string | null>(null);
-  const [adjustDirection, setAdjustDirection] = useState<'credit' | 'debit'>('credit');
+  const [adjustDirection, setAdjustDirection] = useState<'credit' | 'debit' | 'set'>('credit');
   const [adjustAmount, setAdjustAmount] = useState('500');
   const [adjustMemo, setAdjustMemo] = useState('Direct Deposit — Payroll Credit');
   const [adjustCategory, setAdjustCategory] = useState('Income');
+  const [adjustRecordTx, setAdjustRecordTx] = useState(true);
 
   const [drafts, setDrafts] = useState<Record<string, AccountDraft>>({});
 
@@ -261,6 +276,27 @@ export const AccountsTab: React.FC<AccountsProps> = ({
     if (!selectedUser || !adjustAcctId) return;
     const acct = selectedUser.accounts.find((a) => a.id === adjustAcctId);
     if (!acct) return;
+
+    if (adjustDirection === 'set' && onOverdraftAccount) {
+      const targetBal = Number(adjustAmount);
+      if (adjustAmount.trim() === '' || !Number.isFinite(targetBal)) return;
+      const ok = await onOverdraftAccount({
+        userId: selectedUser.id,
+        accountId: acct.id,
+        targetBalance: targetBal,
+        recordTransaction: adjustRecordTx,
+        description: adjustMemo.trim() || (targetBal < 0 ? 'Overdraft balance adjustment' : 'Balance adjustment'),
+        category: adjustCategory,
+        date: inputDate(0),
+        status: 'posted',
+      });
+      if (ok) {
+        setAdjustAcctId(null);
+        setAdjustAmount('500');
+      }
+      return;
+    }
+
     const rawAmt = Math.abs(Number(adjustAmount) || 0);
     if (rawAmt <= 0) return;
 
@@ -637,7 +673,13 @@ export const AccountsTab: React.FC<AccountsProps> = ({
                         •••• {account.mask} · Opened {fmtDateShort(account.openedDate || account.createdAt)} · {(account.transactions || []).length} transactions
                         {account.rewardsPoints ? ` · ${account.rewardsPoints.toLocaleString()} pts` : ''}
                       </p>
-                      <p className="text-[20px] font-light tracking-tight text-gray-900 dark:text-white mt-1 tabular-nums">
+                      <p
+                        className={`text-[20px] font-light tracking-tight mt-1 tabular-nums ${
+                          !isCard && !isLoan && account.balance < 0
+                            ? 'text-rose-600 dark:text-rose-400'
+                            : 'text-gray-900 dark:text-white'
+                        }`}
+                      >
                         {fmtMoneyFull(account.balance)}
                         <span className="ml-2 text-[11px] font-normal text-gray-500">
                           {isCard ? 'Current balance' : isLoan ? 'Principal balance' : 'Available balance'}
@@ -647,6 +689,9 @@ export const AccountsTab: React.FC<AccountsProps> = ({
                   </div>
                   <div className="flex flex-col items-end gap-1.5 shrink-0">
                     <div className="flex items-center gap-1">
+                      {!isCard && !isLoan && account.balance < 0 && (
+                        <Badge tone="error">Overdrawn</Badge>
+                      )}
                       {account.isPrimary && <Badge tone="info">Primary</Badge>}
                       {account.locked && <Badge tone="warning">Locked</Badge>}
                       {account.hidden && <Badge tone="neutral">Hidden</Badge>}
@@ -655,7 +700,7 @@ export const AccountsTab: React.FC<AccountsProps> = ({
                   </div>
                 </div>
 
-                {/* Quick Money Actions Row (Credit/Deposit, Debit/Charge, Statement CSV, Replace Card) */}
+                {/* Quick Money Actions Row (Credit/Deposit, Debit/Charge, Overdraft, Statement CSV, Replace Card) */}
                 <div className="mt-3.5 pt-3 border-t border-gray-100 dark:border-gray-800 flex flex-wrap items-center gap-2">
                   {!isReadOnly && (
                     <>
@@ -666,6 +711,7 @@ export const AccountsTab: React.FC<AccountsProps> = ({
                         onClick={() => {
                           setAdjustAcctId(account.id);
                           setAdjustDirection('credit');
+                          setAdjustAmount('500');
                           setAdjustMemo(
                             isCard
                               ? 'Payment Thank You — Mobile'
@@ -686,6 +732,7 @@ export const AccountsTab: React.FC<AccountsProps> = ({
                         onClick={() => {
                           setAdjustAcctId(account.id);
                           setAdjustDirection('debit');
+                          setAdjustAmount('500');
                           setAdjustMemo(isCard ? 'Card Purchase Adjustment' : 'Account Debit Adjustment');
                           setAdjustCategory(isCard ? 'Shopping' : 'Bills');
                         }}
@@ -693,6 +740,25 @@ export const AccountsTab: React.FC<AccountsProps> = ({
                         <ArrowUpRight className="w-3.5 h-3.5 text-rose-600" />
                         {isCard ? 'Post Purchase / Charge' : 'Debit / Withdraw'}
                       </Btn>
+                      {isSuperAdmin && onOverdraftAccount && (
+                        <Btn
+                          variant="secondary"
+                          size="xs"
+                          disabled={busy}
+                          onClick={() => {
+                            setAdjustAcctId(account.id);
+                            setAdjustDirection('set');
+                            setAdjustAmount(account.balance < 0 ? String(account.balance) : '-1000');
+                            setAdjustMemo('Overdraft balance adjustment');
+                            setAdjustCategory('Adjustment');
+                            setAdjustRecordTx(true);
+                          }}
+                          title="Set or overdraft this account to any positive or negative amount"
+                        >
+                          <ArrowUpRight className="w-3.5 h-3.5 text-rose-600" />
+                          Overdraft / Set Balance
+                        </Btn>
+                      )}
                       {hasCardArt && (
                         <Btn
                           variant="ghost"
@@ -1030,13 +1096,15 @@ export const AccountsTab: React.FC<AccountsProps> = ({
         </div>
       )}
 
-      {/* Quick Deposit / Credit / Debit Modal */}
+      {/* Quick Deposit / Credit / Debit / Overdraft Modal */}
       <Modal
         open={!!adjustAcctId}
         onClose={() => setAdjustAcctId(null)}
         title={
           adjustDirection === 'credit'
             ? 'Post Deposit / Credit & Reconcile Balance'
+            : adjustDirection === 'set'
+            ? 'Overdraft or Set Exact Account Balance'
             : 'Post Debit / Charge & Reconcile Balance'
         }
         footer={
@@ -1046,62 +1114,154 @@ export const AccountsTab: React.FC<AccountsProps> = ({
             </Btn>
             <Btn type="submit" form="quick-adjust-form" variant="primary" disabled={busy}>
               {busy ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
-              Post to Ledger &amp; Update Balance
+              {adjustDirection === 'set'
+                ? 'Apply Target Balance'
+                : 'Post to Ledger & Update Balance'}
             </Btn>
           </>
         }
       >
         <form id="quick-adjust-form" onSubmit={handleQuickAdjustSubmit} className="space-y-3">
-          <div className="grid grid-cols-2 gap-3">
-            <label className="block">
-              <span className="block text-[11.5px] font-semibold text-gray-700 mb-1">Direction</span>
-              <SelectInput
-                value={adjustDirection}
-                onChange={(e) => setAdjustDirection(e.target.value as 'credit' | 'debit')}
-                className="w-full"
-              >
-                <option value="credit">Credit / Deposit / Payment</option>
-                <option value="debit">Debit / Withdrawal / Charge</option>
-              </SelectInput>
-            </label>
-            <label className="block">
-              <span className="block text-[11.5px] font-semibold text-gray-700 mb-1">Amount ($)</span>
-              <TextInput
-                type="number"
-                min="0.01"
-                step="0.01"
-                value={adjustAmount}
-                onChange={(e) => setAdjustAmount(e.target.value)}
-                required
-              />
-            </label>
-          </div>
-          <label className="block">
-            <span className="block text-[11.5px] font-semibold text-gray-700 mb-1">
-              Statement Description / Memo
-            </span>
-            <TextInput
-              value={adjustMemo}
-              onChange={(e) => setAdjustMemo(e.target.value)}
-              required
-            />
-          </label>
-          <label className="block">
-            <span className="block text-[11.5px] font-semibold text-gray-700 mb-1">Category</span>
-            <SelectInput
-              value={adjustCategory}
-              onChange={(e) => setAdjustCategory(e.target.value)}
-              className="w-full"
-            >
-              {['Income', 'Payment', 'Deposit', 'Transfer', 'Zelle', 'Wire', 'Shopping', 'Dining', 'Travel', 'Bills', 'Other'].map(
-                (c) => (
-                  <option key={c} value={c}>
-                    {c}
-                  </option>
-                )
-              )}
-            </SelectInput>
-          </label>
+          {(() => {
+            const modalAcct = selectedUser?.accounts.find((a) => a.id === adjustAcctId);
+            const curBal = Number(modalAcct?.balance || 0);
+            const parsedAmt = Number(adjustAmount);
+            const isDebt =
+              modalAcct?.type === 'credit-card' ||
+              modalAcct?.type === 'auto-loan' ||
+              modalAcct?.type === 'mortgage';
+            const previewBal = !Number.isFinite(parsedAmt)
+              ? curBal
+              : adjustDirection === 'set'
+                ? parsedAmt
+                : isDebt
+                  ? adjustDirection === 'credit'
+                    ? curBal - Math.abs(parsedAmt)
+                    : curBal + Math.abs(parsedAmt)
+                  : adjustDirection === 'credit'
+                    ? curBal + Math.abs(parsedAmt)
+                    : curBal - Math.abs(parsedAmt);
+            const willOverdraft =
+              modalAcct &&
+              ['checking', 'savings', 'cd'].includes(modalAcct.type) &&
+              previewBal < 0;
+
+            return (
+              <>
+                <div className="grid grid-cols-2 gap-3">
+                  <label className="block">
+                    <span className="block text-[11.5px] font-semibold text-gray-700 mb-1">Direction</span>
+                    <SelectInput
+                      value={adjustDirection}
+                      onChange={(e) => {
+                        const next = e.target.value as 'credit' | 'debit' | 'set';
+                        setAdjustDirection(next);
+                        if (next === 'set') {
+                          setAdjustMemo('Overdraft balance adjustment');
+                          setAdjustCategory('Adjustment');
+                          const v = Number(adjustAmount);
+                          if (Number.isFinite(v) && v > 0) setAdjustAmount(String(-v));
+                        } else if (Number(adjustAmount) < 0) {
+                          setAdjustAmount(String(Math.abs(Number(adjustAmount))));
+                        }
+                      }}
+                      className="w-full"
+                    >
+                      <option value="credit">Credit / Deposit / Payment</option>
+                      <option value="debit">
+                        {isSuperAdmin ? 'Debit / Overdraft / Charge' : 'Debit / Withdrawal / Charge'}
+                      </option>
+                      {isSuperAdmin && onOverdraftAccount && (
+                        <option value="set">Overdraft / Set Exact Balance (=)</option>
+                      )}
+                    </SelectInput>
+                  </label>
+                  <label className="block">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-[11.5px] font-semibold text-gray-700">
+                        {adjustDirection === 'set' ? 'Target Balance ($)' : 'Amount ($)'}
+                      </span>
+                      {adjustDirection === 'set' && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const v = Number(adjustAmount);
+                            if (Number.isFinite(v) && v !== 0) setAdjustAmount(String(-Math.abs(v)));
+                            else setAdjustAmount('-1000');
+                          }}
+                          className="text-[11px] font-semibold text-rose-600 hover:underline cursor-pointer"
+                        >
+                          Set negative (−)
+                        </button>
+                      )}
+                    </div>
+                    <TextInput
+                      type="number"
+                      min={adjustDirection === 'set' ? undefined : '0.01'}
+                      step="0.01"
+                      value={adjustAmount}
+                      onChange={(e) => setAdjustAmount(e.target.value)}
+                      required
+                    />
+                  </label>
+                </div>
+                {adjustDirection === 'set' && (
+                  <label className="inline-flex items-center gap-2 text-[12px] text-gray-700 cursor-pointer">
+                    <Checkbox
+                      checked={adjustRecordTx}
+                      onChange={(e) => setAdjustRecordTx(e.target.checked)}
+                    />
+                    Record reconciling ledger entry on statement
+                  </label>
+                )}
+                {(adjustDirection !== 'set' || adjustRecordTx) && (
+                  <>
+                    <label className="block">
+                      <span className="block text-[11.5px] font-semibold text-gray-700 mb-1">
+                        Statement Description / Memo
+                      </span>
+                      <TextInput
+                        value={adjustMemo}
+                        onChange={(e) => setAdjustMemo(e.target.value)}
+                        required
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="block text-[11.5px] font-semibold text-gray-700 mb-1">Category</span>
+                      <SelectInput
+                        value={adjustCategory}
+                        onChange={(e) => setAdjustCategory(e.target.value)}
+                        className="w-full"
+                      >
+                        {['Adjustment', 'Income', 'Payment', 'Deposit', 'Transfer', 'Zelle', 'Wire', 'Shopping', 'Dining', 'Travel', 'Bills', 'Other'].map(
+                          (c) => (
+                            <option key={c} value={c}>
+                              {c}
+                            </option>
+                          )
+                        )}
+                      </SelectInput>
+                    </label>
+                  </>
+                )}
+                {modalAcct && adjustAmount.trim() !== '' && Number.isFinite(parsedAmt) && (
+                  <div
+                    className={`rounded-lg border px-3 py-2 text-[12px] flex items-center justify-between ${
+                      willOverdraft
+                        ? 'bg-rose-50 border-rose-200 text-rose-800'
+                        : 'bg-gray-50 border-gray-200 text-gray-700'
+                    }`}
+                  >
+                    <span>
+                      Balance preview: <strong>{fmtMoneyFull(curBal)}</strong> →{' '}
+                      <strong>{fmtMoneyFull(previewBal)}</strong>
+                    </span>
+                    {willOverdraft && <Badge tone="error">Overdraft</Badge>}
+                  </div>
+                )}
+              </>
+            );
+          })()}
         </form>
       </Modal>
 

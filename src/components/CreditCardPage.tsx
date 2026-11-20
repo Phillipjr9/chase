@@ -213,7 +213,7 @@ export const CreditCardPage: React.FC<Props> = ({
   const limit = account.creditLimit || 0;
   const availableCredit = Math.max(0, limit - account.balance);
   const statementBalance = account.statementBalance ?? account.balance;
-  const minimumPayment = Math.min(statementBalance, Math.max(35, statementBalance * 0.02));
+  const minimumPayment = Math.max(0, Math.min(statementBalance, Math.max(35, statementBalance * 0.02)));
   const dueDate = fmtDueDate(nextDueDate(user.home?.dueDay ?? 1));
   const benefits = useMemo(() => cardBenefits(account), [account]);
   const rule = useMemo(() => bonusRuleFor(account), [account]);

@@ -255,8 +255,18 @@ to the same browser-local mode as the banking app, so it never dead-ends.
 │   ├── data/chaseData.ts       # Nav model, offers, search index
 │   └── assets/advisor.jpg      # Advisor photo (inlined at build)
 ├── tests/
-│   ├── admin-api.mjs           # Admin simulator API & RBAC verification suite
-│   └── e2e.mjs                 # Customer banking E2E suite
+│   ├── password-compatibility.mjs        # Legacy hash verification formats
+│   ├── routing-and-wire-features.mjs     # Routing/account numbers, scoping, wires
+│   ├── immutable-audit-trail.mjs         # SHA-256 chain, tamper detection
+│   ├── unified-admin-features.mjs        # Linked customer-staff identities
+│   ├── supabase-concurrency.mjs          # Optimistic concurrency & failures
+│   ├── admin-api.mjs                     # Admin API & RBAC verification suite
+│   ├── admin-ownership.mjs               # Ownership handoff & isolation
+│   ├── admin-promotion.mjs               # Customer-to-staff promotion
+│   ├── super-admin-complete.mjs          # Full Super Admin governance
+│   ├── transaction-history-and-password.mjs
+│   ├── new-features-api.mjs              # Messaging, notices, batch engines
+│   └── e2e.mjs                           # Customer banking E2E suite
 └── dist/                       # Production build (served by the API server)
 ```
 
@@ -264,15 +274,44 @@ to the same browser-local mode as the banking app, so it never dead-ends.
 
 ## Testing
 
+### Self-contained suites (no external server needed)
+
+```bash
+npm test
+```
+
+This runs, in order: `password-compatibility`, `routing-and-wire-features`,
+`immutable-audit-trail`, `unified-admin-features`, and `supabase-concurrency`.
+Each one boots its own isolated server against a temporary database and exits
+non-zero on failure, so the command is CI-safe.
+
+### Suites that need a running server
+
+These provision their own data but expect a server to already be listening:
+
 ```bash
 npm run build
+CHASE_DB_PATH=/tmp/chase-test.json PORT=3000 \
 CHASE_ADMIN_PASSWORD='Temporary-test-password-92!' node server/index.js &
-CHASE_ADMIN_PASSWORD='Temporary-test-password-92!' node tests/admin-api.mjs
-CHASE_ADMIN_PASSWORD='Temporary-test-password-92!' node tests/admin-ownership.mjs
-CHASE_ADMIN_PASSWORD='Temporary-test-password-92!' node tests/admin-promotion.mjs
-CHASE_ADMIN_PASSWORD='Temporary-test-password-92!' node tests/super-admin-complete.mjs
-node tests/supabase-concurrency.mjs
+
+export BASE_URL=http://127.0.0.1:3000
+export TEST_ROOT_PASSWORD='Temporary-test-password-92!'
+node tests/admin-api.mjs
+node tests/admin-ownership.mjs
+node tests/admin-promotion.mjs
+node tests/super-admin-complete.mjs
+node tests/transaction-history-and-password.mjs
+node tests/new-features-api.mjs
+
+# Browser flow (requires Playwright + Chromium):
+npm install --no-save playwright && npx playwright install chromium
+node tests/e2e.mjs
 ```
+
+`tests/e2e.mjs` provisions its own customer and accounts, then verifies the
+sign-in → transfer → card payment → reload flow. Set `CHROMIUM_EXECUTABLE` to
+point at a specific Chromium binary when Playwright's own download is
+unavailable (the matching shared libraries must be on `LD_LIBRARY_PATH`).
 
 The backend/API suites cover Super Admin governance, linked customer-staff identities, workspace switching, granular capabilities, auditor isolation, ownership handoffs, session revocation, audit scoping, backup v2 restore, and Supabase optimistic concurrency.
 
