@@ -147,6 +147,7 @@ interface OperationsProps {
     userId?: string;
     paymentId?: string;
     forceAll?: boolean;
+    allowOverdraft?: boolean;
   }) => Promise<void>;
   onRunMonthEndClose?: (opts: { userId?: string }) => Promise<void>;
 }
@@ -195,6 +196,7 @@ export const OperationsTab: React.FC<OperationsProps> = ({
   const [transferAmt, setTransferAmt] = useState('');
   const [transferType, setTransferType] = useState('direct-deposit');
   const [transferDesc, setTransferDesc] = useState('Direct deposit');
+  const [schedAllowOverdraft, setSchedAllowOverdraft] = useState(true);
 
   const transferTypeOptions = [
     { value: 'direct-deposit', label: 'Direct deposit' },
@@ -445,14 +447,25 @@ export const OperationsTab: React.FC<OperationsProps> = ({
               </p>
             </div>
             {!isReadOnly && (
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="flex flex-wrap items-center gap-3">
+                <label className="inline-flex items-center gap-1.5 text-[12px] text-gray-600 dark:text-gray-300 cursor-pointer">
+                  <Checkbox
+                    checked={schedAllowOverdraft}
+                    onChange={(e) => setSchedAllowOverdraft(e.target.checked)}
+                  />
+                  Allow overdraft
+                </label>
                 {selectedUser && onProcessScheduled && (
                   <Btn
                     variant="secondary"
                     size="sm"
                     disabled={busy}
                     onClick={() =>
-                      void onProcessScheduled({ userId: selectedUser.id, forceAll: true })
+                      void onProcessScheduled({
+                        userId: selectedUser.id,
+                        forceAll: true,
+                        allowOverdraft: schedAllowOverdraft,
+                      })
                     }
                   >
                     <Play className="w-3.5 h-3.5 text-[#12B76A]" /> Execute {selectedUser.fullName.split(' ')[0]}&apos;s Schedules
@@ -762,6 +775,23 @@ export const OperationsTab: React.FC<OperationsProps> = ({
                   required
                 />
               </label>
+              {(() => {
+                const src = depositAccounts.find((a) => a.id === fromId);
+                const amtNum = Number(transferAmt);
+                if (!isSuperAdmin || !src || !Number.isFinite(amtNum) || amtNum <= 0 || amtNum <= Number(src.balance || 0)) {
+                  return null;
+                }
+                return (
+                  <div className="sm:col-span-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[12px] text-rose-800 flex items-center justify-between gap-2">
+                    <span>
+                      Super Admin overdraft: <strong>{src.name}</strong> will move from{' '}
+                      <strong>{fmtMoneyFull(src.balance)}</strong> to{' '}
+                      <strong>{fmtMoneyFull(Number(src.balance || 0) - amtNum)}</strong>.
+                    </span>
+                    <Badge tone="error">Overdraft</Badge>
+                  </div>
+                );
+              })()}
               <div className="sm:col-span-2 flex justify-end pt-1">
                 <Btn
                   type="submit"
@@ -1073,6 +1103,7 @@ export const OperationsTab: React.FC<OperationsProps> = ({
                                   userId: selectedUser.id,
                                   paymentId: sp.id,
                                   forceAll: true,
+                                  allowOverdraft: schedAllowOverdraft,
                                 })
                               }
                               title="Execute this scheduled payment immediately"

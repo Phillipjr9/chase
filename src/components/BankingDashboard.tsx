@@ -396,7 +396,15 @@ export const BankingDashboard: React.FC<Props> = ({
         detail: `${a.name} (…${a.mask}) — minimum ${fmtMoney(Math.min(a.balance, Math.max(35, a.balance * 0.02)))} of ${fmtMoney(a.balance)}.`,
         action: () => openAccount(a.id),
       })),
-    ...(deposits.find((a) => a.type === 'checking' && a.balance < 500)
+    ...deposits
+      .filter((a) => a.balance < 0)
+      .map((a) => ({
+        id: `overdraft-${a.id}`,
+        title: 'Account overdrawn',
+        detail: `${a.name} (…${a.mask}) has an overdrawn balance of ${fmtMoney(a.balance)}.`,
+        action: () => openAccount(a.id),
+      })),
+    ...(deposits.find((a) => a.type === 'checking' && a.balance >= 0 && a.balance < 500)
       ? [{
           id: 'low-balance',
           title: 'Low checking balance',
@@ -1137,6 +1145,11 @@ export const BankingDashboard: React.FC<Props> = ({
                                       Locked
                                     </span>
                                   )}
+                                  {['checking', 'savings', 'cd'].includes(account.type) && account.balance < 0 && (
+                                    <span className="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded bg-[#FEF2F2] text-[#B42318]">
+                                      Overdrawn
+                                    </span>
+                                  )}
                                 </span>
                                 <span className="block text-[12px]" style={{ color: MUTED }}>
                                   Account ending in {account.mask}
@@ -1149,7 +1162,15 @@ export const BankingDashboard: React.FC<Props> = ({
                               </button>
 
                               <button type="button" onClick={() => openAccount(account.id)} className="text-right shrink-0 cursor-pointer">
-                                <span className="block text-[19px] leading-tight font-light" style={{ color: INK }}>
+                                <span
+                                  className="block text-[19px] leading-tight font-light"
+                                  style={{
+                                    color:
+                                      ['checking', 'savings', 'cd'].includes(account.type) && account.balance < 0
+                                        ? '#B42318'
+                                        : INK,
+                                  }}
+                                >
                                   {fmtMoney(account.balance)}
                                 </span>
                                 <span className="block text-[10.5px] uppercase tracking-[0.03em]" style={{ color: '#8A929A' }}>
@@ -1466,9 +1487,24 @@ export const BankingDashboard: React.FC<Props> = ({
                     </button>
                   </div>
 
-                  <p className="mt-1.5 flex items-baseline" style={{ color: INK }}>
-                    <span className="text-[44px] leading-none font-light">{fmtMoney(selected.balance).split('.')[0]}</span>
-                    <span className="text-[25px] leading-none font-light">.{fmtMoney(selected.balance).split('.')[1]}</span>
+                  <p
+                    className="mt-1.5 flex items-baseline gap-2"
+                    style={{
+                      color:
+                        ['checking', 'savings', 'cd'].includes(selected.type) && selected.balance < 0
+                          ? '#B42318'
+                          : INK,
+                    }}
+                  >
+                    <span>
+                      <span className="text-[44px] leading-none font-light">{fmtMoney(selected.balance).split('.')[0]}</span>
+                      <span className="text-[25px] leading-none font-light">.{fmtMoney(selected.balance).split('.')[1]}</span>
+                    </span>
+                    {['checking', 'savings', 'cd'].includes(selected.type) && selected.balance < 0 && (
+                      <span className="text-[11px] font-bold uppercase px-2 py-0.5 rounded bg-[#FEF2F2] text-[#B42318] self-center">
+                        Overdrawn
+                      </span>
+                    )}
                   </p>
                   <p className="mt-1.5 text-[12.5px]" style={{ color: MUTED }}>{balanceLabel(selected)}</p>
 
@@ -1483,7 +1519,7 @@ export const BankingDashboard: React.FC<Props> = ({
                           ]
                         : [
                             { k: 'Statement balance', v: fmtMoney(selected.balance) },
-                            { k: 'Minimum payment due', v: fmtMoney(Math.min(selected.balance, Math.max(35, selected.balance * 0.02))) },
+                            { k: 'Minimum payment due', v: fmtMoney(Math.max(0, Math.min(selected.balance, Math.max(35, selected.balance * 0.02)))) },
                             { k: 'Payment due date', v: fmtDueDate(nextDueDate(user.home?.dueDay ?? 1)) },
                             { k: selected.type === 'credit-card' ? 'Purchase APR' : 'APY', v: `${selected.apr ?? 0.01}%` },
                           ]

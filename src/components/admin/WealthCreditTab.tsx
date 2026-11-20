@@ -48,6 +48,7 @@ interface WealthCreditProps {
   users: AdminUserRow[];
   selectedUser: User | null;
   isReadOnly: boolean;
+  isSuperAdmin?: boolean;
   busy: boolean;
   onSelectUser: (id: string) => void;
   onSaveUserObject: (updated: User, successMsg?: string) => Promise<boolean>;
@@ -59,6 +60,7 @@ export const WealthCreditTab: React.FC<WealthCreditProps> = ({
   users,
   selectedUser,
   isReadOnly,
+  isSuperAdmin = false,
   busy,
   onSelectUser,
   onSaveUserObject,
@@ -170,10 +172,11 @@ export const WealthCreditTab: React.FC<WealthCreditProps> = ({
 
   const saveCashBalance = async () => {
     const inv = selectedUser.investments || { accountMask: '8841', cash: 0, holdings: [] };
+    const parsedCash = Number(cash) || 0;
     await onSaveUserObject(
       {
         ...selectedUser,
-        investments: { ...inv, cash: Math.max(0, Number(cash) || 0) },
+        investments: { ...inv, cash: isSuperAdmin ? parsedCash : Math.max(0, parsedCash) },
       },
       'Brokerage cash balance updated.'
     );
@@ -512,7 +515,7 @@ export const WealthCreditTab: React.FC<WealthCreditProps> = ({
               </span>
               <TextInput
                 type="number"
-                min="0"
+                min={isSuperAdmin ? undefined : '0'}
                 step="0.01"
                 value={cash}
                 onChange={(e) => setCash(e.target.value)}
@@ -1171,7 +1174,7 @@ export const WealthCreditTab: React.FC<WealthCreditProps> = ({
                     name: tlName.trim() || 'Reported Credit Account',
                     type: tlType,
                     status: tlStatus,
-                    balance: Math.max(0, Number(tlBalance) || 0),
+                    balance: isSuperAdmin ? (Number(tlBalance) || 0) : Math.max(0, Number(tlBalance) || 0),
                     limit: Math.max(0, Number(tlLimit) || 0),
                     opened: new Date().toISOString(),
                   };

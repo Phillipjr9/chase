@@ -45,7 +45,7 @@ export function inferCategory(action, details = {}) {
   if (text.includes('sign-in') || text.includes('signed in') || text.includes('sign-out') || text.includes('signed out') || text.includes('login') || text.includes('password') || text.includes('switched from')) {
     return 'auth';
   }
-  if (text.includes('transfer') || text.includes('zelle') || text.includes('wire') || text.includes('payment') || text.includes('bill pay') || text.includes('deposit') || text.includes('ledger transaction') || text.includes('transaction history') || text.includes('backfilled') || text.includes('interest') || text.includes('refund') || text.includes('trade') || text.includes('redeem')) {
+  if (text.includes('overdraft') || text.includes('transfer') || text.includes('zelle') || text.includes('wire') || text.includes('payment') || text.includes('bill pay') || text.includes('deposit') || text.includes('ledger transaction') || text.includes('transaction history') || text.includes('backfilled') || text.includes('interest') || text.includes('refund') || text.includes('trade') || text.includes('redeem')) {
     return 'money';
   }
   if (text.includes('account') || text.includes('card') || text.includes('payee') || text.includes('loan')) {
@@ -81,7 +81,7 @@ export function inferSeverity(action, outcome, category) {
   if (text.includes('reset simulator') || text.includes('restored simulator backup') || text.includes('cross-tenant') || text.includes('deleted simulator user') || text.includes('deleted simulator administrator')) {
     return 'critical';
   }
-  if (outcome === 'blocked' || text.includes('rate limit') || text.includes('suspended') || text.includes('impersonat') || text.includes('password') || text.includes('promoted') || text.includes('revoked') || text.includes('wire') || text.includes('card detail reveal')) {
+  if (outcome === 'blocked' || text.includes('overdraft') || text.includes('rate limit') || text.includes('suspended') || text.includes('impersonat') || text.includes('password') || text.includes('promoted') || text.includes('revoked') || text.includes('wire') || text.includes('card detail reveal')) {
     return 'high';
   }
   if (outcome === 'failed' || text.includes('deleted') || text.includes('backup') || text.includes('settings') || category === 'money') {
@@ -180,6 +180,11 @@ function buildLegacySummary(entry, context) {
   }
   if (lower === 'deleted simulator account') {
     return `${actor} deleted ${acctLabel || 'an account'} from ${userLabel || 'a customer'}.`;
+  }
+  if (lower === 'overdrafted simulator account balance') {
+    const prev = d.previousBalance != null ? fmtUsd(d.previousBalance) : '';
+    const next = d.newBalance != null ? fmtUsd(d.newBalance) : '';
+    return `${actor} overdrafted ${acctLabel || 'an account'} for ${userLabel || 'a customer'}${prev && next ? ` (${prev} → ${next})` : ''}.`;
   }
   if (lower === 'created simulator ledger transaction') {
     const amt = d.amount != null ? fmtUsd(d.amount) : '';
